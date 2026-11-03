@@ -2,6 +2,7 @@ node_modules/
 .next/
 .data/
 .tmp/
+.agents/
 .env
 .env.local
 .env*.local

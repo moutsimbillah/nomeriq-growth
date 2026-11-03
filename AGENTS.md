@@ -27,3 +27,9 @@ No MCP tool may send email, delete records, change settings, or start, stop or c
 Follow `docs/Nomeriq-Growth-Plan.md` — the approved plan. It defines the phases, the folder and outcome model, and the known limits. Do not pull later-phase work — multi-provider DeepSeek support, bounce handling, the learning store — into an earlier phase without being asked.
 
 The plan is replaced as a whole when a new approved version arrives, in a commit of its own, so its history stays readable. Never edit it in place as part of a feature change.
+
+## 7. Keep the working note current
+
+Maintain `.agents/notes/current-task.md` and update it as each step finishes, in the same pass as the work rather than at the end. It records what is done, what is in flight and what comes next, so whoever picks the task up next — human or agent — can trust it instead of re-deriving state from the diff. It reflects reality, never intentions: if a step failed or was skipped, say so there.
+
+That directory is gitignored and is never committed.
