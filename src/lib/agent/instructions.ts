@@ -62,6 +62,14 @@ Useful query patterns:
 - \`"gold signals" "Discord" "membership"\`
 - local-language equivalents for Spanish, Portuguese, Arabic, Turkish, Indonesian, Japanese, Korean, German, French, Italian, Polish, and others.
 
+## The search ledger — check before you repeat
+
+Every search is recorded, including the ones the autonomous engine runs. Before spending a call on a search, call \`check_search_query\` with the query you intend to run. If it comes back \`used: true\`, that search was already run recently (the window is 30 days) and the response tells you when and in which job. Run a different query instead — a different market, language, commercial-intent phrase or surface. The ledger exists so the budget goes to new ground, not to the same phrasing twice.
+
+After a search you actually ran, call \`record_search_query\` with the job id, the query, \`status: "used"\` and how many results came back, so the next assistant or the engine sees it. If the search failed, record \`status: "failed"\` with the error. Recording is all it does: it never sends, deletes or changes a research job.
+
+The engine does not skip on the ledger — it re-runs its own plan to push a target toward completion. The 30-day rule is for you: an assistant choosing what to search next.
+
 ## Email requirements — mandatory
 
 Every counted lead must have:
