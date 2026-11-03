@@ -118,21 +118,23 @@ Real HTTP calls through the provider adapter — searches: 7, fetches: 34,
                                               model calls: 22, model list: 1
 
 Single-lead path:
-  verified=1 target=1 status=completed spent=$0.0051
+  verified=1 target=1 status=completed spent=$0.00531
   cron auth: 401 without secret, 200 with secret
     "Research only. No email was sent."
   assistant scope: get_research_job, report_progress readable
   assistant scope: no job-control tool exists (404)
 
 The brief's acceptance bar:
-  verified=10 target=10 status=completed spent=$0.0288 rounds=2
+  verified=10 target=10 status=completed spent=$0.03285 rounds=2
   10 distinct inboxes, no merged identities
   10 personalized drafts await review
   the broker decoy was rejected, not counted
   job spend equals the sum of recorded usage rows
-  spend $0.0288 stayed inside the $25 budget
+  spend $0.03285 stayed inside the $25 budget
   no conversation exists for any acceptance lead, so no email was sent
 ```
+
+The spend figures are read from the run's own recorded usage, so they move when the number of Search/Fetch calls moves; the assertions compare them against the itemized rows rather than against a fixed constant.
 
 The "nothing was sent" check is deliberately made at the prospect level rather than through `list_conversations`, because that tool only lists threads that already have a reply — a sent-but-unanswered email would be invisible there and the assertion would prove nothing.
 
