@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { exchangeAuthorizationCode } from "@/lib/oauth/server";
+import { exchangeAuthorizationCode, refreshAccessToken } from "@/lib/oauth/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,8 +43,37 @@ export async function POST(request: Request) {
     }
   }
 
+  if (params.grant_type === "refresh_token") {
+    if (!params.refresh_token || !params.client_id) {
+      return jsonError("invalid_request", "refresh_token and client_id are required.");
+    }
+    try {
+      const refreshed = await refreshAccessToken({
+        refreshToken: params.refresh_token,
+        clientId: params.client_id,
+        clientSecret: params.client_secret ?? null,
+        scope: params.scope ?? null,
+      });
+      return NextResponse.json(
+        {
+          access_token: refreshed.accessToken,
+          refresh_token: refreshed.refreshToken,
+          token_type: refreshed.tokenType,
+          expires_in: refreshed.expiresIn,
+          scope: refreshed.scope,
+        },
+        { headers: { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" } },
+      );
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      const message = error instanceof Error ? error.message : "Refresh failed.";
+      if (code === "invalid_client") return jsonError("invalid_client", message, 401);
+      return jsonError("invalid_grant", message);
+    }
+  }
+
   if (params.grant_type !== "authorization_code") {
-    return jsonError("unsupported_grant_type", "Only authorization_code is supported.");
+    return jsonError("unsupported_grant_type", "Only authorization_code and refresh_token are supported.");
   }
   if (!params.code || !params.client_id) {
     return jsonError("invalid_request", "code and client_id are required.");
@@ -62,6 +91,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         access_token: token.accessToken,
+        refresh_token: token.refreshToken,
         token_type: token.tokenType,
         expires_in: token.expiresIn,
         scope: token.scope,

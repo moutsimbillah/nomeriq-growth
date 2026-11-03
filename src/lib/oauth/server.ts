@@ -15,6 +15,7 @@ import { AppError } from "@/lib/utils";
  */
 
 export const ACCESS_TOKEN_TTL_SECONDS = 60 * 60 * 8;
+export const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30;
 export const AUTH_CODE_TTL_SECONDS = 60 * 10;
 export const SUPPORTED_SCOPES = [...DEFAULT_SCOPES] as string[];
 
@@ -160,7 +161,13 @@ export async function exchangeAuthorizationCode(input: {
   clientSecret?: string | null;
   codeVerifier?: string | null;
   redirectUri?: string | null;
-}): Promise<{ accessToken: string; expiresIn: number; scope: string; tokenType: "Bearer" }> {
+}): Promise<{
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+  scope: string;
+  tokenType: "Bearer";
+}> {
   const db = await getDb();
 
   const clientRows = await db.query<{ client_secret: string; redirect_uris: string[] }>(
@@ -228,8 +235,106 @@ export async function exchangeAuthorizationCode(input: {
 
   await db.query(`UPDATE oauth_clients SET last_used_at = now() WHERE client_id = $1`, [input.clientId]);
 
+  const refreshToken = randomToken(32);
+  await db.query(
+    `INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scopes, expires_at)
+     VALUES ($1, $2, $3, $4::jsonb, now() + ($5 || ' seconds')::interval)`,
+    [
+      hashToken(refreshToken),
+      input.clientId,
+      code.user_id,
+      JSON.stringify(scopes),
+      String(REFRESH_TOKEN_TTL_SECONDS),
+    ],
+  );
+
   return {
     accessToken,
+    refreshToken,
+    expiresIn: ACCESS_TOKEN_TTL_SECONDS,
+    scope: scopes.join(" "),
+    tokenType: "Bearer",
+  };
+}
+
+/**
+ * Refresh grant. The presented refresh token is rotated: it is revoked and a new pair issued,
+ * so a leaked refresh token cannot be replayed after the client has used it.
+ */
+export async function refreshAccessToken(input: {
+  refreshToken: string;
+  clientId: string;
+  clientSecret?: string | null;
+  scope?: string | null;
+}): Promise<{
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+  scope: string;
+  tokenType: "Bearer";
+}> {
+  const db = await getDb();
+
+  const clientRows = await db.query<{ client_secret: string }>(
+    `SELECT client_secret FROM oauth_clients WHERE client_id = $1`,
+    [input.clientId],
+  );
+  const client = clientRows.rows[0];
+  if (!client) throw new AppError("Unknown client.", 401, "invalid_client");
+
+  if (input.clientSecret) {
+    const given = hashToken(input.clientSecret);
+    if (
+      given.length !== client.client_secret.length ||
+      !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(client.client_secret))
+    ) {
+      throw new AppError("Invalid client credentials.", 401, "invalid_client");
+    }
+  }
+
+  const rows = await db.query<{
+    client_id: string;
+    user_id: string;
+    scopes: string[];
+    expired: boolean;
+    revoked: boolean;
+  }>(
+    `SELECT client_id, user_id, scopes,
+            (expires_at <= now()) AS expired, (revoked_at IS NOT NULL) AS revoked
+       FROM oauth_refresh_tokens WHERE token_hash = $1`,
+    [hashToken(input.refreshToken)],
+  );
+  const row = rows.rows[0];
+  if (!row) throw new AppError("Unknown refresh token.", 400, "invalid_grant");
+  if (row.revoked) throw new AppError("This refresh token was already used.", 400, "invalid_grant");
+  if (row.expired) throw new AppError("This refresh token expired.", 400, "invalid_grant");
+  if (row.client_id !== input.clientId) {
+    throw new AppError("The refresh token was issued to a different client.", 400, "invalid_grant");
+  }
+
+  const scopes = input.scope ? scopesFromRequest(input.scope) : scopesFromRequest(row.scopes.join(" "));
+  const accessToken = randomToken(32);
+  const refreshToken = randomToken(32);
+
+  await db.transaction(async (tx) => {
+    await tx.query(`UPDATE oauth_refresh_tokens SET revoked_at = now(), last_used_at = now() WHERE token_hash = $1`, [
+      hashToken(input.refreshToken),
+    ]);
+    await tx.query(
+      `INSERT INTO oauth_tokens (token_hash, client_id, user_id, scopes, expires_at)
+       VALUES ($1, $2, $3, $4::jsonb, now() + ($5 || ' seconds')::interval)`,
+      [hashToken(accessToken), input.clientId, row.user_id, JSON.stringify(scopes), String(ACCESS_TOKEN_TTL_SECONDS)],
+    );
+    await tx.query(
+      `INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scopes, expires_at)
+       VALUES ($1, $2, $3, $4::jsonb, now() + ($5 || ' seconds')::interval)`,
+      [hashToken(refreshToken), input.clientId, row.user_id, JSON.stringify(scopes), String(REFRESH_TOKEN_TTL_SECONDS)],
+    );
+  });
+
+  return {
+    accessToken,
+    refreshToken,
     expiresIn: ACCESS_TOKEN_TTL_SECONDS,
     scope: scopes.join(" "),
     tokenType: "Bearer",

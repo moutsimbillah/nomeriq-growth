@@ -8,6 +8,7 @@ import {
   clientAllowsRedirect,
   createAuthorizationCode,
   exchangeAuthorizationCode,
+  refreshAccessToken,
   registerOAuthClient,
   scopesFromRequest,
   verifyOAuthToken,
@@ -220,5 +221,57 @@ describe("authorization code exchange", () => {
 
   it("does not treat a random string as a token", async () => {
     expect(await verifyOAuthToken("definitely-not-a-token")).toBeNull();
+  });
+
+  it("issues a refresh token and rotates it on use", async () => {
+    const { client, code } = await issue();
+    const first = await exchangeAuthorizationCode({
+      code,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      codeVerifier: VERIFIER,
+      redirectUri: "https://example.com/callback",
+    });
+
+    expect(first.refreshToken).toBeTruthy();
+
+    const refreshed = await refreshAccessToken({
+      refreshToken: first.refreshToken,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    expect(refreshed.accessToken).not.toBe(first.accessToken);
+    expect(refreshed.refreshToken).not.toBe(first.refreshToken);
+    expect(await verifyOAuthToken(refreshed.accessToken)).not.toBeNull();
+
+    // The rotated token cannot be replayed.
+    await expect(
+      refreshAccessToken({
+        refreshToken: first.refreshToken,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toThrow(/already used/i);
+  });
+
+  it("refuses a refresh token from a different client", async () => {
+    const { client, code } = await issue();
+    const first = await exchangeAuthorizationCode({
+      code,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      codeVerifier: VERIFIER,
+      redirectUri: "https://example.com/callback",
+    });
+
+    const other = await registerOAuthClient({ redirectUris: ["https://other.example/cb"] });
+
+    await expect(
+      refreshAccessToken({
+        refreshToken: first.refreshToken,
+        clientId: other.clientId,
+      }),
+    ).rejects.toThrow(/different client/i);
   });
 });
