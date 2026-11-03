@@ -25,6 +25,16 @@ export interface DeepSeekPublicState {
 }
 
 /**
+ * Models the last connection test discovered, so a founder configuring a custom
+ * endpoint can pick a name the host actually serves instead of guessing one.
+ */
+interface TestOutcome {
+  models: string[];
+  searchOk: boolean;
+  fetchOk: boolean;
+}
+
+/**
  * DeepSeek provider configuration.
  *
  * The API key is written straight to the server and never read back: the UI only
@@ -40,6 +50,8 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
   const [pending, setPending] = useState<"save" | "test" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [outcome, setOutcome] = useState<TestOutcome | null>(null);
 
   async function save() {
     setPending("save");
@@ -72,11 +84,20 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
     try {
       const data = await apiRequest("/api/settings/deepseek/test", { body: {} });
       setState(data.settings as DeepSeekPublicState);
+      setModels(Array.isArray(data.models) ? (data.models as string[]) : []);
+      setOutcome({
+        models: Array.isArray(data.models) ? (data.models as string[]) : [],
+        searchOk: Boolean(data.searchOk),
+        fetchOk: Boolean(data.fetchOk),
+      });
       setMessage(
         `${data.message} Cost of this test: $${Number(data.costUsd).toFixed(4)}.`,
       );
       router.refresh();
     } catch (caught) {
+      // A failed test still tells us a lot: keep any model list we already have
+      // so the founder can correct the name rather than start over.
+      setOutcome(null);
       setError(caught instanceof Error ? caught.message : "Connection test failed.");
     } finally {
       setPending(null);
@@ -144,7 +165,26 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
             value={model}
             onChange={(event) => setModel(event.target.value)}
             placeholder="deepseek-flash"
+            list="deepseek-model-options"
           />
+          {models.length > 0 && (
+            <datalist id="deepseek-model-options">
+              {models.map((entry) => (
+                <option key={entry} value={entry} />
+              ))}
+            </datalist>
+          )}
+          <p className="mt-1.5 text-[10px] leading-4 text-faint">
+            Vendor-prefixed names are supported, for example{" "}
+            <code>deepseek/deepseek-chat</code>.
+            {models.length > 0 && (
+              <>
+                {" "}
+                The test found {models.length} model
+                {models.length === 1 ? "" : "s"} on this endpoint.
+              </>
+            )}
+          </p>
         </div>
         <div>
           <label className="label" htmlFor="deepseek-base">
@@ -157,8 +197,36 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
             onChange={(event) => setBaseUrl(event.target.value)}
             placeholder="https://api.deepseek.com"
           />
+          <p className="mt-1.5 text-[10px] leading-4 text-faint">
+            A trailing <code>/v1</code> is stripped automatically. Any
+            DeepSeek-compatible host works, but the autonomous engine needs one
+            that implements Search and Fetch, not just chat.
+          </p>
         </div>
       </div>
+
+      {models.length > 0 && (
+        <div className="mt-4">
+          <div className="label">Models reported by this endpoint</div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            {models.slice(0, 24).map((entry) => (
+              <button
+                key={entry}
+                type="button"
+                onClick={() => setModel(entry)}
+                className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold transition ${
+                  entry === model
+                    ? "border-forest bg-forest text-lime"
+                    : "border-line bg-white/60 text-muted hover:border-ink/30"
+                }`}
+                title={`Use ${entry}`}
+              >
+                {entry}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {state.lastTestMessage && (
         <p className="mt-3 text-[10.5px] leading-5 text-muted">
@@ -199,6 +267,36 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
           The test makes one real Search, one Fetch and one model-list call.
         </span>
       </div>
+
+      {outcome && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          {[
+            { label: "Model list", ok: outcome.models.length > 0 },
+            { label: "Search", ok: outcome.searchOk },
+            { label: "Fetch", ok: outcome.fetchOk },
+          ].map((capability) => (
+            <div
+              key={capability.label}
+              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10.5px] font-semibold ${
+                capability.ok
+                  ? "border-forest/25 bg-lime/20 text-forest"
+                  : "border-amber/30 bg-amber/10 text-amber"
+              }`}
+            >
+              {capability.ok ? <CircleCheck size={11} /> : <CircleAlert size={11} />}
+              {capability.label} {capability.ok ? "working" : "unavailable"}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {outcome && !outcome.searchOk && (
+        <p className="mt-2 text-[10.5px] leading-5 text-muted">
+          This endpoint answers chat but not DeepSeek&apos;s proprietary Search and
+          Fetch tools, so the autonomous engine cannot discover leads through it.
+          Use <code>https://api.deepseek.com</code> to run the engine.
+        </p>
+      )}
 
       {message && (
         <div className="mt-3">

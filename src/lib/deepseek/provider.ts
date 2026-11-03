@@ -7,6 +7,28 @@ import { AppError, iso } from "@/lib/utils";
 export const DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com";
 export const DEEPSEEK_DEFAULT_MODEL = "deepseek-flash";
 
+/**
+ * Accepts the model identifiers real providers use, including the
+ * vendor-prefixed forms served by OpenAI-compatible relays:
+ * `deepseek/deepseek-chat`, `openai/gpt-4o`, `meta-llama/Llama-3.3-70B-Instruct`.
+ *
+ * The goal is to allow a custom endpoint's own naming while refusing anything
+ * that could break the request body or smuggle structure into it: no whitespace,
+ * quotes, braces, control characters, path traversal or empty segments.
+ */
+export function isValidModelName(value: string | null | undefined): boolean {
+  if (typeof value !== "string") return false;
+  const model = value.trim();
+  if (model.length < 2 || model.length > 160) return false;
+  // Allowed characters cover vendor prefixes, versions and tags.
+  if (!/^[A-Za-z0-9._:/@+-]+$/.test(model)) return false;
+  // No leading/trailing separators, no empty or traversal segments.
+  if (/^[._:/@+-]|[._:/@+-]$/.test(model)) return false;
+  if (model.includes("..")) return false;
+  if (model.split("/").some((segment) => segment.length === 0)) return false;
+  return true;
+}
+
 export interface DeepSeekConfig {
   apiKey: string;
   baseUrl: string;
@@ -82,6 +104,12 @@ export function cleanBaseUrl(value: string): string {
 /**
  * Describes which connection-test step failed, against which URL, and what to
  * check. A bare "not found" from the provider is not actionable on its own.
+ *
+ * The base-URL hint is only correct when the official DeepSeek host is in use. A
+ * founder who deliberately configured a custom OpenAI-compatible endpoint must
+ * not be told their base URL is "wrong" — the real finding there is usually that
+ * the host serves chat but does not implement DeepSeek's proprietary Search and
+ * Fetch tools.
  */
 function connectionStepError(
   step: string,
@@ -95,10 +123,34 @@ function connectionStepError(
       : error instanceof Error
         ? error.message
         : "unknown error";
-  const hint =
-    error instanceof DeepSeekError && (error.status === 404 || error.status === 405)
-      ? ` The endpoint was not found at that path, which usually means the base URL is wrong — it should be ${DEEPSEEK_DEFAULT_BASE_URL} with no extra path.`
-      : "";
+  const isMissingPath =
+    error instanceof DeepSeekError && (error.status === 404 || error.status === 405);
+  const isOfficialHost = /^https:\/\/api\.deepseek\.com$/i.test(baseUrl);
+  const lowerDetail = detail.toLowerCase();
+
+  let hint = "";
+  if (isMissingPath && isOfficialHost) {
+    hint = ` The endpoint was not found at that path, which usually means the base URL is wrong — it should be ${DEEPSEEK_DEFAULT_BASE_URL} with no extra path.`;
+  } else if (isMissingPath) {
+    hint =
+      ` This custom endpoint is reachable but does not answer ${step.toLowerCase()} at that path. ` +
+      "An OpenAI-compatible host will usually serve /models and /chat/completions but not DeepSeek's proprietary " +
+      "Search and Fetch tools, which the autonomous engine needs for discovery. " +
+      "Use https://api.deepseek.com to run the engine, or keep this endpoint for chat only.";
+  } else if (/insufficient balance|insufficient_quota|quota exceeded|no credit/i.test(lowerDetail)) {
+    // The key and base URL are correct — the account simply has no funds. Say so
+    // plainly, because "Insufficient Balance" alone does not tell a founder that
+    // Search and Fetch are billed per successful request.
+    hint =
+      " Your API key and base URL are correct, but the DeepSeek account has no remaining balance. " +
+      "Top up the account before running research: Search and Fetch are billed per successful request. " +
+      "The engine will pause safely rather than overspend, but it cannot discover anything with a zero balance.";
+  } else if (error instanceof DeepSeekError && error.status === 401) {
+    hint = " Check that the API key is correct and active for this endpoint.";
+  } else if (error instanceof DeepSeekError && error.status === 402) {
+    hint = " The account is reachable but payment is required before requests will succeed.";
+  }
+
   return new DeepSeekError(
     `${step} failed at ${url}: ${detail}${hint} (base URL in use: ${baseUrl})`,
     error instanceof DeepSeekError ? error.status : 0,
@@ -217,8 +269,10 @@ export async function saveDeepSeekSettings(input: {
   if (!/^https:\/\//i.test(baseUrl)) {
     throw new AppError("DeepSeek base URL must use HTTPS.");
   }
-  if (!/^[a-z0-9._-]{2,80}$/i.test(model)) {
-    throw new AppError("Enter a valid DeepSeek model name.");
+  if (!isValidModelName(model)) {
+    throw new AppError(
+      "Enter a valid model name. Vendor-prefixed identifiers such as deepseek/deepseek-chat are supported.",
+    );
   }
   await db.query(
     `INSERT INTO provider_credentials
