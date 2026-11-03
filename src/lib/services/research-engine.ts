@@ -19,6 +19,11 @@ import {
 } from "@/lib/services/research";
 import { recordResearchUsage } from "@/lib/services/research-usage";
 import {
+  markQueryRunning,
+  recordQueryOutcome,
+  recordQueryPlanned,
+} from "@/lib/services/research-ledger";
+import {
   getJobBudget,
   finishResearchRun,
   heartbeatResearchRun,
@@ -438,6 +443,13 @@ async function discoverMore(input: {
       };
     }
 
+    // Record every attempt in the ledger, so assistants can check_search_query and so a
+    // query's yield can be measured. The engine does not skip on the ledger: re-running the
+    // plan after a full cycle is how a job retries toward an unmet target, and the repeat
+    // window would stall it forever. Skipping is the agents' decision, via check_search_query.
+    await recordQueryPlanned({ jobId: job.id, query: planned.query }).catch(() => undefined);
+    await markQueryRunning({ jobId: job.id, query: planned.query }).catch(() => undefined);
+
     let search;
     try {
       search = await provider.search({
@@ -458,6 +470,12 @@ async function discoverMore(input: {
         status: "error",
         metadata: { query: planned.query, error: message.slice(0, 300) },
       }).catch(() => undefined);
+      await recordQueryOutcome({
+        jobId: job.id,
+        query: planned.query,
+        status: "failed",
+        error: message.slice(0, 300),
+      }).catch(() => undefined);
       await db.query(
         `UPDATE research_jobs SET search_queries_used = search_queries_used + 1,
            updated_at = now() WHERE id = $1`,
@@ -472,6 +490,13 @@ async function discoverMore(input: {
       model: provider.model,
       costUsd: search.costUsd,
       metadata: { query: planned.query, results: search.results.length },
+    }).catch(() => undefined);
+
+    await recordQueryOutcome({
+      jobId: job.id,
+      query: planned.query,
+      status: "used",
+      resultCount: search.results.length,
     }).catch(() => undefined);
 
     await db.query(

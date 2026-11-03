@@ -21,6 +21,12 @@ import {
   listConversations,
   suggestConversationReply,
 } from "@/lib/services/conversations";
+import {
+  isQueryRecentlyUsed,
+  LEDGER_REPEAT_WINDOW_DAYS,
+  normalizeQuery,
+  recordQueryOutcome,
+} from "@/lib/services/research-ledger";
 import { buildFollowUp } from "@/lib/ai/writer";
 import { getDb } from "@/lib/db/client";
 import {
@@ -438,6 +444,51 @@ export async function runAgentAction(
       result = { context };
       break;
     }
+    case "check_search_query": {
+      requireScope(key, "research:read");
+      const query = String(args.query || "").trim();
+      if (!query) throw new AppError("query is required.");
+      const withinDays =
+        args.withinDays === undefined ? undefined : Number(args.withinDays);
+      const recent = await isQueryRecentlyUsed(query, withinDays);
+      result = {
+        query,
+        normalized: normalizeQuery(query),
+        windowDays: withinDays ?? LEDGER_REPEAT_WINDOW_DAYS,
+        used: recent.used,
+        lastUsedAt: recent.lastUsedAt,
+        jobId: recent.jobId,
+      };
+      break;
+    }
+    case "record_search_query": {
+      requireScope(key, "research:write");
+      const jobId = String(args.jobId || "").trim();
+      const query = String(args.query || "").trim();
+      const status = String(args.status || "");
+      if (!jobId) throw new AppError("jobId is required.");
+      if (!query) throw new AppError("query is required.");
+      if (status !== "used" && status !== "failed") {
+        throw new AppError('status must be "used" or "failed".');
+      }
+      await recordQueryOutcome({
+        jobId,
+        query,
+        status,
+        resultCount: args.resultCount === undefined ? undefined : Number(args.resultCount),
+        newLeadCount: args.newLeadCount === undefined ? undefined : Number(args.newLeadCount),
+        error: args.error === undefined ? null : String(args.error),
+      });
+      const recent = await isQueryRecentlyUsed(query);
+      result = {
+        recorded: true,
+        query,
+        status,
+        ledger: recent,
+        message: "Recorded in the ledger. Nothing was sent, started or deleted.",
+      };
+      break;
+    }
     default:
       throw new AppError(`Unknown Growth action: ${action}`, 404, "unknown_action");
   }
@@ -492,6 +543,39 @@ export const TOOL_DEFINITIONS = [
       "Report target, new verified leads, published emails, drafts, duplicates rejected, remaining and recorded stop reason from the database.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     readOnly: true,
+  },
+  {
+    name: "check_search_query",
+    description:
+      "Read the research ledger: has this exact search already been used in any job inside the repeat window, and if so when and in which job.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        withinDays: { type: "number" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+    readOnly: true,
+  },
+  {
+    name: "record_search_query",
+    description:
+      "Record the outcome of one search in the research ledger, so no assistant repeats it and its yield can be measured later. Records only: it cannot start, stop, pause or change a research job.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        jobId: { type: "string" },
+        query: { type: "string" },
+        status: { type: "string", enum: ["used", "failed"] },
+        resultCount: { type: "number" },
+        newLeadCount: { type: "number" },
+        error: { type: "string" },
+      },
+      required: ["jobId", "query", "status"],
+      additionalProperties: false,
+    },
   },
   {
     name: "search_prospects",
