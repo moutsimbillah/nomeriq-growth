@@ -22,11 +22,13 @@ import { getSendUsage } from "@/lib/services/email-sending";
 import { listApiKeys } from "@/lib/agent/apiKeys";
 import { listSuppressions } from "@/lib/services/suppressions";
 import { getDeepSeekPublicSettings } from "@/lib/deepseek/provider";
+import { listResearchProviders } from "@/lib/deepseek/provider-pool";
 import { Card, PageHeader, SectionHeading } from "@/components/ui";
 import { WorkspaceSettingsForm } from "@/components/settings/workspace-form";
 import { EmailAccountsManager } from "@/components/settings/email-accounts";
 import { IntegrationsManager } from "@/components/settings/integrations";
 import { DeepSeekSettings } from "@/components/settings/deepseek";
+import { ProvidersCard } from "@/components/settings/providers";
 import {
   BackupPanel,
   SuppressionManager,
@@ -80,7 +82,7 @@ function SettingsSection({
 }
 
 export default async function SettingsPage() {
-  const [settings, accounts, apiKeys, users, suppressions, deepseekSettings] =
+  const [settings, accounts, apiKeys, users, suppressions, deepseekSettings, researchProviders] =
     await Promise.all([
       getWorkspaceSettings(),
       listEmailAccounts(),
@@ -88,6 +90,7 @@ export default async function SettingsPage() {
       listUsers(),
       listSuppressions(),
       getDeepSeekPublicSettings(),
+      listResearchProviders(),
     ]);
   const usages: Record<string, Awaited<ReturnType<typeof getSendUsage>>> = {};
   const health: Record<
@@ -196,6 +199,7 @@ export default async function SettingsPage() {
             description="The engine that finds, verifies and saves qualified trading-signal providers without an open browser or chat session. It never sends email."
           >
             <DeepSeekSettings initial={deepseekSettings} />
+            <ProvidersCard initial={researchProviders} />
           </SettingsSection>
 
           <SettingsSection
