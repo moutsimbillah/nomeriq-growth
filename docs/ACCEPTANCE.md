@@ -57,8 +57,8 @@ What this environment cannot do is run that same path against the live web: ther
 ## Test evidence
 
 ```text
-Test Files  3 passed (3)
-     Tests  41 passed (41)
+Test Files  5 passed (5)
+     Tests  51 passed (51)
 ```
 
 `tests/research-engine.test.ts` (21 tests) exercises the engine through an injected `ResearchProvider`, so autonomous research is provable with no API key and no network:
@@ -85,6 +85,13 @@ Test Files  3 passed (3)
 - a **pre-existing drifted database is repaired** by migration 005's reconciliation
 - the schema invariant itself: `spent_usd` is stored at the same scale as `cost_usd`
 - migration 005 applies **idempotently** to a database that already holds data
+
+`tests/deepseek-provider.test.ts` (6 tests) and `tests/deepseek-connection-errors.test.ts` (4 tests) pin the provider's HTTP contract and its failure reporting:
+
+- Search, Fetch and the model list are called at the exact documented paths for **either** base-URL spelling
+- a `/v1` base URL never produces a doubled `/v1/v1` path
+- a connection failure names the failing step, the URL and the base URL in use, with a base-URL hint on 404/405
+- a 401 reports the provider's authentication message and deliberately does **not** suggest changing the base URL
 
 `tests/workflow.test.ts` (15 tests) covers the original sales workflows plus generic-email deduplication in both directions.
 

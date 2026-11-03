@@ -62,8 +62,49 @@ export interface DeepSeekPublicSettings {
   lastTestedAt: string | null;
 }
 
-function cleanBaseUrl(value: string): string {
-  return value.trim().replace(/\/+$/, "") || DEEPSEEK_DEFAULT_BASE_URL;
+/**
+ * Normalises a DeepSeek base URL.
+ *
+ * DeepSeek's documentation presents the base URL both ways — `https://api.deepseek.com`
+ * and `https://api.deepseek.com/v1` (the OpenAI-compatible spelling). Both are
+ * reasonable for a founder to paste into Settings, so a trailing `/v1` is
+ * stripped here. Every endpoint path this adapter builds already includes its own
+ * version segment, so keeping it would produce `/v1/v1/tools/search`, which the
+ * real API answers with a bare 404 that reads to the founder as "not found".
+ */
+export function cleanBaseUrl(value: string): string {
+  const trimmed = (value || "").trim().replace(/\/+$/, "");
+  if (!trimmed) return DEEPSEEK_DEFAULT_BASE_URL;
+  const withoutVersion = trimmed.replace(/\/v1$/i, "");
+  return withoutVersion || DEEPSEEK_DEFAULT_BASE_URL;
+}
+
+/**
+ * Describes which connection-test step failed, against which URL, and what to
+ * check. A bare "not found" from the provider is not actionable on its own.
+ */
+function connectionStepError(
+  step: string,
+  url: string,
+  baseUrl: string,
+  error: unknown,
+): DeepSeekError {
+  const detail =
+    error instanceof DeepSeekError
+      ? error.message
+      : error instanceof Error
+        ? error.message
+        : "unknown error";
+  const hint =
+    error instanceof DeepSeekError && (error.status === 404 || error.status === 405)
+      ? ` The endpoint was not found at that path, which usually means the base URL is wrong — it should be ${DEEPSEEK_DEFAULT_BASE_URL} with no extra path.`
+      : "";
+  return new DeepSeekError(
+    `${step} failed at ${url}: ${detail}${hint} (base URL in use: ${baseUrl})`,
+    error instanceof DeepSeekError ? error.status : 0,
+    "deepseek_test_step_failed",
+    false,
+  );
 }
 
 export async function resolveDeepSeekConfig(): Promise<{
@@ -529,19 +570,35 @@ export async function testDeepSeekConnection(config: DeepSeekConfig): Promise<{
   fetchOk: boolean;
   costUsd: number;
 }> {
-  const models = await listDeepSeekModels(config).catch((error) => {
-    throw error;
-  });
+  const modelsUrl = `${config.baseUrl}/models`;
+  let models: string[];
+  try {
+    models = await listDeepSeekModels(config);
+  } catch (error) {
+    // Name the step, the URL and the base URL in use. DeepSeek answers an
+    // unknown path with a minimal 404 body, so without this the founder only
+    // sees "not found" and cannot tell what to fix.
+    throw connectionStepError("Model list", modelsUrl, config.baseUrl, error);
+  }
+
   let costUsd = 0;
   let searchOk = false;
   let fetchOk = false;
-  const search = await deepseekSearch(config, {
-    query: '"forex signals" "VIP"',
-    count: 2,
-    qps: 1,
-  });
+
+  const searchUrl = `${config.baseUrl}/v1/tools/search`;
+  let search;
+  try {
+    search = await deepseekSearch(config, {
+      query: '"forex signals" "VIP"',
+      count: 2,
+      qps: 1,
+    });
+  } catch (error) {
+    throw connectionStepError("Search", searchUrl, config.baseUrl, error);
+  }
   costUsd += search.costUsd;
   searchOk = search.results.length > 0;
+
   if (search.results[0]) {
     try {
       const page = await deepseekFetchPage(config, {
@@ -550,16 +607,29 @@ export async function testDeepSeekConnection(config: DeepSeekConfig): Promise<{
       });
       costUsd += page.costUsd;
       fetchOk = Boolean(page.content);
-    } catch {
-      fetchOk = false;
+    } catch (error) {
+      // Fetch is best effort: Search working already proves the key and base
+      // URL, and an individual publisher's site may legitimately refuse Fetch.
+      const detail = error instanceof Error ? error.message : "unknown error";
+      return {
+        ok: models.length > 0 && searchOk,
+        message:
+          `Model API reachable (${models.length} models). Search working. ` +
+          `Fetch could not retrieve ${search.results[0].url}: ${detail}`,
+        models,
+        searchOk,
+        fetchOk: false,
+        costUsd,
+      };
     }
   }
+
   return {
     ok: models.length > 0 && searchOk,
     message:
       `Model API reachable (${models.length} models). ` +
-      `Search ${searchOk ? "working" : "returned no results"}. ` +
-      `Fetch ${fetchOk ? "working" : "could not retrieve the first result"}.`,
+      `${searchOk ? "Search working." : "Search returned no results for a common query."} ` +
+      `${fetchOk ? "Fetch working." : "Fetch could not retrieve the first result."}`,
     models,
     searchOk,
     fetchOk,

@@ -112,6 +112,7 @@ Growth can research leads by itself. Nothing depends on a browser tab, a chat se
 
 1. **Settings → DeepSeek**: paste the API key, confirm the base URL (`https://api.deepseek.com`) and model (`deepseek-flash`), then use **Test connection**.
    The key is stored encrypted with `APP_ENCRYPTION_KEY` and is **never** returned to the browser. Alternatively set `DEEPSEEK_API_KEY` on the server; a key saved in Settings overrides the environment.
+   If you paste the base URL as `https://api.deepseek.com/v1` (the spelling DeepSeek's OpenAI-compatible docs use), Growth normalises it automatically — a trailing `/v1` is stripped because every endpoint path already carries its own version segment. If a step fails, the error names the step, the exact URL, the base URL in use, and what to check.
 2. **Settings → Workspace**: set the default research budget, concurrency, and the DeepSeek Search/Fetch QPS limits.
 3. **Research → New research target**: choose the **DeepSeek engine**, set the target count and a USD budget.
    A DeepSeek target is created **paused** on purpose, so the founder sees the budget before any money is spent.
@@ -175,8 +176,8 @@ npm test
 ```
 
 ```text
-Test Files  3 passed (3)
-     Tests  41 passed (41)
+Test Files  5 passed (5)
+     Tests  51 passed (51)
 ```
 
 The 14 workflow tests cover:
@@ -212,6 +213,8 @@ The 21 engine tests cover:
 - terminal-state guards, cancellation, and honest `stopReason` reporting
 
 The 5 spend-reconciliation tests guard budget accuracy: job spend must stay exactly equal to the sum of its usage rows, including on a database that had already accumulated drift before migration 005, and that migration must apply idempotently.
+
+The 10 DeepSeek provider tests pin the exact endpoints the adapter calls (`/models`, `/v1/tools/search`, `/v1/tools/fetch`) for both base-URL spellings, prove a `/v1` base URL never produces a doubled `/v1/v1` path, and prove a connection failure names the failing step, the URL, and the base URL in use instead of surfacing the provider's bare "not found".
 
 A separate end-to-end harness runs the real provider adapter over HTTP against a local DeepSeek stub, alongside the built app:
 
