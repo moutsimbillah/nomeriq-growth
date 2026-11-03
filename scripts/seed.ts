@@ -249,7 +249,7 @@ async function main() {
   const progress = await getResearchJob(job.id);
   console.log("\nSeed complete.");
   console.log(`Sign in: ${email}`);
-  console.log(`Password: ${password}`);
+  console.log("Password: the ADMIN_PASSWORD value from .env.local (never printed).");
   console.log(
     `Research progress: ${progress?.verifiedCount}/${progress?.targetCount} verified, ${progress?.draftCount} drafts, ${progress?.duplicatesRejected} duplicate rejected.`,
   );
