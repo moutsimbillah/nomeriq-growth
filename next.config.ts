@@ -37,6 +37,18 @@ const nextConfig: NextConfig = {
     "nodemailer",
     "pg",
   ],
+  // The local PGlite database lives inside the project at .data/pglite and rewrites its
+  // files constantly. Without this the dev watcher saw every write, recompiled, and burned
+  // a full core while idle. Nothing under .data is ever imported by the app.
+  webpack(config, { dev }) {
+    if (dev) {
+      config.watchOptions = {
+        ...(config.watchOptions ?? {}),
+        ignored: ["**/node_modules/**", "**/.next/**", "**/.data/**", "**/.agents/**"],
+      };
+    }
+    return config;
+  },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },
