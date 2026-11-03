@@ -15,6 +15,8 @@ import {
 } from "lucide-react";
 import { CopyButton, apiRequest, InlineError, Modal, SubmitBar } from "../client-ui";
 import { Notice } from "../ui";
+import { DEFAULT_SCOPES } from "@/lib/agent/scopes";
+import { formatDate } from "@/lib/utils";
 
 const SCOPES = [
   ["research:read", "Search leads, jobs and duplicate checks"],
@@ -25,6 +27,18 @@ const SCOPES = [
   ["progress:read", "Read database-derived research progress"],
 ] as const;
 
+const EXPIRY_OPTIONS = [30, 90, 180, 365] as const;
+
+const DAY_MS = 86_400_000;
+
+/** Whole days until expiry, negative when already expired, null when no date. */
+function daysUntil(value: string | null): number | null {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  if (Number.isNaN(time)) return null;
+  return Math.ceil((time - Date.now()) / DAY_MS);
+}
+
 type ApiKeyRow = {
   id: string;
   name: string;
@@ -34,6 +48,7 @@ type ApiKeyRow = {
   creatorName: string | null;
   createdAt: string | null;
   lastUsedAt: string | null;
+  expiresAt: string | null;
   revokedAt: string | null;
 };
 
@@ -56,7 +71,8 @@ export function IntegrationsManager({
   const [assistant, setAssistant] = useState<
     "chatgpt" | "claude" | "deepseek" | "hermes" | "custom"
   >("claude");
-  const [scopes, setScopes] = useState<string[]>(SCOPES.map(([scope]) => scope));
+  const [scopes, setScopes] = useState<string[]>([...DEFAULT_SCOPES]);
+  const [expiresInDays, setExpiresInDays] = useState(90);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [createdKey, setCreatedKey] = useState<string | null>(null);
@@ -66,11 +82,13 @@ export function IntegrationsManager({
     setError(null);
     try {
       const result = await apiRequest("/api/api-keys", {
-        body: { name, assistant, scopes },
+        body: { name, assistant, scopes, expiresInDays },
       });
       setOpen(false);
       setCreatedKey(result.key);
       setName("");
+      setScopes([...DEFAULT_SCOPES]);
+      setExpiresInDays(90);
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create key.");
@@ -157,66 +175,101 @@ export function IntegrationsManager({
               key for the REST API.
             </div>
           )}
-          {keys.map((key) => (
-            <div
-              key={key.id}
-              className={`flex flex-wrap items-start justify-between gap-3 rounded-xl border p-3.5 ${
-                key.revokedAt
-                  ? "border-line bg-paper/30 opacity-60"
-                  : "border-line bg-white/50"
-              }`}
-            >
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <KeyRound size={12} className="text-faint" />
-                  <span className="text-[11.5px] font-semibold text-ink">
-                    {key.name}
-                  </span>
-                  <span className="badge capitalize">{key.assistant}</span>
-                  {key.revokedAt ? (
-                    <span className="badge border-rust/20 bg-rust/[0.05] text-rust">
-                      revoked
+          {keys.map((key) => {
+            const days = daysUntil(key.expiresAt);
+            const expired = days !== null && days <= 0;
+            const expiringSoon = days !== null && days > 0 && days <= 14;
+            return (
+              <div
+                key={key.id}
+                className={`flex flex-wrap items-start justify-between gap-3 rounded-xl border p-3.5 ${
+                  key.revokedAt
+                    ? "border-line bg-paper/30 opacity-60"
+                    : "border-line bg-white/50"
+                }`}
+              >
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <KeyRound size={12} className="text-faint" />
+                    <span className="text-[11.5px] font-semibold text-ink">
+                      {key.name}
                     </span>
-                  ) : (
-                    <span className="badge border-forest/20 bg-lime/20 text-forest">
-                      active
-                    </span>
+                    <span className="badge capitalize">{key.assistant}</span>
+                    {key.revokedAt ? (
+                      <span className="badge border-rust/20 bg-rust/[0.05] text-rust">
+                        revoked
+                      </span>
+                    ) : expired ? (
+                      <span className="badge border-rust/20 bg-rust/[0.05] text-rust">
+                        expired
+                      </span>
+                    ) : (
+                      <span className="badge border-forest/20 bg-lime/20 text-forest">
+                        active
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 font-mono text-[9.5px] text-faint">
+                    {key.prefix}••••••••
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {key.scopes.map((scope) => (
+                      <span key={scope} className="badge">
+                        {scope}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-1 text-[9px] text-faint">
+                    Created {key.createdAt ? new Date(key.createdAt).toLocaleDateString("en-GB") : "unknown"}
+                    {key.lastUsedAt
+                      ? ` · last used ${new Date(key.lastUsedAt).toLocaleString("en-GB")}`
+                      : " · never used"}
+                  </div>
+                  {!key.revokedAt && key.expiresAt && (
+                    <div
+                      className={`mt-1 text-[9px] ${
+                        expired
+                          ? "font-semibold text-rust"
+                          : expiringSoon
+                            ? "font-semibold text-amber"
+                            : "text-faint"
+                      }`}
+                    >
+                      {expired
+                        ? `Expired ${formatDate(key.expiresAt)}`
+                        : `Expires ${formatDate(key.expiresAt)}${
+                            days === null ? "" : ` (in ${days} ${days === 1 ? "day" : "days"})`
+                          }`}
+                    </div>
+                  )}
+                  {!key.revokedAt && expiringSoon && (
+                    <div className="mt-2">
+                      <Notice tone="warning" title="Expires soon.">
+                        This key expires in {days} {days === 1 ? "day" : "days"}. Rotate
+                        it now: create a replacement, update the assistant, then
+                        revoke this key.
+                      </Notice>
+                    </div>
                   )}
                 </div>
-                <div className="mt-1 font-mono text-[9.5px] text-faint">
-                  {key.prefix}••••••••
-                </div>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {key.scopes.map((scope) => (
-                    <span key={scope} className="badge">
-                      {scope}
-                    </span>
-                  ))}
-                </div>
-                <div className="mt-1 text-[9px] text-faint">
-                  Created {key.createdAt ? new Date(key.createdAt).toLocaleDateString("en-GB") : "unknown"}
-                  {key.lastUsedAt
-                    ? ` · last used ${new Date(key.lastUsedAt).toLocaleString("en-GB")}`
-                    : " · never used"}
-                </div>
+                {!key.revokedAt && (
+                  <button
+                    type="button"
+                    className="btn-ghost btn-xs text-faint hover:text-rust"
+                    onClick={() => revoke(key.id)}
+                    disabled={pending === key.id}
+                  >
+                    {pending === key.id ? (
+                      <LoaderCircle size={10} className="spin" />
+                    ) : (
+                      <Trash2 size={10} />
+                    )}
+                    Revoke
+                  </button>
+                )}
               </div>
-              {!key.revokedAt && (
-                <button
-                  type="button"
-                  className="btn-ghost btn-xs text-faint hover:text-rust"
-                  onClick={() => revoke(key.id)}
-                  disabled={pending === key.id}
-                >
-                  {pending === key.id ? (
-                    <LoaderCircle size={10} className="spin" />
-                  ) : (
-                    <Trash2 size={10} />
-                  )}
-                  Revoke
-                </button>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
         {error && <div className="mt-2"><InlineError>{error}</InlineError></div>}
       </div>
@@ -305,6 +358,24 @@ export function IntegrationsManager({
                 ),
               )}
             </div>
+          </div>
+          <div>
+            <label className="label">Expires in</label>
+            <select
+              className="select"
+              value={expiresInDays}
+              onChange={(event) => setExpiresInDays(Number(event.target.value))}
+            >
+              {EXPIRY_OPTIONS.map((days) => (
+                <option key={days} value={days}>
+                  {days} days
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-[9.5px] text-muted">
+              The key stops working after this date. Create a replacement before it
+              expires and revoke the old key.
+            </p>
           </div>
           <div>
             <label className="label">Permissions</label>

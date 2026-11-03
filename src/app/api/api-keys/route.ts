@@ -17,6 +17,7 @@ const schema = z.object({
   // Must stay in step with the api_keys.assistant CHECK constraint.
   assistant: z.enum(["chatgpt", "claude", "deepseek", "hermes", "custom"]),
   scopes: z.array(z.enum(ALLOWED_SCOPES)).optional(),
+  expiresInDays: z.number().int().min(1).max(365).optional(),
 });
 
 export async function GET() {

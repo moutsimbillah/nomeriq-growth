@@ -1,19 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import { getDb } from "@/lib/db/client";
 import { AppError, asStringArray, iso } from "@/lib/utils";
+import { ALLOWED_SCOPES, DEFAULT_SCOPES, type ApiScope } from "./scopes";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-export const ALLOWED_SCOPES = [
-  "research:read",
-  "research:write",
-  "drafts:write",
-  "product_truth:read",
-  "conversations:read",
-  "progress:read",
-] as const;
+export { ALLOWED_SCOPES, DEFAULT_SCOPES };
+export type { ApiScope };
 
-export type ApiScope = (typeof ALLOWED_SCOPES)[number];
 
 export interface ApiKeyIdentity {
   id: string;
@@ -30,10 +24,23 @@ export async function createApiKey(input: {
   name: string;
   assistant: "chatgpt" | "claude" | "deepseek" | "hermes" | "custom";
   scopes?: string[];
+  expiresInDays?: number;
   userId: string;
-}): Promise<{ id: string; key: string; prefix: string }> {
+}): Promise<{ id: string; key: string; prefix: string; expiresAt: string }> {
   if (!input.name.trim()) throw new AppError("Give the API key a name.");
-  const scopes = (input.scopes?.length ? input.scopes : [...ALLOWED_SCOPES]).filter(
+  const expiresInDays = input.expiresInDays ?? 90;
+  if (
+    !Number.isInteger(expiresInDays) ||
+    expiresInDays < 1 ||
+    expiresInDays > 365
+  ) {
+    throw new AppError(
+      "API key expiry must be a whole number of days between 1 and 365.",
+    );
+  }
+  const scopes = (
+    input.scopes?.length ? input.scopes : [...DEFAULT_SCOPES]
+  ).filter(
     (scope): scope is ApiScope =>
       (ALLOWED_SCOPES as readonly string[]).includes(scope) &&
       scope !== ("send:write" as string),
@@ -41,11 +48,12 @@ export async function createApiKey(input: {
   if (!scopes.length) throw new AppError("Select at least one permission.");
   const key = `ng_live_${randomBytes(32).toString("base64url")}`;
   const prefix = key.slice(0, 15);
+  const expiresAt = new Date(Date.now() + expiresInDays * 86_400_000);
   const db = await getDb();
   const id = crypto.randomUUID();
   await db.query(
-    `INSERT INTO api_keys (id, name, assistant, key_prefix, key_hash, scopes, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)`,
+    `INSERT INTO api_keys (id, name, assistant, key_prefix, key_hash, scopes, created_by, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)`,
     [
       id,
       input.name.trim(),
@@ -54,9 +62,10 @@ export async function createApiKey(input: {
       hashKey(key),
       JSON.stringify(scopes),
       input.userId,
+      expiresAt,
     ],
   );
-  return { id, key, prefix };
+  return { id, key, prefix, expiresAt: expiresAt.toISOString() };
 }
 
 export async function listApiKeys() {
@@ -75,6 +84,7 @@ export async function listApiKeys() {
     creatorName: row.creator_name,
     createdAt: iso(row.created_at),
     lastUsedAt: iso(row.last_used_at),
+    expiresAt: iso(row.expires_at),
     revokedAt: iso(row.revoked_at),
   }));
 }
@@ -110,6 +120,14 @@ export async function authenticateApiKey(
   const row = result.rows[0];
   if (!row) {
     throw new AppError("Invalid or revoked API key.", 401, "unauthorized");
+  }
+  const expiresAt = iso(row.expires_at);
+  if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) {
+    throw new AppError(
+      `This API key expired on ${expiresAt.slice(0, 10)}. Create a new key in Settings.`,
+      401,
+      "key_expired",
+    );
   }
   await db.query(
     `UPDATE api_keys SET last_used_at = now() WHERE id = $1 AND
