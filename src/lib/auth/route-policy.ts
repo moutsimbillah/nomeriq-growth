@@ -19,6 +19,10 @@ export const PUBLIC_PREFIXES = [
   "/api/mcp",
   "/api/agent/",
   "/api/cron/",
+  // OAuth discovery and the connector flow: the client is not signed in when it asks,
+  // and the consent step enforces the session itself.
+  "/api/oauth/",
+  "/.well-known/",
 ];
 
 export function isPublicPath(pathname: string): boolean {

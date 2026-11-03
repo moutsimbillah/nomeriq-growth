@@ -6,6 +6,7 @@ import {
 } from "@/lib/agent/service";
 import { ASSISTANT_SKILL } from "@/lib/agent/instructions";
 import { corsHeaders, preflight } from "@/lib/api/cors";
+import { publicOrigin } from "@/lib/oauth/origin";
 import { AppError } from "@/lib/utils";
 
 export const runtime = "nodejs";
@@ -31,13 +32,23 @@ function rpcError(
   status = 200,
 ) {
   return NextResponse.json(
-    { jsonrpc: "2.0", id: id ?? null, error: { code, message } },
-    {
-      status,
-      headers: { ...corsHeaders(request), "MCP-Protocol-Version": "2025-06-18" },
-    },
-  );
-}
+      { jsonrpc: "2.0", id: id ?? null, error: { code, message } },
+      {
+        status,
+        headers: {
+          ...corsHeaders(request),
+          "MCP-Protocol-Version": "2025-06-18",
+          // A 401 tells an MCP client to authenticate; the metadata pointer is how claude.ai
+          // and ChatGPT discover the OAuth server instead of giving up on a static key.
+          ...(status === 401
+            ? {
+                "WWW-Authenticate": `Bearer resource_metadata="${publicOrigin(request)}/.well-known/oauth-protected-resource"`,
+              }
+            : {}),
+        },
+      },
+    );
+  }
 
 function tools() {
   return TOOL_DEFINITIONS.map((tool) => ({

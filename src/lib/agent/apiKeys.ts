@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { getDb } from "@/lib/db/client";
 import { AppError, asStringArray, iso } from "@/lib/utils";
 import { ALLOWED_SCOPES, DEFAULT_SCOPES, type ApiScope } from "./scopes";
+import { verifyOAuthToken } from "@/lib/oauth/server";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -163,6 +164,17 @@ export async function authenticateApiKey(
   );
   const row = result.rows[0];
   if (!row) {
+    // Hosted MCP connectors (claude.ai, ChatGPT) authenticate with an OAuth access token
+    // rather than an API key, so the same header is checked against that store too.
+    const oauth = await verifyOAuthToken(key);
+    if (oauth) {
+      return {
+        id: `oauth:${oauth.clientId}`,
+        name: oauth.clientName || "MCP connector",
+        assistant: "custom",
+        scopes: oauth.scopes,
+      };
+    }
     throw new AppError("Invalid or revoked API key.", 401, "unauthorized");
   }
   const expiresAt = iso(row.expires_at);

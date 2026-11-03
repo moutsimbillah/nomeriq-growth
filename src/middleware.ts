@@ -34,6 +34,15 @@ function hasCredential(request: NextRequest): boolean {
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
+  // OAuth discovery documents live at the bare .well-known paths that connector clients
+  // probe; they are served by route handlers under /api/oauth/wellknown.
+  if (pathname.startsWith("/.well-known/oauth-protected-resource")) {
+    return NextResponse.rewrite(new URL("/api/oauth/wellknown/protected-resource", request.url));
+  }
+  if (pathname.startsWith("/.well-known/oauth-authorization-server")) {
+    return NextResponse.rewrite(new URL("/api/oauth/wellknown/authorization-server", request.url));
+  }
+
   // Never intercept static assets.
   if (pathname.includes(".")) return NextResponse.next();
 

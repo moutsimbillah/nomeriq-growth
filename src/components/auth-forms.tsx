@@ -5,7 +5,7 @@ import { useState } from "react";
 import { ArrowRight, Eye, EyeOff } from "lucide-react";
 import { apiRequest } from "./client-ui";
 
-export function LoginForm({ hasUsers }: { hasUsers: boolean }) {
+export function LoginForm({ hasUsers, next }: { hasUsers: boolean; next?: string }) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -19,7 +19,9 @@ export function LoginForm({ hasUsers }: { hasUsers: boolean }) {
     setError(null);
     try {
       await apiRequest("/api/auth/login", { body: { email, password } });
-      router.push("/dashboard");
+      // Only a same-site path is accepted, so this can never bounce to another host.
+      const target = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+      router.push(target);
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Sign in failed.");
