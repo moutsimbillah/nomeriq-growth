@@ -143,5 +143,8 @@ export async function POST(request: Request) {
 
   target.searchParams.set("code", code);
   if (state) target.searchParams.set("state", state);
+  // RFC 9207: the authorization response carries the issuer, so the client can confirm the
+  // code came from the server it trusted before it exchanges it.
+  target.searchParams.set("iss", publicOrigin(request));
   return NextResponse.redirect(target, 303);
 }
