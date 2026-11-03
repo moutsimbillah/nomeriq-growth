@@ -13,10 +13,15 @@
  * No email is sent at any point, and no real DeepSeek request is made.
  */
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import http from "node:http";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
+
+// The founder this script creates lives only in a throwaway database, so the
+// password is generated per run rather than being a value committed to the repo.
+const FOUNDER_PASSWORD = `E2e-${randomBytes(18).toString("base64url")}`;
 
 // Load the same local secrets the app itself loads, so the harness and the app
 // agree on CRON_SECRET. Parsed directly to keep this script dependency-free.
@@ -344,7 +349,7 @@ async function main() {
     body: JSON.stringify({
       name: "E2E Founder",
       email: "founder@e2e.test",
-      password: "E2eFounder!2026",
+      password: FOUNDER_PASSWORD,
     }),
   });
   assert(setup.status === 200, `setup created the founder (status ${setup.status})`);
