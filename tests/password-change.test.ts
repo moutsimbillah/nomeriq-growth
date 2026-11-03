@@ -62,7 +62,7 @@ beforeAll(async () => {
       "password@test.nomeriq.com",
       "Password Test",
       state.originalHash,
-      "founder",
+      "member",
     ],
   );
 });
@@ -205,11 +205,18 @@ describe("changePassword", () => {
     expect(sessions).toEqual(["caller-session"]);
 
     const db = await getDb();
-    const audit = await db.query<{ action: string; metadata: Record<string, unknown> }>(
-      `SELECT action, metadata FROM audit_log WHERE entity_id = $1 AND action = 'auth.password_changed'`,
+    const audit = await db.query<{
+      action: string;
+      actor_type: string;
+      metadata: Record<string, unknown>;
+    }>(
+      `SELECT action, actor_type, metadata FROM audit_log WHERE entity_id = $1 AND action = 'auth.password_changed'`,
       [state.userId],
     );
     expect(audit.rows).toHaveLength(1);
+
+    // The actor is recorded as the signed-in user's own role, not a hardcoded 'founder'.
+    expect(audit.rows[0]!.actor_type).toBe("member");
 
     const metadata = audit.rows[0]!.metadata;
     expect(Object.keys(metadata)).toEqual(["sessionsRevoked"]);

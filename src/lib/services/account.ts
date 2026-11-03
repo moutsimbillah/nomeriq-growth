@@ -35,8 +35,8 @@ export async function changePassword(input: {
 
   const db = await getDb();
 
-  const existing = await db.query<{ password_hash: string }>(
-    `SELECT password_hash FROM users WHERE id = $1 AND is_active = true`,
+  const existing = await db.query<{ password_hash: string; role: string }>(
+    `SELECT password_hash, role FROM users WHERE id = $1 AND is_active = true`,
     [userId],
   );
 
@@ -47,19 +47,27 @@ export async function changePassword(input: {
     throw new AppError("Your current password is incorrect.", 401, "invalid_password");
   }
 
-  await db.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [hashPassword(newPassword), userId]);
+  // Hash before opening the transaction: hashPassword is CPU-bound and synchronous,
+  // and nothing should hold the transaction open while it runs.
+  const nextHash = hashPassword(newPassword);
 
-  const revoked = await db.query(
-    `DELETE FROM sessions WHERE user_id = $1 AND ($2 = '' OR token_hash <> $2)`,
-    [userId, currentTokenHash],
-  );
-  const sessionsRevoked = revoked.rowCount ?? 0;
+  // The password change, the session revocation and the audit entry are one unit: an
+  // audit insert that failed on its own would leave a changed password with no record.
+  return db.transaction(async (tx) => {
+    await tx.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [nextHash, userId]);
 
-  await db.query(
-    `INSERT INTO audit_log (id, actor_type, actor_id, action, entity_type, entity_id, metadata)
-     VALUES ($1, 'founder', $2, 'auth.password_changed', 'user', $3, $4::jsonb)`,
-    [randomUUID(), userId, userId, JSON.stringify({ sessionsRevoked })],
-  );
+    const revoked = await tx.query(
+      `DELETE FROM sessions WHERE user_id = $1 AND ($2 = '' OR token_hash <> $2)`,
+      [userId, currentTokenHash],
+    );
+    const sessionsRevoked = revoked.rowCount ?? 0;
 
-  return { sessionsRevoked };
+    await tx.query(
+      `INSERT INTO audit_log (id, actor_type, actor_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, $2, $3, 'auth.password_changed', 'user', $4, $5::jsonb)`,
+      [randomUUID(), row.role, userId, userId, JSON.stringify({ sessionsRevoked })],
+    );
+
+    return { sessionsRevoked };
+  });
 }
