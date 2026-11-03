@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { TOOL_DEFINITIONS } from "@/lib/agent/service";
+import { corsHeaders, preflight } from "@/lib/api/cors";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   const base = (process.env.APP_URL || "http://localhost:3100").replace(/\/$/, "");
   const paths: Record<string, unknown> = {};
   for (const tool of TOOL_DEFINITIONS) {
@@ -72,7 +73,12 @@ export async function GET() {
     {
       headers: {
         "Cache-Control": "public, max-age=60",
+        ...corsHeaders(request),
       },
     },
   );
+}
+
+export async function OPTIONS(request: Request) {
+  return preflight(request);
 }

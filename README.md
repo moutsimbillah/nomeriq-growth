@@ -259,6 +259,7 @@ See [SECURITY.md](SECURITY.md). Important boundaries:
 - Commercial footers include the sender identity, postal address (blocked live if missing) and a unique unsubscribe link.
 - Opt-outs are recorded immediately and stop promotional mail.
 - Supabase RLS/revoke migration is included for defense in depth. The app does not use the Supabase Data API.
+- API keys carry an expiry (default 90 days) and are rate-limited per key. Neither the key value nor mailbox credentials are ever returned by an API.
 
 ## Deliberate limits
 

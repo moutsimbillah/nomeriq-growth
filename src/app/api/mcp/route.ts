@@ -5,36 +5,36 @@ import {
   runMcpTool,
 } from "@/lib/agent/service";
 import { ASSISTANT_SKILL } from "@/lib/agent/instructions";
+import { corsHeaders, preflight } from "@/lib/api/cors";
 import { AppError } from "@/lib/utils";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const CORS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "Authorization, Content-Type, MCP-Protocol-Version, X-API-Key",
-  "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
-};
-
-function rpcResult(id: unknown, result: unknown) {
+function rpcResult(request: Request, id: unknown, result: unknown) {
   return NextResponse.json(
     { jsonrpc: "2.0", id: id ?? null, result },
     {
       headers: {
-        ...CORS,
+        ...corsHeaders(request),
         "MCP-Protocol-Version": "2025-06-18",
       },
     },
   );
 }
 
-function rpcError(id: unknown, code: number, message: string, status = 200) {
+function rpcError(
+  request: Request,
+  id: unknown,
+  code: number,
+  message: string,
+  status = 200,
+) {
   return NextResponse.json(
     { jsonrpc: "2.0", id: id ?? null, error: { code, message } },
     {
       status,
-      headers: { ...CORS, "MCP-Protocol-Version": "2025-06-18" },
+      headers: { ...corsHeaders(request), "MCP-Protocol-Version": "2025-06-18" },
     },
   );
 }
@@ -64,11 +64,11 @@ async function handleRpc(request: Request, message: Record<string, unknown>) {
     key = await authenticateApiKey(request);
   } catch (error) {
     const appError = error instanceof AppError ? error : null;
-    return rpcError(id, -32001, appError?.message || "Unauthorized", 401);
+    return rpcError(request, id, -32001, appError?.message || "Unauthorized", 401);
   }
 
   if (method === "initialize") {
-    return rpcResult(id, {
+    return rpcResult(request, id, {
       protocolVersion: "2025-06-18",
       capabilities: {
         tools: { listChanged: false },
@@ -84,13 +84,13 @@ async function handleRpc(request: Request, message: Record<string, unknown>) {
     });
   }
   if (method === "ping") {
-    return rpcResult(id, {});
+    return rpcResult(request, id, {});
   }
   if (method === "tools/list") {
-    return rpcResult(id, { tools: tools() });
+    return rpcResult(request, id, { tools: tools() });
   }
   if (method === "resources/list") {
-    return rpcResult(id, {
+    return rpcResult(request, id, {
       resources: [
         {
           uri: "nomeriq://assistant-skill",
@@ -103,7 +103,7 @@ async function handleRpc(request: Request, message: Record<string, unknown>) {
     });
   }
   if (method === "resources/read") {
-    return rpcResult(id, {
+    return rpcResult(request, id, {
       contents: [
         {
           uri: "nomeriq://assistant-skill",
@@ -114,7 +114,7 @@ async function handleRpc(request: Request, message: Record<string, unknown>) {
     });
   }
   if (method === "prompts/list") {
-    return rpcResult(id, { prompts: [] });
+    return rpcResult(request, id, { prompts: [] });
   }
   if (method === "tools/call") {
     const name = String(params.name || "");
@@ -124,14 +124,14 @@ async function handleRpc(request: Request, message: Record<string, unknown>) {
         : {};
     try {
       const result = await runMcpTool(key, name, args);
-      return rpcResult(id, {
+      return rpcResult(request, id, {
         content: [{ type: "text", text: result.text }],
         structuredContent: result.data,
         isError: false,
       });
     } catch (error) {
       const appError = error instanceof AppError ? error : null;
-      return rpcResult(id, {
+      return rpcResult(request, id, {
         content: [
           {
             type: "text",
@@ -142,7 +142,7 @@ async function handleRpc(request: Request, message: Record<string, unknown>) {
       });
     }
   }
-  return rpcError(id, -32601, `Method not found: ${method}`);
+  return rpcError(request, id, -32601, `Method not found: ${method}`);
 }
 
 export async function POST(request: Request) {
@@ -150,7 +150,7 @@ export async function POST(request: Request) {
   try {
     payload = await request.json();
   } catch {
-    return rpcError(null, -32700, "Parse error", 400);
+    return rpcError(request, null, -32700, "Parse error", 400);
   }
   if (Array.isArray(payload)) {
     const responses = [];
@@ -162,38 +162,55 @@ export async function POST(request: Request) {
       }
     }
     if (!responses.length) {
-      return new NextResponse(null, { status: 202, headers: CORS });
+      return new NextResponse(null, {
+        status: 202,
+        headers: corsHeaders(request),
+      });
     }
     return NextResponse.json(
       await Promise.all(responses.map((response) => response.json())),
-      { headers: { ...CORS, "MCP-Protocol-Version": "2025-06-18" } },
+      {
+        headers: {
+          ...corsHeaders(request),
+          "MCP-Protocol-Version": "2025-06-18",
+        },
+      },
     );
   }
   if (!payload || typeof payload !== "object") {
-    return rpcError(null, -32600, "Invalid Request", 400);
+    return rpcError(request, null, -32600, "Invalid Request", 400);
   }
   const message = payload as Record<string, unknown>;
   if (typeof message.method === "string" && message.method.startsWith("notifications/")) {
-    return new NextResponse(null, { status: 202, headers: CORS });
+    return new NextResponse(null, {
+      status: 202,
+      headers: corsHeaders(request),
+    });
   }
   if (message.id === undefined) {
     // JSON-RPC notifications have no response.
-    return new NextResponse(null, { status: 202, headers: CORS });
+    return new NextResponse(null, {
+      status: 202,
+      headers: corsHeaders(request),
+    });
   }
   return handleRpc(request, message);
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   return new NextResponse("This MCP endpoint uses Streamable HTTP POST.", {
     status: 405,
-    headers: { ...CORS, Allow: "POST, DELETE, OPTIONS" },
+    headers: { ...corsHeaders(request), Allow: "POST, DELETE, OPTIONS" },
   });
 }
 
-export async function DELETE() {
-  return new NextResponse(null, { status: 204, headers: CORS });
+export async function DELETE(request: Request) {
+  return new NextResponse(null, {
+    status: 204,
+    headers: corsHeaders(request),
+  });
 }
 
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS });
+export async function OPTIONS(request: Request) {
+  return preflight(request);
 }

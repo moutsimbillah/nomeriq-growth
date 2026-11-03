@@ -20,6 +20,50 @@ function hashKey(key: string): string {
   return createHash("sha256").update(key).digest("hex");
 }
 
+/**
+ * Fixed-window, in-memory request limiter keyed by API key id.
+ *
+ * This limiter is per-process, exactly like the existing login limiter in
+ * `src/lib/auth/request.ts`: counters live in a module-level Map, so every
+ * server instance keeps its own and a restart clears them. That is enough to
+ * blunt a runaway agent loop, but a platform-level limiter (edge/WAF or a
+ * shared store such as Redis) is still recommended in production.
+ */
+const apiKeyWindows = new Map<string, { count: number; resetAt: number }>();
+
+const API_KEY_WINDOW_MS = 60_000;
+const DEFAULT_API_KEY_RATE_LIMIT = 120;
+
+function apiKeyRateLimit(): number {
+  const parsed = Number(process.env.API_KEY_RATE_LIMIT_PER_MIN);
+  return Number.isInteger(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_API_KEY_RATE_LIMIT;
+}
+
+function checkApiKeyRateLimit(keyId: string): void {
+  const limit = apiKeyRateLimit();
+  const now = Date.now();
+  const record = apiKeyWindows.get(keyId);
+  if (!record || record.resetAt <= now) {
+    apiKeyWindows.set(keyId, { count: 1, resetAt: now + API_KEY_WINDOW_MS });
+    return;
+  }
+  record.count += 1;
+  if (record.count > limit) {
+    throw new AppError(
+      `Rate limit exceeded: ${limit} requests per minute per API key. Retry in a minute.`,
+      429,
+      "rate_limited",
+    );
+  }
+}
+
+/** Clears the per-key windows. Tests call this between cases. */
+export function resetApiKeyRateLimits(): void {
+  apiKeyWindows.clear();
+}
+
 export async function createApiKey(input: {
   name: string;
   assistant: "chatgpt" | "claude" | "deepseek" | "hermes" | "custom";
@@ -129,6 +173,7 @@ export async function authenticateApiKey(
       "key_expired",
     );
   }
+  checkApiKeyRateLimit(row.id);
   await db.query(
     `UPDATE api_keys SET last_used_at = now() WHERE id = $1 AND
       (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')`,
