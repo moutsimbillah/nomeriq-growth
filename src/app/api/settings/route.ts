@@ -1,0 +1,35 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { requireEditor } from "@/lib/auth/session";
+import { assertSameOrigin } from "@/lib/auth/request";
+import { updateWorkspaceSettings } from "@/lib/services/settings";
+import { fail, readJson } from "@/lib/api";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const schema = z.object({
+  legalBusinessName: z.string().min(1).max(200).optional(),
+  postalAddress: z.string().max(500).optional(),
+  senderSignature: z.string().max(1000).optional(),
+  footerNote: z.string().max(2000).optional(),
+  followUpMax: z.number().int().min(0).max(3).optional(),
+  followUpDelay1Days: z.number().int().min(1).max(60).optional(),
+  followUpDelay2Days: z.number().int().min(1).max(60).optional(),
+  syncStaleHours: z.number().int().min(1).max(720).optional(),
+  timezone: z.string().min(1).max(100).optional(),
+});
+
+export async function PUT(request: Request) {
+  try {
+    assertSameOrigin(request);
+    const user = await requireEditor();
+    const input = schema.parse(await readJson(request));
+    return NextResponse.json({
+      ok: true,
+      data: await updateWorkspaceSettings(input, user.id),
+    });
+  } catch (error) {
+    return fail(error);
+  }
+}

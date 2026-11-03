@@ -1,0 +1,196 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { LoaderCircle, Save } from "lucide-react";
+import type { WorkspaceSettings } from "@/lib/services/settings";
+import { apiRequest, InlineError } from "../client-ui";
+import { Notice } from "../ui";
+
+export function WorkspaceSettingsForm({
+  settings,
+  appUrl,
+}: {
+  settings: WorkspaceSettings;
+  appUrl: string;
+}) {
+  const router = useRouter();
+  const [legalBusinessName, setLegalBusinessName] = useState(
+    settings.legalBusinessName,
+  );
+  const [postalAddress, setPostalAddress] = useState(settings.postalAddress);
+  const [senderSignature, setSenderSignature] = useState(settings.senderSignature);
+  const [footerNote, setFooterNote] = useState(settings.footerNote);
+  const [followUpMax, setFollowUpMax] = useState(settings.followUpMax);
+  const [delay1, setDelay1] = useState(settings.followUpDelay1Days);
+  const [delay2, setDelay2] = useState(settings.followUpDelay2Days);
+  const [syncStaleHours, setSyncStaleHours] = useState(settings.syncStaleHours);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  async function save(event: React.FormEvent) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await apiRequest("/api/settings", {
+        method: "PUT",
+        body: {
+          legalBusinessName,
+          postalAddress,
+          senderSignature,
+          footerNote,
+          followUpMax,
+          followUpDelay1Days: delay1,
+          followUpDelay2Days: delay2,
+          syncStaleHours,
+          timezone: settings.timezone,
+        },
+      });
+      setNotice("Sending identity and follow-up rules saved.");
+      router.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save settings.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <form onSubmit={save} className="space-y-5">
+      {!postalAddress.trim() && (
+        <Notice tone="warning" title="Live sending will be blocked.">
+          A truthful business postal address is required in every commercial
+          email footer. Sandbox sends can still be tested without it.
+        </Notice>
+      )}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="label">Legal business name</label>
+          <input
+            className="input"
+            value={legalBusinessName}
+            onChange={(event) => setLegalBusinessName(event.target.value)}
+          />
+        </div>
+        <div>
+          <label className="label">Registered postal address</label>
+          <input
+            className="input"
+            value={postalAddress}
+            onChange={(event) => setPostalAddress(event.target.value)}
+            placeholder="Required for live commercial email"
+          />
+        </div>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="label">Founder signature</label>
+          <textarea
+            className="textarea min-h-[90px]"
+            value={senderSignature}
+            onChange={(event) => setSenderSignature(event.target.value)}
+          />
+          <p className="field-hint">Added below AI and founder-written drafts.</p>
+        </div>
+        <div>
+          <label className="label">Footer note</label>
+          <textarea
+            className="textarea min-h-[90px]"
+            value={footerNote}
+            onChange={(event) => setFooterNote(event.target.value)}
+          />
+          <p className="field-hint">
+            The unsubscribe link is added separately by the server and cannot be
+            removed by an AI draft.
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-line bg-paper/40 p-4">
+        <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-faint">
+          Follow-up policy
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-4">
+          <div>
+            <label className="label">Follow-ups</label>
+            <select
+              className="select"
+              value={followUpMax}
+              onChange={(event) => setFollowUpMax(Number(event.target.value))}
+            >
+              <option value={0}>None</option>
+              <option value={1}>1</option>
+              <option value={2}>2</option>
+              <option value={3}>3</option>
+            </select>
+          </div>
+          <div>
+            <label className="label">First after (days)</label>
+            <input
+              type="number"
+              min={1}
+              max={60}
+              className="input"
+              value={delay1}
+              onChange={(event) => setDelay1(Number(event.target.value))}
+              disabled={followUpMax === 0}
+            />
+          </div>
+          <div>
+            <label className="label">Next after (days)</label>
+            <input
+              type="number"
+              min={1}
+              max={60}
+              className="input"
+              value={delay2}
+              onChange={(event) => setDelay2(Number(event.target.value))}
+              disabled={followUpMax < 2}
+            />
+          </div>
+          <div>
+            <label className="label">Sync stale after (h)</label>
+            <input
+              type="number"
+              min={1}
+              max={720}
+              className="input"
+              value={syncStaleHours}
+              onChange={(event) => setSyncStaleHours(Number(event.target.value))}
+            />
+          </div>
+        </div>
+        <p className="mt-3 text-[10px] leading-5 text-muted">
+          {followUpMax === 0
+            ? "Follow-ups are disabled. Replies and opt-outs still stop any existing prepared drafts."
+            : `A thread waits ${delay1} day${delay1 === 1 ? "" : "s"} after contact, then ${delay2} day${delay2 === 1 ? "" : "s"} between later follow-ups. Any reply, opt-out or suppression stops the sequence.`}
+        </p>
+      </div>
+
+      <div className="rounded-xl border border-line bg-[#fffefb] p-4">
+        <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+          Footer preview
+        </div>
+        <div className="mt-2 whitespace-pre-wrap text-[10.5px] leading-5 text-muted">
+          {`--\n${legalBusinessName} · ${postalAddress || "[postal address missing]"}\n${footerNote}\nUnsubscribe: ${appUrl}/unsubscribe/…`}
+        </div>
+      </div>
+
+      <InlineError>{error}</InlineError>
+      {notice && (
+        <div className="rounded-lg border border-forest/20 bg-lime/15 px-3 py-2 text-[11px] text-forest">
+          {notice}
+        </div>
+      )}
+      <div className="flex justify-end border-t border-line pt-4">
+        <button type="submit" className="btn-primary" disabled={pending}>
+          {pending ? <LoaderCircle size={13} className="spin" /> : <Save size={13} />}
+          {pending ? "Saving…" : "Save settings"}
+        </button>
+      </div>
+    </form>
+  );
+}
