@@ -1,0 +1,171 @@
+import type { PipelineStatus } from "@/lib/types";
+
+/**
+ * The folder model from the plan: every provider sits in exactly one folder, and the rules
+ * are evaluated in order so the first match wins. Computing the folder rather than storing
+ * it means a provider can never be in two folders or in none.
+ *
+ * Outcome folders are driven by outcome today only where the data already supports it:
+ * suppression for opt-out and bounce, prospect status for won and lost. The explicit
+ * `outcome` field that will replace the status guesswork arrives with the learning phase,
+ * and `Rejected` stays empty until then — it is listed so the ordering is already correct.
+ */
+
+export type FolderKey =
+  | "opted_out"
+  | "failed"
+  | "rejected"
+  | "won"
+  | "closed_lost"
+  | "meeting"
+  | "needs_reply"
+  | "to_approve"
+  | "in_conversation"
+  | "waiting"
+  | "new_leads";
+
+export type FolderGroup = "Outcome" | "Problem" | "Active";
+
+export interface FolderDefinition {
+  key: FolderKey;
+  label: string;
+  group: FolderGroup;
+  /** What puts a provider here, in the plan's words. */
+  rule: string;
+}
+
+/** Ordered exactly as the plan lists them: first match wins. */
+export const FOLDERS: readonly FolderDefinition[] = [
+  {
+    key: "opted_out",
+    label: "Opted out",
+    group: "Outcome",
+    rule: "Unsubscribed or opted out — never contacted again.",
+  },
+  {
+    key: "failed",
+    label: "Failed",
+    group: "Problem",
+    rule: "A delivery bounced.",
+  },
+  {
+    key: "rejected",
+    label: "Rejected",
+    group: "Outcome",
+    rule: "Outcome is rejected.",
+  },
+  {
+    key: "won",
+    label: "Won",
+    group: "Outcome",
+    rule: "Outcome is won.",
+  },
+  {
+    key: "closed_lost",
+    label: "Closed (lost)",
+    group: "Outcome",
+    rule: "Outcome is lost.",
+  },
+  {
+    key: "meeting",
+    label: "Meeting or proposal",
+    group: "Active",
+    rule: "Stage is demo or proposal.",
+  },
+  {
+    key: "needs_reply",
+    label: "Needs reply",
+    group: "Active",
+    rule: "Their message is the latest one.",
+  },
+  {
+    key: "to_approve",
+    label: "To approve",
+    group: "Active",
+    rule: "A draft is waiting for your Send, including follow-ups.",
+  },
+  {
+    key: "in_conversation",
+    label: "In conversation",
+    group: "Active",
+    rule: "Stage is interested, or they replied and your message was last.",
+  },
+  {
+    key: "waiting",
+    label: "Waiting",
+    group: "Active",
+    rule: "Sent, no reply yet, no draft waiting.",
+  },
+  {
+    key: "new_leads",
+    label: "New leads",
+    group: "Active",
+    rule: "Verified, no draft yet.",
+  },
+];
+
+export interface FolderInput {
+  status: PipelineStatus | string;
+  /** Archived providers never appear in the email folders. */
+  archivedAt?: string | Date | null;
+  /** suppressions.reason: unsubscribe, opt_out, bounce, complaint, manual. */
+  suppressionReason?: string | null;
+  hasDraftWaiting?: boolean;
+  lastInboundAt?: string | Date | null;
+  lastOutboundAt?: string | Date | null;
+  hasReplied?: boolean;
+}
+
+function time(value: string | Date | null | undefined): number {
+  if (!value) return 0;
+  const parsed = value instanceof Date ? value.getTime() : Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** true when their message came after ours (or we have never written). */
+function inboundIsLatest(input: FolderInput): boolean {
+  const inbound = time(input.lastInboundAt);
+  if (!inbound) return false;
+  const outbound = time(input.lastOutboundAt);
+  return inbound >= outbound;
+}
+
+export function folderFor(input: FolderInput): FolderKey | "archived" {
+  if (input.archivedAt) return "archived";
+
+  const reason = (input.suppressionReason ?? "").toLowerCase();
+  // A complaint is treated like an opt-out: they do not want contact.
+  if (reason === "unsubscribe" || reason === "opt_out" || reason === "complaint") {
+    return "opted_out";
+  }
+  if (reason === "bounce") return "failed";
+
+  const status = String(input.status);
+
+  if (status === "won") return "won";
+  if (status === "lost") return "closed_lost";
+  if (status === "demo" || status === "proposal") return "meeting";
+  if (inboundIsLatest(input)) return "needs_reply";
+  if (input.hasDraftWaiting) return "to_approve";
+  if (status === "interested") return "in_conversation";
+  if (input.hasReplied && time(input.lastOutboundAt) > time(input.lastInboundAt)) {
+    return "in_conversation";
+  }
+  if (status === "contacted") return "waiting";
+  return "new_leads";
+}
+
+export function folderDefinition(key: FolderKey): FolderDefinition {
+  const found = FOLDERS.find((folder) => folder.key === key);
+  if (!found) throw new Error(`Unknown folder: ${key}`);
+  return found;
+}
+
+/** Folders grouped for the left pane: Active, Outcomes, Problems. */
+export function foldersByGroup(): { group: FolderGroup; folders: FolderDefinition[] }[] {
+  const order: FolderGroup[] = ["Active", "Outcome", "Problem"];
+  return order.map((group) => ({
+    group,
+    folders: FOLDERS.filter((folder) => folder.group === group),
+  }));
+}
