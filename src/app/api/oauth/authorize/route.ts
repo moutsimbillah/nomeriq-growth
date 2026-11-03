@@ -127,7 +127,9 @@ export async function POST(request: Request) {
   if (decision !== "approve") {
     target.searchParams.set("error", "access_denied");
     if (state) target.searchParams.set("state", state);
-    return NextResponse.redirect(target);
+    // 303, not the 307 default: the consent form is a POST, and the connector's callback
+    // expects a GET. A 307 would replay the POST at their endpoint (405 Method Not Allowed).
+    return NextResponse.redirect(target, 303);
   }
 
   const code = await createAuthorizationCode({
@@ -141,5 +143,5 @@ export async function POST(request: Request) {
 
   target.searchParams.set("code", code);
   if (state) target.searchParams.set("state", state);
-  return NextResponse.redirect(target);
+  return NextResponse.redirect(target, 303);
 }
