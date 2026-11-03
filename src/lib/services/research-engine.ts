@@ -24,6 +24,8 @@ import {
   heartbeatResearchRun,
   markStaleRunsInterrupted,
   startResearchRun,
+  claimJobLease,
+  releaseJobLease,
   DEEPSEEK_WORKER_ID,
 } from "@/lib/services/research-runs";
 import { planResearchQueries } from "@/lib/services/research-queries";
@@ -56,6 +58,50 @@ export interface EngineOptions {
  * completed job from zero.
  */
 export async function runResearchTick(
+  jobId: string,
+  options: EngineOptions = {},
+): Promise<ResearchTickResult> {
+  const workerId = options.workerId ?? DEEPSEEK_WORKER_ID;
+
+  // One tick at a time per job. Two open tabs, or a tab racing the cron, would
+  // otherwise each run a tick and spend the founder's budget twice over.
+  const lease = await claimJobLease({ jobId, workerId }).catch(() => ({
+    claimed: true,
+    holder: null,
+  }));
+  if (!lease.claimed) {
+    // The lease only covers runnable jobs. A paused, completed or cancelled job
+    // must report its real state rather than an invented concurrency conflict,
+    // so those are delegated to the normal path, which neither spends nor works.
+    const job = await getResearchJob(jobId);
+    if (!job || job.status !== "active") {
+      return runLeasedTick(jobId, { ...options, workerId });
+    }
+    return {
+      jobId,
+      status: "busy",
+      processed: 0,
+      saved: 0,
+      duplicates: 0,
+      rejected: 0,
+      failed: 0,
+      searches: 0,
+      fetches: 0,
+      modelCalls: 0,
+      spentUsd: 0,
+      stopReason: "Another worker is already advancing this job.",
+      notes: [],
+    };
+  }
+
+  try {
+    return await runLeasedTick(jobId, { ...options, workerId });
+  } finally {
+    await releaseJobLease({ jobId, workerId }).catch(() => undefined);
+  }
+}
+
+async function runLeasedTick(
   jobId: string,
   options: EngineOptions = {},
 ): Promise<ResearchTickResult> {
@@ -149,6 +195,20 @@ export async function runResearchTick(
 
   const runId = await startResearchRun({ jobId, workerId });
   notes.push(`Worker run ${runId} started as ${workerId}.`);
+
+  // Count the step here, where a job genuinely advanced, rather than in the
+  // worker wrapper. A tick driven from the UI is just as real as a cron tick, and
+  // the founder uses this counter to tell "working" from "stalled".
+  await getDb()
+    .then((db) =>
+      db.query(
+        `UPDATE research_jobs SET ticks = ticks + 1, last_worker_at = now(),
+           next_run_at = now(), updated_at = now()
+         WHERE id = $1`,
+        [jobId],
+      ),
+    )
+    .catch(() => undefined);
 
   try {
     const summary = await executeTick({
@@ -451,6 +511,22 @@ async function discoverMore(input: {
       `"${planned.query}" → ${search.results.length} result(s), ` +
         `${discovery.created.length} new, ${discovery.existing} known, ${discovery.claimed} claimed elsewhere.`,
     );
+
+    // Record what was actually queued for research, so the live transcript shows
+    // the pipeline filling rather than jumping straight to a verified lead.
+    if (discovery.created.length) {
+      await recordResearchEvent(job.id, "candidate_found", {
+        detail: {
+          count: discovery.created.length,
+          query: planned.query,
+          names: discovery.created
+            .map((entry) => entry.businessName)
+            .filter((name): name is string => Boolean(name))
+            .slice(0, 5),
+        },
+        actorType: "deepseek",
+      }).catch(() => undefined);
+    }
   }
 
   result.notes.push(`Discovered ${discoveredTotal} new candidate(s) this tick.`);
@@ -491,6 +567,13 @@ async function researchCandidate(input: {
       lastError: "No website URL was discovered for this candidate.",
       releaseClaim: true,
     });
+    await recordResearchEvent(job.id, "candidate_failed", {
+      detail: {
+        businessName: label,
+        error: "No website URL was discovered for this candidate.",
+      },
+      actorType: "deepseek",
+    }).catch(() => undefined);
     result.failed += 1;
     result.processed += 1;
     return { saved: false, error: true, stop: null };
@@ -551,6 +634,12 @@ async function researchCandidate(input: {
       lastError: message,
       releaseClaim: true,
     });
+    // A failed verification is the single most confusing thing to see silently,
+    // so it is recorded with the real provider message rather than hidden.
+    await recordResearchEvent(job.id, "candidate_failed", {
+      detail: { businessName: label, error: message },
+      actorType: "deepseek",
+    }).catch(() => undefined);
     result.failed += 1;
     result.processed += 1;
     return { saved: false, error: true, stop: null };
@@ -558,6 +647,16 @@ async function researchCandidate(input: {
 
   // Record the real Fetch and model spend for this candidate. Fetch is billed
   // per successful request, so only pages actually retrieved are charged.
+  if (verified.pages.length) {
+    await recordResearchEvent(job.id, "fetch_completed", {
+      detail: {
+        businessName: label,
+        pages: verified.pages.length,
+        urls: verified.pages.map((page) => page.url).slice(0, 3),
+      },
+      actorType: "deepseek",
+    }).catch(() => undefined);
+  }
   if (verified.fetchCostUsd > 0 || verified.usage) {
     await recordResearchUsage({
       jobId: job.id,

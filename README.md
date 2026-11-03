@@ -122,6 +122,16 @@ Growth can research leads by itself. Nothing depends on a browser tab, a chat se
 
 The engine panel on **Research** has `Start`, `Pause`, `Resume`, `Cancel` and `Step once`, plus live counters, real spend against the budget, and a **Why it stopped** line.
 
+#### Live activity
+
+While a job is active the panel shows a **live activity** transcript that fills in as the engine works — each search query and how many results it returned, each candidate found, each official page read, the model verdict, every duplicate blocked and every rejection with its reason, and the lead and draft that came out of it. Lines appear only once the database has accepted them, so the transcript cannot run ahead of the real work, and the per-line costs sum to the job's recorded spend rather than being estimated separately.
+
+The transcript is served by `GET /api/research/[id]/activity`, which merges the job's events, usage rows, worker runs and failed candidates into one ordered log. A search or fetch writes both an event and a usage row for the same physical request, so those are paired: the event supplies the description and the usage row supplies the real cost.
+
+#### Who advances a job
+
+`POST /api/research/[id]/engine` runs a bounded step on demand, and an **open panel drives the job itself**, one step at a time, so a target never sits still just because no scheduler is running. This is deliberately slower than the cron and is not a substitute for it. Two tabs, or a tab and the cron firing together, cannot double-spend: `claimJobLease` takes a short-lived exclusive lease on the job as a single conditional `UPDATE`, so the database picks the winner and an expired lease is taken over automatically. The panel says plainly whether *this* tab is driving, and lets you stop it.
+
 In production, `vercel.json` drives it:
 
 ```
@@ -144,8 +154,9 @@ The route fails closed if `CRON_SECRET` is unset or the database is unreachable,
 - The model can never introduce an email that was not extracted from a fetched page — `resolveContactEmail` only accepts a model suggestion if that address was really seen.
 - A model failure or a failed verification never produces a qualified lead; it is recorded as a failed attempt and retried at most `MAX_CANDIDATE_ATTEMPTS` times.
 - Budget exhaustion **pauses** the job with `status: "budget_paused"`, preserving all progress and recording why.
-- Search and Fetch are billed per **successful** request and chat is billed per token; every one of those is written to `research_usage`, and the UI's spend figure is the sum of real recorded rows — not an estimate.
+- Search and Fetch are billed per **successful** request and chat is billed per token; every one of those is written to `research_usage`, and the UI's spend figure is the sum of real recorded rows — not an estimate. The live transcript is built from those same rows, so the log and the budget can never disagree.
 - The engine only ever writes drafts. There is no send path in the engine, in the research API scopes or in the assistant tools.
+- A job that has done nothing shows an empty transcript rather than invented progress, and a job that is paused reports that it is paused rather than a fabricated "another worker is running" conflict.
 
 If a target is not reached, Growth reports the real count and the recorded `stopReason` (budget exhausted, query plan exhausted, verifications failing). It never pads a count with weak leads and never claims a stopped job is still running.
 
@@ -214,6 +225,8 @@ The 21 engine tests cover:
 - terminal-state guards, cancellation, and honest `stopReason` reporting
 
 The 5 spend-reconciliation tests guard budget accuracy: job spend must stay exactly equal to the sum of its usage rows, including on a database that had already accumulated drift before migration 005, and that migration must apply idempotently.
+
+The 10 live-activity tests guard the transcript the founder watches: that it invents no lines for a job that has done nothing, that searches, page reads, verdicts, rejections and the saved draft all appear, that an unreadable site surfaces the provider's real error (including the upstream Firecrawl message) instead of failing silently, that each operation appears **once** rather than once per source table, that per-line costs sum to the job's recorded spend, and that the job lease refuses a second concurrent worker while never replacing a paused job's real status with a fabricated conflict.
 
 The DeepSeek provider tests pin the exact endpoints the adapter calls (`/models`, `/v1/tools/search`, `/v1/tools/fetch`) for both base-URL spellings, prove a `/v1` base URL never produces a doubled `/v1/v1` path, and prove a connection failure names the failing step, the URL, and the base URL in use instead of surfacing the provider's bare "not found". Further tests cover custom endpoints: configurable and auto-detected Search/Fetch paths, refusal of unsafe path values, and the honesty rules that a capability which was never exercised is never reported as working — a Fetch path is returned only when a page was actually retrieved.
 

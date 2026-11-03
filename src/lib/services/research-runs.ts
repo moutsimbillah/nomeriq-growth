@@ -126,3 +126,58 @@ export async function getJobBudget(jobId: string): Promise<BudgetState | null> {
     exhausted: spentUsd >= budgetUsd - 1e-9,
   };
 }
+
+/**
+ * Takes a short-lived exclusive lease on a job so two callers cannot advance the
+ * same job at the same time.
+ *
+ * Without this, two open browser tabs (or a tab racing the cron) would each run a
+ * tick for one job, spending the founder's budget twice over. The claim is a
+ * single conditional UPDATE, so the database decides the winner rather than the
+ * application. An expired lease is taken over, so a crashed caller cannot block a
+ * job permanently.
+ */
+export async function claimJobLease(input: {
+  jobId: string;
+  workerId: string;
+  ttlSeconds?: number;
+}): Promise<{ claimed: boolean; holder: string | null }> {
+  const db = await getDb();
+  const ttl = Math.min(Math.max(input.ttlSeconds ?? 120, 10), 900);
+  const result = await db.query<any>(
+    `UPDATE research_jobs
+     SET worker_id = $1,
+       worker_claim_expires_at = now() + ($2 || ' seconds')::interval,
+       updated_at = now()
+     WHERE id = $3
+       AND status = 'active'
+       AND (
+         worker_claim_expires_at IS NULL
+         OR worker_claim_expires_at < now()
+         OR worker_id = $1
+       )
+     RETURNING worker_id`,
+    [input.workerId, String(ttl), input.jobId],
+  );
+  if (result.rowCount) return { claimed: true, holder: input.workerId };
+
+  const current = await db.query<any>(
+    `SELECT worker_id FROM research_jobs WHERE id = $1`,
+    [input.jobId],
+  );
+  return { claimed: false, holder: current.rows[0]?.worker_id ?? null };
+}
+
+/** Releases a job lease early so the next tick can start immediately. */
+export async function releaseJobLease(input: {
+  jobId: string;
+  workerId: string;
+}): Promise<void> {
+  const db = await getDb();
+  await db.query(
+    `UPDATE research_jobs
+     SET worker_claim_expires_at = NULL, worker_id = NULL, updated_at = now()
+     WHERE id = $1 AND worker_id = $2`,
+    [input.jobId, input.workerId],
+  );
+}

@@ -57,6 +57,7 @@ function mapJob(row: any): ResearchJob {
     budgetUsd: number(row.budget_usd, 5),
     spentUsd: number(row.spent_usd),
     concurrency: number(row.concurrency, 1),
+    ticks: number(row.ticks),
     searchQueriesUsed: number(row.search_queries_used),
     candidatesDiscovered: number(row.candidates_discovered),
     failedVerifications: number(row.failed_verifications),

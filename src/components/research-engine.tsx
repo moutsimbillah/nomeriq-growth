@@ -17,6 +17,7 @@ import {
 import type { ResearchJob } from "@/lib/types";
 import { apiRequest, InlineError } from "./client-ui";
 import { Notice, ProgressBar } from "./ui";
+import { ResearchActivityFeed, useResearchPump } from "./research-activity";
 
 interface EngineSnapshot {
   job: ResearchJob;
@@ -95,6 +96,25 @@ export function ResearchEnginePanel({
     void load();
   }, [load]);
 
+  const isActiveNow = (snapshot?.job.status ?? job.status) === "active";
+
+  // Advance the job while a founder is watching it. The cron route is the durable
+  // driver, but without a scheduler (a local run, or a deployment whose cron is
+  // not firing) an active job would otherwise sit still and look broken.
+  const pump = useResearchPump({
+    jobId: job.id,
+    active: isActiveNow,
+    enabled: configured,
+    onTick: (notes) => {
+      if (notes.length) setNotes(notes);
+    },
+    onStop: () => {
+      void load();
+      onRefreshJobs?.();
+      router.refresh();
+    },
+  });
+
   // Poll only while the job is running, so an idle page makes no requests.
   useEffect(() => {
     const current = snapshot?.job.status ?? job.status;
@@ -155,6 +175,22 @@ export function ResearchEnginePanel({
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#a8d846]" />
                 live
               </span>
+            )}
+            {isActive && pump.running && !pump.paused && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-forest/20 bg-forest/[0.05] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-forest">
+                <LoaderCircle size={9} className="spin" />
+                driving from this tab
+              </span>
+            )}
+            {isActive && pump.paused && (
+              <button
+                type="button"
+                onClick={() => pump.setPaused(false)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-amber/30 bg-amber/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-amber"
+              >
+                <Play size={9} />
+                this tab is not driving — resume
+              </button>
             )}
           </div>
           <h3 className="mt-2.5 text-[16px] font-bold tracking-[-0.015em] text-ink">
@@ -269,6 +305,12 @@ export function ResearchEnginePanel({
         </div>
       </div>
 
+      <ResearchActivityFeed
+        jobId={job.id}
+        active={isActive}
+        onBudgetChange={() => void load()}
+      />
+
       <div className="mt-5 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-line bg-paper/60 p-3">
           <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
@@ -348,6 +390,31 @@ export function ResearchEnginePanel({
       )}
 
       <InlineError>{error}</InlineError>
+
+      {isActive && (
+        <p className="mt-3 rounded-xl border border-line bg-white/50 p-3 text-[10px] leading-4 text-muted">
+          {pump.paused ? (
+            <>
+              This tab has stopped driving the job. Nothing will advance until the
+              server cron runs or you resume here.
+            </>
+          ) : (
+            <>
+              This tab is advancing the job while it is open, one bounded step at a
+              time, and the progress above is written to the database as it happens.
+              Closing the page does not lose progress: the scheduled server worker
+              continues from exactly this point.{" "}
+              <button
+                type="button"
+                onClick={() => pump.setPaused(true)}
+                className="font-semibold text-ink underline decoration-line-strong underline-offset-2"
+              >
+                Stop driving from this tab
+              </button>
+            </>
+          )}
+        </p>
+      )}
 
       <p className="mt-4 text-[10px] leading-4 text-faint">
         Research jobs only save leads and drafts for founder review. They never send

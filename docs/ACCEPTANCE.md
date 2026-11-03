@@ -43,6 +43,8 @@ What this environment cannot do is run that same path against the live web: ther
 | No second search provider | **Working** | No other search API exists anywhere in the codebase; the engine's only network dependency is the configured DeepSeek base URL. |
 | Credentials never reach the frontend | **Working** | The key is encrypted at rest; APIs expose only `keyConfigured`/masked metadata. Verified by inspection and by the settings UI never pre-filling the value. |
 | Job runs independently of browser/chat | **Working** | The worker is a server route (`/api/cron/research`) driven by cron; all state is in PostgreSQL. Killing the browser changes nothing. |
+| Visible progress while it runs | **Working** | `GET /api/research/[id]/activity` serves a live transcript of real recorded steps — searches, candidates found, pages read, verdicts, duplicates, rejections, the saved lead and draft — polled every 2s while active. The panel also drives the job itself, one bounded step at a time, so an install with no scheduler still progresses. |
+| Two tabs cannot double-spend | **Working** | `claimJobLease` takes a short-lived exclusive lease with a single conditional `UPDATE`, so the database picks one winner; an expired lease is reclaimed. Tested directly, including that a paused job still reports its real status rather than a fabricated conflict. |
 | Never restart a completed job from zero | **Working** | Terminal-state guard in `runResearchTick` plus a dedicated test asserting a completed job is not re-run. |
 | Actual counts and honest stop reason | **Working** | Counters and `stopReason` are read from the database and rendered verbatim; no estimate is presented as a measurement. |
 | Short-lived candidate claims | **Working** | `candidate_claims` with `claim_expires_at`, 15-minute TTL, `FOR UPDATE SKIP LOCKED` dispatch, automatic requeue after expiry. |
@@ -57,8 +59,8 @@ What this environment cannot do is run that same path against the live web: ther
 ## Test evidence
 
 ```text
-Test Files  5 passed (5)
-     Tests  51 passed (51)
+Test Files  8 passed (8)
+     Tests  86 passed (86)
 ```
 
 `tests/research-engine.test.ts` (21 tests) exercises the engine through an injected `ResearchProvider`, so autonomous research is provable with no API key and no network:
@@ -85,6 +87,19 @@ Test Files  5 passed (5)
 - a **pre-existing drifted database is repaired** by migration 005's reconciliation
 - the schema invariant itself: `spent_usd` is stored at the same scale as `cost_usd`
 - migration 005 applies **idempotently** to a database that already holds data
+
+`tests/research-activity.test.ts` (10 tests) covers the live transcript a founder watches while a target runs:
+
+- a job that has done no work shows **no invented lines** — only the events it genuinely recorded
+- discovery, official-page reads, the model verdict, the saved lead and its draft all appear
+- an unreadable site surfaces the provider's **real** error, including the upstream `Failed to scrape page with Firecrawl` message, rather than a bare "Not found" or a silent failure
+- each operation appears **once**, not once per source table: a search writes both an event and a usage row, and they are paired so the description and the real cost land on one line
+- the per-line costs sum to the job's recorded spend, so the log cannot disagree with the budget gate
+- a **job lease** refuses a second concurrent worker (the two-open-tabs double-spend case), lets the holder renew, and releases on completion
+- a lease is never leaked when a step finds nothing to do, which would otherwise look like a hang for the whole TTL
+- a paused job reports that it is paused rather than a **fabricated** "another worker is advancing this job" conflict
+- the `ticks` counter advances on every real step, including one driven from the UI rather than the cron
+- the transcript stays bounded and newest-first under volume
 
 `tests/deepseek-provider.test.ts` (6 tests), `tests/deepseek-connection-errors.test.ts` (4 tests), `tests/deepseek-custom-endpoint.test.ts` (8 tests) and `tests/deepseek-endpoint-paths.test.ts` (17 tests) pin the provider's HTTP contract, its failure reporting and its support for DeepSeek-compatible gateways:
 
@@ -165,5 +180,7 @@ Migrations were applied to a fresh database end to end, confirming `research_job
 - OpenAI/Anthropic calls were not exercised; the deterministic writer and the adapters are present.
 - Supabase/Vercel deployment was not executed here; the schema is PostgreSQL-compatible and the runbook is included.
 - Sites that require a logged-in browser session or heavy JavaScript rendering may not yield a published email through Fetch; the engine reports such candidates as failed rather than qualifying them.
+- The tab-driven pump is a convenience, not the durable driver. It advances a job only while the panel is open, at a deliberately slower cadence than the cron, and the panel states whether this tab is driving and lets the founder stop it. The cron route remains the mechanism that makes a job progress unattended; a production deployment must still have `CRON_SECRET` and a scheduler for that to happen.
+- The live transcript was verified against the running app by driving a real tick through the same endpoint the UI uses: 153 searches produced 153 lines, the 69 costed lines summed to exactly the job's recorded `$0.05175`, and the panel shell (including every honesty affordance) rendered in the served HTML. The per-line rendering itself was exercised only through the API and the component's own logic, not through a scripted browser session.
 - **The one exception to the above:** a live custom-endpoint diagnostic was run against `vyceai.com`, outside the engine and without sending email, to explain a connection test that reported a bare "not found". Probing with an invalid placeholder key established the route map in the previous section; a separate call against the gateway's Fetch route showed it is backed by Firecrawl, which answered HTTP 200 with `{"error":"Failed to scrape page with Firecrawl"}` for `https://example.com/`. That is an upstream failure on that host rather than a defect in Growth: the adapter surfaces the provider's own message instead of swallowing it, and reports Fetch as unavailable rather than presenting empty content as a retrieved page. Per the founder's instruction, no further live spend was pursued against that endpoint.
 

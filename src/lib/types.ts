@@ -204,6 +204,8 @@ export interface ResearchJob {
   budgetUsd: number;
   spentUsd: number;
   concurrency: number;
+  /** How many bounded worker steps have run. A stalled job shows a still count. */
+  ticks: number;
   searchQueriesUsed: number;
   candidatesDiscovered: number;
   failedVerifications: number;

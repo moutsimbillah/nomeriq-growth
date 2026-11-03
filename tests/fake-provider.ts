@@ -37,6 +37,12 @@ export interface FakeProviderOptions {
   chatCostUsd?: number;
   /** Fail every fetch, to model an unreachable site. */
   failFetches?: boolean;
+  /**
+   * Throw from every fetch instead of returning empty content. This models the
+   * real DeepSeek gateway behaviour: an upstream scraper failure arrives as an
+   * error, which is what made a broken Fetch look like a silent "Not found".
+   */
+  throwOnFetch?: boolean;
   /** Fail the model call, to prove a model outage cannot create leads. */
   failChat?: boolean;
 }
@@ -125,6 +131,9 @@ export function createFakeProvider(options: FakeProviderOptions): {
 
     async fetch(input: { url: string }) {
       stats.fetches += 1;
+      if (options.throwOnFetch) {
+        throw new Error("Failed to scrape page with Firecrawl");
+      }
       if (options.failFetches) {
         stats.fetchCostUsd += fetchCost;
         return { title: "", content: "", costUsd: fetchCost };
