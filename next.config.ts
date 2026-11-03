@@ -16,7 +16,11 @@ const securityHeaders = [
   },
   {
     key: "Content-Security-Policy",
-    value: `default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; ${scriptPolicy}; connect-src 'self' https:; object-src 'none'`,
+    // form-action allows https because the OAuth consent page submits a form and the app
+    // then redirects that submission to the connector's own https callback (claude.ai,
+    // ChatGPT). Every in-app form still posts to 'self'; the alternative was a meta
+    // refresh, which drops the connector's state cookie and breaks its callback.
+    value: `default-src 'self'; base-uri 'self'; form-action 'self' https:; frame-ancestors 'none'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; ${scriptPolicy}; connect-src 'self' https:; object-src 'none'`,
   },
   ...(isDevelopment || !usesHttps
     ? []

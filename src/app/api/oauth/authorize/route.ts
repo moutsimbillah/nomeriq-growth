@@ -127,7 +127,7 @@ export async function POST(request: Request) {
   if (decision !== "approve") {
     target.searchParams.set("error", "access_denied");
     if (state) target.searchParams.set("state", state);
-    return handOff(target, "Request denied", "Nothing was granted. You can close this page.");
+    return NextResponse.redirect(target);
   }
 
   const code = await createAuthorizationCode({
@@ -141,34 +141,5 @@ export async function POST(request: Request) {
 
   target.searchParams.set("code", code);
   if (state) target.searchParams.set("state", state);
-
-  return handOff(
-    target,
-    "Connector approved",
-    "Returning to the connector. If nothing happens, use the link below.",
-  );
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-/**
- * Hands control back to the connector with a rendered page and a meta refresh rather than a
- * 307. A redirect that follows a form submission is subject to `form-action`, which the app's
- * global CSP restricts to 'self' — the browser would silently refuse to leave for claude.ai.
- */
-function handOff(target: URL, heading: string, message: string): NextResponse {
-  const href = escapeHtml(target.toString());
-  return page(
-    heading,
-    `<h1>${heading}</h1>
-     <p>${message}</p>
-     <p><a href="${href}">Continue</a></p>
-     <meta http-equiv="refresh" content="0;url=${href}">`,
-  );
+  return NextResponse.redirect(target);
 }
