@@ -34,7 +34,10 @@ button{font:inherit;font-size:13px;font-weight:600;padding:9px 16px;border-radiu
 button.secondary{background:#fff;color:#111;border-color:#d1d5db}
 .row{display:flex;gap:8px;margin-top:18px}
 </style></head><body><div class="card">${body}</div></body></html>`,
-    { status, headers: { "content-type": "text/html; charset=utf-8", "Cache-Control": "no-store" } },
+    {
+      status,
+      headers: { "content-type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+    },
   );
 }
 
@@ -124,7 +127,7 @@ export async function POST(request: Request) {
   if (decision !== "approve") {
     target.searchParams.set("error", "access_denied");
     if (state) target.searchParams.set("state", state);
-    return NextResponse.redirect(target);
+    return handOff(target, "Request denied", "Nothing was granted. You can close this page.");
   }
 
   const code = await createAuthorizationCode({
@@ -138,5 +141,34 @@ export async function POST(request: Request) {
 
   target.searchParams.set("code", code);
   if (state) target.searchParams.set("state", state);
-  return NextResponse.redirect(target);
+
+  return handOff(
+    target,
+    "Connector approved",
+    "Returning to the connector. If nothing happens, use the link below.",
+  );
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Hands control back to the connector with a rendered page and a meta refresh rather than a
+ * 307. A redirect that follows a form submission is subject to `form-action`, which the app's
+ * global CSP restricts to 'self' — the browser would silently refuse to leave for claude.ai.
+ */
+function handOff(target: URL, heading: string, message: string): NextResponse {
+  const href = escapeHtml(target.toString());
+  return page(
+    heading,
+    `<h1>${heading}</h1>
+     <p>${message}</p>
+     <p><a href="${href}">Continue</a></p>
+     <meta http-equiv="refresh" content="0;url=${href}">`,
+  );
 }
