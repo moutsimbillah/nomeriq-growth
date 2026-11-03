@@ -100,8 +100,8 @@ describe("autonomous DeepSeek research engine", () => {
         followUpDelay2Days: 7,
         researchDefaultBudgetUsd: 5,
         researchDefaultConcurrency: 3,
-        deepseekSearchQps: 100,
-        deepseekFetchQps: 25,
+        deepseekSearchQps: 5,
+        deepseekFetchQps: 5,
       },
       state.userId,
     );

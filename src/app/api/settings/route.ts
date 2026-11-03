@@ -22,8 +22,10 @@ const schema = z.object({
   // CHECK constraints so an invalid value fails here with a clear message.
   researchDefaultBudgetUsd: z.number().positive().max(1000).optional(),
   researchDefaultConcurrency: z.number().int().min(1).max(8).optional(),
-  deepseekSearchQps: z.number().int().min(1).max(100).optional(),
-  deepseekFetchQps: z.number().int().min(1).max(25).optional(),
+  // Integer check only here: the 1..5 DeepSeek ceiling is enforced in
+  // updateWorkspaceSettings so an oversized value returns its clear AppError.
+  deepseekSearchQps: z.number().int().optional(),
+  deepseekFetchQps: z.number().int().optional(),
 });
 
 export async function PUT(request: Request) {

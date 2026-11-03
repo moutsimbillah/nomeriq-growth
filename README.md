@@ -29,14 +29,7 @@ This is a standalone application with its own Git repository, database, authenti
 
 The app runs at **http://localhost:3100**.
 
-The bundled `.env.local` contains a local founder seed:
-
-```
-founder@nomeriq.com
-Founder!Nomeriq2026
-```
-
-**Change this password before any real deployment.** It exists only to make the local slice immediately inspectable.
+The founder account is created by `npm run db:seed` from `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env.local` (see `.env.example`). Set your own values before seeding, and never publish credentials in the README or anywhere in the repo.
 
 The local database is seeded with two genuinely researched, publicly verified providers:
 
@@ -183,13 +176,9 @@ npm test
 
 The integration and engine suites use a temporary PGlite database and the sandbox mailbox, with no network access: the engine is exercised through an injected `ResearchProvider`, so autonomous research is provable offline without an API key.
 
-```bash
-npm test
-```
-
 ```text
-Test Files  5 passed (5)
-     Tests  51 passed (51)
+Test Files  8 passed (8)
+     Tests  86 passed (86)
 ```
 
 The 14 workflow tests cover:

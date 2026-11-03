@@ -219,7 +219,7 @@ export function WorkspaceSettingsForm({
             <input
               type="number"
               min={1}
-              max={100}
+              max={5}
               className="input"
               value={searchQps}
               onChange={(event) => setSearchQps(Number(event.target.value))}
@@ -230,7 +230,7 @@ export function WorkspaceSettingsForm({
             <input
               type="number"
               min={1}
-              max={25}
+              max={5}
               className="input"
               value={fetchQps}
               onChange={(event) => setFetchQps(Number(event.target.value))}
@@ -238,8 +238,8 @@ export function WorkspaceSettingsForm({
           </div>
         </div>
         <p className="mt-2 text-[10px] leading-4 text-faint">
-          DeepSeek&apos;s account limits are 100 QPS for Search and 25 QPS for Fetch.
-          Stay at or below them.
+          DeepSeek documents a limit of 5 requests per second per account for
+          Search and for Fetch. Growth refuses values above 5.
         </p>
       </div>
 

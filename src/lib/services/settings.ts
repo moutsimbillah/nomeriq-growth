@@ -100,6 +100,27 @@ export async function updateWorkspaceSettings(
   if (next.followUpDelay1Days < 1 || next.followUpDelay2Days < 1) {
     throw new AppError("Follow-up delays must be at least one day.");
   }
+  // DeepSeek's documented ceiling is 5 requests/second per account for both
+  // Search and Fetch. Validating here (rather than only at the CHECK constraint)
+  // turns an oversized value into a clear 400 instead of a raw database error.
+  if (
+    !Number.isInteger(next.deepseekSearchQps) ||
+    next.deepseekSearchQps < 1 ||
+    next.deepseekSearchQps > 5
+  ) {
+    throw new AppError(
+      "DeepSeek allows at most 5 requests per second. Search QPS must be a whole number between 1 and 5.",
+    );
+  }
+  if (
+    !Number.isInteger(next.deepseekFetchQps) ||
+    next.deepseekFetchQps < 1 ||
+    next.deepseekFetchQps > 5
+  ) {
+    throw new AppError(
+      "DeepSeek allows at most 5 requests per second. Fetch QPS must be a whole number between 1 and 5.",
+    );
+  }
 
   const db = await getDb();
   await db.query(
