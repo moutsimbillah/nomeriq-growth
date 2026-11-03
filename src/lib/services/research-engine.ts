@@ -35,7 +35,8 @@ import {
 } from "@/lib/services/research-runs";
 import { planResearchQueries } from "@/lib/services/research-queries";
 import { verifyCandidate } from "@/lib/deepseek/verify-candidate";
-import { resolveResearchProvider, type ResearchProvider } from "@/lib/deepseek/research-provider";
+import { resolveResearchProviders } from "@/lib/deepseek/provider-pool";
+import type { ResearchProvider } from "@/lib/deepseek/research-provider";
 import type { Category, ResearchJob, ResearchTickResult } from "@/lib/types";
 import { domainFromUrl } from "@/lib/utils";
 
@@ -183,7 +184,7 @@ async function runLeasedTick(
   const settings = await getWorkspaceSettings();
   let provider = options.provider ?? null;
   if (!provider) {
-    const resolved = await resolveResearchProvider({
+    const resolved = await resolveResearchProviders({
       searchQps: options.searchQps ?? settings.deepseekSearchQps,
       fetchQps: options.fetchQps ?? settings.deepseekFetchQps,
     });
@@ -463,6 +464,7 @@ async function discoverMore(input: {
       result.notes.push(`Search failed for "${planned.query}": ${message}`);
       await recordResearchUsage({
         jobId: job.id,
+        provider: provider.lastUsedProvider ?? "deepseek",
         operation: "search",
         model: provider.model,
         requestCount: 0,
@@ -486,6 +488,7 @@ async function discoverMore(input: {
 
     await recordResearchUsage({
       jobId: job.id,
+      provider: provider.lastUsedProvider ?? "deepseek",
       operation: "search",
       model: provider.model,
       costUsd: search.costUsd,
@@ -685,6 +688,7 @@ async function researchCandidate(input: {
   if (verified.fetchCostUsd > 0 || verified.usage) {
     await recordResearchUsage({
       jobId: job.id,
+      provider: provider.lastUsedProvider ?? "deepseek",
       operation: "fetch",
       model: provider.model,
       requestCount: verified.pages.length,
@@ -698,6 +702,7 @@ async function researchCandidate(input: {
   if (verified.usage) {
     await recordResearchUsage({
       jobId: job.id,
+      provider: provider.lastUsedProvider ?? "deepseek",
       operation: "chat",
       model: verified.usage.model,
       inputTokens: verified.usage.inputTokens,

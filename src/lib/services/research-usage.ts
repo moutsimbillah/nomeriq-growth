@@ -5,6 +5,8 @@ export type ResearchOperation = "search" | "fetch" | "chat" | "draft";
 
 export interface UsageInput {
   jobId?: string | null;
+  /** Which provider served the call; defaults to the single legacy 'deepseek' value. */
+  provider?: string | null;
   operation: ResearchOperation;
   model?: string | null;
   requestCount?: number;
@@ -23,10 +25,11 @@ export async function recordResearchUsage(input: UsageInput): Promise<void> {
       `INSERT INTO research_usage
         (id, job_id, provider, operation, model, request_count, input_tokens,
          cached_input_tokens, output_tokens, cost_usd, status, metadata)
-       VALUES ($1, $2, 'deepseek', $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)`,
       [
         crypto.randomUUID(),
         input.jobId ?? null,
+        input.provider ?? "deepseek",
         input.operation,
         input.model ?? null,
         input.requestCount ?? 1,

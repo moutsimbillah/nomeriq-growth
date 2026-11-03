@@ -17,6 +17,8 @@ import {
  */
 export interface ResearchProvider {
   readonly model: string;
+  /** Set by a failover pool after a call, so usage is attributed to whoever served it. */
+  readonly lastUsedProvider?: string | null;
   search(input: {
     query: string;
     count: number;
