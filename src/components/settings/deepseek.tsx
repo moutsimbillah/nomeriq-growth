@@ -19,6 +19,8 @@ export interface DeepSeekPublicState {
   source: "database" | "environment" | null;
   baseUrl: string;
   model: string;
+  searchPath: string | null;
+  fetchPath: string | null;
   lastTestOk: boolean | null;
   lastTestMessage: string | null;
   lastTestedAt: string | null;
@@ -32,6 +34,8 @@ interface TestOutcome {
   models: string[];
   searchOk: boolean;
   fetchOk: boolean;
+  searchPath: string | null;
+  fetchPath: string | null;
 }
 
 /**
@@ -52,6 +56,8 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
   const [message, setMessage] = useState<string | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [outcome, setOutcome] = useState<TestOutcome | null>(null);
+  const [searchPath, setSearchPath] = useState(initial.searchPath ?? "");
+  const [fetchPath, setFetchPath] = useState(initial.fetchPath ?? "");
 
   async function save() {
     setPending("save");
@@ -64,6 +70,8 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
           ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
           baseUrl,
           model,
+          searchPath: searchPath.trim() || null,
+          fetchPath: fetchPath.trim() || null,
         },
       })) as DeepSeekPublicState;
       setState(data);
@@ -89,7 +97,12 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
         models: Array.isArray(data.models) ? (data.models as string[]) : [],
         searchOk: Boolean(data.searchOk),
         fetchOk: Boolean(data.fetchOk),
+        searchPath: (data.searchPath as string | null) ?? null,
+        fetchPath: (data.fetchPath as string | null) ?? null,
       });
+      // Adopt any path the test discovered, so it is visible and re-savable.
+      if (typeof data.searchPath === "string") setSearchPath(data.searchPath);
+      if (typeof data.fetchPath === "string") setFetchPath(data.fetchPath);
       setMessage(
         `${data.message} Cost of this test: $${Number(data.costUsd).toFixed(4)}.`,
       );
@@ -199,9 +212,34 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
           />
           <p className="mt-1.5 text-[10px] leading-4 text-faint">
             A trailing <code>/v1</code> is stripped automatically. Any
-            DeepSeek-compatible host works, but the autonomous engine needs one
-            that implements Search and Fetch, not just chat.
+            DeepSeek-compatible host works. If it implements Search and Fetch at
+            different paths, leave the two fields below blank and the test will
+            find them.
           </p>
+        </div>
+        <div>
+          <label className="label" htmlFor="deepseek-search-path">
+            Search path <span className="text-faint">(optional)</span>
+          </label>
+          <input
+            id="deepseek-search-path"
+            className="input"
+            value={searchPath}
+            onChange={(event) => setSearchPath(event.target.value)}
+            placeholder="/v1/tools/search"
+          />
+        </div>
+        <div>
+          <label className="label" htmlFor="deepseek-fetch-path">
+            Fetch path <span className="text-faint">(optional)</span>
+          </label>
+          <input
+            id="deepseek-fetch-path"
+            className="input"
+            value={fetchPath}
+            onChange={(event) => setFetchPath(event.target.value)}
+            placeholder="/v1/tools/fetch"
+          />
         </div>
       </div>
 
@@ -292,9 +330,21 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
 
       {outcome && !outcome.searchOk && (
         <p className="mt-2 text-[10.5px] leading-5 text-muted">
-          This endpoint answers chat but not DeepSeek&apos;s proprietary Search and
-          Fetch tools, so the autonomous engine cannot discover leads through it.
-          Use <code>https://api.deepseek.com</code> to run the engine.
+          This endpoint did not answer Search at any path we tried. Set the
+          Search and Fetch paths above if this host names them differently, or
+          use <code>https://api.deepseek.com</code>, which implements them
+          directly.
+        </p>
+      )}
+      {outcome?.searchPath && outcome.searchOk && (
+        <p className="mt-2 text-[10.5px] leading-5 text-muted">
+          Detected on this endpoint: Search at <code>{outcome.searchPath}</code>
+          {outcome.fetchPath ? (
+            <>
+              , Fetch at <code>{outcome.fetchPath}</code>
+            </>
+          ) : null}
+          .
         </p>
       )}
 

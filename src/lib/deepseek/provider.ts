@@ -8,6 +8,58 @@ export const DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com";
 export const DEEPSEEK_DEFAULT_MODEL = "deepseek-flash";
 
 /**
+ * DeepSeek's own API mounts Search and Fetch at proprietary paths. Compatible
+ * gateways often implement the same capabilities elsewhere — a common shape is
+ * `/v1/search` plus `/v1/scrape`. These are the defaults; a custom endpoint can
+ * override them per credential.
+ */
+export const DEEPSEEK_DEFAULT_SEARCH_PATH = "/v1/tools/search";
+export const DEEPSEEK_DEFAULT_FETCH_PATH = "/v1/tools/fetch";
+
+/** Paths probed, in order, when a custom endpoint has no explicit paths. */
+export const SEARCH_PATH_CANDIDATES = [
+  "/v1/tools/search",
+  "/v1/search",
+  "/search",
+  "/v1/web/search",
+] as const;
+
+export const FETCH_PATH_CANDIDATES = [
+  "/v1/tools/fetch",
+  "/v1/scrape",
+  "/v1/fetch",
+  "/fetch",
+  "/v1/contents",
+] as const;
+
+/**
+ * Normalises a configurable endpoint path.
+ *
+ * Accepts an absolute path ("/v1/search") or a full URL on the same host. Returns
+ * null for anything that is not a safe same-origin path, so a stored value can
+ * never redirect credentials to another host.
+ */
+export function cleanEndpointPath(
+  value: string | null | undefined,
+): string | null {
+  const raw = (value || "").trim();
+  if (!raw) return null;
+  let pathname = raw;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      pathname = parsed.pathname + (parsed.search || "");
+    } catch {
+      return null;
+    }
+  }
+  if (!pathname.startsWith("/")) pathname = `/${pathname}`;
+  // Reject traversal and control characters outright.
+  if (pathname.includes("..") || /[\s<>"'`\\]/.test(pathname)) return null;
+  return pathname.replace(/\/+$/, "") || null;
+}
+
+/**
  * Accepts the model identifiers real providers use, including the
  * vendor-prefixed forms served by OpenAI-compatible relays:
  * `deepseek/deepseek-chat`, `openai/gpt-4o`, `meta-llama/Llama-3.3-70B-Instruct`.
@@ -34,6 +86,10 @@ export interface DeepSeekConfig {
   baseUrl: string;
   model: string;
   source: "database" | "environment";
+  /** Overrides DEEPSEEK_DEFAULT_SEARCH_PATH when set. */
+  searchPath?: string | null;
+  /** Overrides DEEPSEEK_DEFAULT_FETCH_PATH when set. */
+  fetchPath?: string | null;
 }
 
 export interface DeepSeekSearchResult {
@@ -79,6 +135,9 @@ export interface DeepSeekPublicSettings {
   source: "database" | "environment" | null;
   baseUrl: string;
   model: string;
+  /** Effective Search/Fetch paths; null means the DeepSeek default is in use. */
+  searchPath: string | null;
+  fetchPath: string | null;
   lastTestOk: boolean | null;
   lastTestMessage: string | null;
   lastTestedAt: string | null;
@@ -176,6 +235,8 @@ export async function resolveDeepSeekConfig(): Promise<{
           baseUrl: cleanBaseUrl(row.base_url || DEEPSEEK_DEFAULT_BASE_URL),
           model: row.model || DEEPSEEK_DEFAULT_MODEL,
           source: "database",
+          searchPath: row.search_path ?? null,
+          fetchPath: row.fetch_path ?? null,
         },
         error: null,
       };
@@ -199,6 +260,8 @@ export async function resolveDeepSeekConfig(): Promise<{
         ),
         model: process.env.DEEPSEEK_MODEL || DEEPSEEK_DEFAULT_MODEL,
         source: "environment",
+        searchPath: process.env.DEEPSEEK_SEARCH_PATH ?? null,
+        fetchPath: process.env.DEEPSEEK_FETCH_PATH ?? null,
       },
       error: null,
     };
@@ -231,6 +294,8 @@ export async function getDeepSeekPublicSettings(): Promise<DeepSeekPublicSetting
       DEEPSEEK_DEFAULT_BASE_URL,
     model:
       row?.model || process.env.DEEPSEEK_MODEL || DEEPSEEK_DEFAULT_MODEL,
+    searchPath: row?.search_path ?? process.env.DEEPSEEK_SEARCH_PATH ?? null,
+    fetchPath: row?.fetch_path ?? process.env.DEEPSEEK_FETCH_PATH ?? null,
     lastTestOk: row?.last_test_ok ?? null,
     lastTestMessage: row?.last_test_message ?? null,
     lastTestedAt: iso(row?.last_tested_at),
@@ -241,6 +306,8 @@ export async function saveDeepSeekSettings(input: {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  searchPath?: string | null;
+  fetchPath?: string | null;
   userId: string;
 }): Promise<DeepSeekPublicSettings> {
   const db = await getDb();
@@ -274,17 +341,29 @@ export async function saveDeepSeekSettings(input: {
       "Enter a valid model name. Vendor-prefixed identifiers such as deepseek/deepseek-chat are supported.",
     );
   }
+  // Only persist a path the founder actually supplied; null keeps the default.
+  const searchPath =
+    input.searchPath === undefined
+      ? (existingRow?.search_path ?? null)
+      : cleanEndpointPath(input.searchPath);
+  const fetchPath =
+    input.fetchPath === undefined
+      ? (existingRow?.fetch_path ?? null)
+      : cleanEndpointPath(input.fetchPath);
   await db.query(
     `INSERT INTO provider_credentials
-      (provider, encrypted_api_key, base_url, model, updated_by, updated_at)
-     VALUES ('deepseek', $1, $2, $3, $4, now())
+      (provider, encrypted_api_key, base_url, model, search_path, fetch_path,
+       updated_by, updated_at)
+     VALUES ('deepseek', $1, $2, $3, $4, $5, $6, now())
      ON CONFLICT (provider) DO UPDATE SET
        encrypted_api_key = excluded.encrypted_api_key,
        base_url = excluded.base_url,
        model = excluded.model,
+       search_path = excluded.search_path,
+       fetch_path = excluded.fetch_path,
        updated_by = excluded.updated_by,
        updated_at = now()`,
-    [encrypted, baseUrl, model, input.userId],
+    [encrypted, baseUrl, model, searchPath, fetchPath, input.userId],
   );
   return getDeepSeekPublicSettings();
 }
@@ -445,6 +524,73 @@ export function estimateDeepSeekModelCost(input: {
   );
 }
 
+/* ------------------------------ response shapes --------------------------- */
+
+/**
+ * Normalises a search result from either shape.
+ *
+ * DeepSeek returns `{ results: [{ title, url, snippet, summary, site_name,
+ * rerank_score }] }`. Firecrawl-style gateways return
+ * `{ data: { web: [{ title, url, description }] } }` or `{ data: [...] }`. Both
+ * carry the same essentials, so accept whichever is present rather than failing
+ * a working endpoint over a field name.
+ */
+function normalizeSearchResults(data: any): DeepSeekSearchResult[] {
+  const raw = Array.isArray(data?.results)
+    ? data.results
+    : Array.isArray(data?.data?.web)
+      ? data.data.web
+      : Array.isArray(data?.data)
+        ? data.data
+        : Array.isArray(data?.web)
+          ? data.web
+          : [];
+  return raw
+    .map((item: any) => ({
+      title: String(item?.title ?? item?.name ?? ""),
+      url: String(item?.url ?? item?.link ?? ""),
+      snippet: String(item?.snippet ?? item?.description ?? ""),
+      summary: String(item?.summary ?? item?.description ?? ""),
+      content: String(item?.content ?? item?.markdown ?? ""),
+      siteName: item?.site_name ? String(item.site_name) : null,
+      date: item?.date ? String(item.date) : null,
+      authority: Number(item?.authority ?? -1),
+      rerankScore: Number(item?.rerank_score ?? item?.score ?? 0),
+    }))
+    .filter((item: DeepSeekSearchResult) => Boolean(item.url));
+}
+
+/**
+ * Normalises a fetched page from either shape: DeepSeek's `{ title, content }`
+ * or a gateway's `{ data: { markdown | content | text } }`.
+ *
+ * Some gateways answer HTTP 200 and put the failure in the body — measured live,
+ * `/v1/scrape` returned `{"error":"Failed to scrape page with Firecrawl"}` with
+ * status 200. Treating that as an empty page hid the real reason behind a
+ * misleading "not found", so a body-level error is raised as an error instead.
+ */
+function normalizeFetchedPage(data: any): { title: string; content: string } {
+  const nested = data?.data ?? {};
+  const bodyError =
+    (typeof data?.error === "string" && data.error) ||
+    (typeof nested?.error === "string" && nested.error) ||
+    (typeof data?.error?.message === "string" && data.error.message) ||
+    null;
+  const content =
+    data?.content ?? data?.markdown ?? data?.text ??
+    nested.content ?? nested.markdown ?? nested.text ?? "";
+  if (!content && bodyError) {
+    throw new DeepSeekError(
+      String(bodyError).slice(0, 300),
+      502,
+      "deepseek_fetch_failed",
+      false,
+    );
+  }
+  const title = data?.title ?? nested.title ?? nested.metadata?.title ?? "";
+  return { title: String(title || ""), content: String(content || "") };
+}
+
 /* --------------------------------- Search -------------------------------- */
 
 export async function deepseekSearch(
@@ -455,29 +601,23 @@ export async function deepseekSearch(
     throw new DeepSeekError("Search query must be 1–128 characters.", 400, "invalid_query", false);
   }
   await waitForRateLimit("deepseek-search", input.qps ?? 2);
+  const path =
+    cleanEndpointPath(config.searchPath) ?? DEEPSEEK_DEFAULT_SEARCH_PATH;
+  const count = Math.max(1, Math.min(input.count ?? 20, 50));
   const { data } = await deepseekFetchJson<any>({
-    url: `${config.baseUrl}/v1/tools/search`,
+    url: `${config.baseUrl}${path}`,
     apiKey: config.apiKey,
     body: {
       query: input.query.trim(),
-      count: Math.max(1, Math.min(input.count ?? 20, 50)),
+      count,
       need_content: true,
+      // Gateways commonly expect one of these instead of `count`.
+      limit: count,
+      max_results: count,
     },
     retry: true,
   });
-  const results = Array.isArray(data?.results)
-    ? data.results.map((item: any) => ({
-        title: String(item.title || ""),
-        url: String(item.url || ""),
-        snippet: String(item.snippet || ""),
-        summary: String(item.summary || ""),
-        content: String(item.content || ""),
-        siteName: item.site_name ? String(item.site_name) : null,
-        date: item.date ? String(item.date) : null,
-        authority: Number(item.authority ?? -1),
-        rerankScore: Number(item.rerank_score ?? 0),
-      }))
-    : [];
+  const results = normalizeSearchResults(data);
   return {
     results,
     costUsd: results.length > 0 ? DEEPSEEK_SEARCH_COST_USD : 0,
@@ -504,17 +644,24 @@ export async function deepseekFetchPage(
     throw new DeepSeekError("Fetch URL must not contain credentials.", 400, "invalid_url", false);
   }
   await waitForRateLimit("deepseek-fetch", input.qps ?? 1);
+  const path = cleanEndpointPath(config.fetchPath) ?? DEEPSEEK_DEFAULT_FETCH_PATH;
   const { data } = await deepseekFetchJson<any>({
-    url: `${config.baseUrl}/v1/tools/fetch`,
+    url: `${config.baseUrl}${path}`,
     apiKey: config.apiKey,
-    body: { url: url.toString() },
+    body: {
+      url: url.toString(),
+      // Gateways differ: some accept `url`, others `urls`.
+      urls: [url.toString()],
+      formats: ["markdown"],
+    },
     retry: true,
   });
+  const page = normalizeFetchedPage(data);
   return {
-    title: String(data?.title || ""),
-    content: String(data?.content || ""),
-    costUsd: data?.content ? DEEPSEEK_FETCH_COST_USD : 0,
-    requestCount: data?.content ? 1 : 0,
+    title: page.title,
+    content: page.content,
+    costUsd: page.content ? DEEPSEEK_FETCH_COST_USD : 0,
+    requestCount: page.content ? 1 : 0,
   };
 }
 
@@ -616,6 +763,43 @@ export async function listDeepSeekModels(
     : [];
 }
 
+/**
+ * Finds which candidate path a custom endpoint actually implements.
+ *
+ * A probe with a deliberately invalid key distinguishes the two cases reliably:
+ * a route that exists answers 401/403 (authentication required), while a route
+ * that does not exist answers 404/405. Returns null when nothing matches.
+ */
+async function detectEndpointPath(input: {
+  baseUrl: string;
+  apiKey: string;
+  candidates: readonly string[];
+  body: unknown;
+}): Promise<string | null> {
+  for (const candidate of input.candidates) {
+    try {
+      const response = await fetch(`${input.baseUrl}${candidate}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${input.apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(input.body),
+        signal: AbortSignal.timeout(15_000),
+      });
+      // 401/403 means the route exists and only the key is in question. With a
+      // real key this same request would succeed, so treat it as the match.
+      if (response.status === 401 || response.status === 403) return candidate;
+      if (response.ok) return candidate;
+      // 404/405 means no such route; keep looking.
+    } catch {
+      // Network hiccup on one candidate must not abort the whole search.
+    }
+  }
+  return null;
+}
+
 export async function testDeepSeekConnection(config: DeepSeekConfig): Promise<{
   ok: boolean;
   message: string;
@@ -623,6 +807,9 @@ export async function testDeepSeekConnection(config: DeepSeekConfig): Promise<{
   searchOk: boolean;
   fetchOk: boolean;
   costUsd: number;
+  /** Paths that worked, so the caller can persist them for a custom endpoint. */
+  searchPath: string | null;
+  fetchPath: string | null;
 }> {
   const modelsUrl = `${config.baseUrl}/models`;
   let models: string[];
@@ -639,7 +826,9 @@ export async function testDeepSeekConnection(config: DeepSeekConfig): Promise<{
   let searchOk = false;
   let fetchOk = false;
 
-  const searchUrl = `${config.baseUrl}/v1/tools/search`;
+  const searchPath =
+    cleanEndpointPath(config.searchPath) ?? DEEPSEEK_DEFAULT_SEARCH_PATH;
+  const searchUrl = `${config.baseUrl}${searchPath}`;
   let search;
   try {
     search = await deepseekSearch(config, {
@@ -648,32 +837,150 @@ export async function testDeepSeekConnection(config: DeepSeekConfig): Promise<{
       qps: 1,
     });
   } catch (error) {
+    // A custom endpoint may implement Search at a different path. Probe the
+    // known conventions before declaring the capability missing.
+    const isOfficialHost = /^https:\/\/api\.deepseek\.com$/i.test(config.baseUrl);
+    if (!isOfficialHost && !config.searchPath) {
+      const detected = await detectEndpointPath({
+        baseUrl: config.baseUrl,
+        apiKey: config.apiKey,
+        candidates: SEARCH_PATH_CANDIDATES,
+        body: { query: "forex signals", count: 2, limit: 2 },
+      });
+      if (detected && detected !== searchPath) {
+        try {
+          search = await deepseekSearch(
+            { ...config, searchPath: detected },
+            { query: '"forex signals" "VIP"', count: 2, qps: 1 },
+          );
+          costUsd += search.costUsd;
+          searchOk = search.results.length > 0;
+          return await finishTest({
+            config,
+            models,
+            searchOk,
+            costUsd,
+            searchPath: detected,
+            // Must carry the first result through, otherwise Fetch is never
+            // exercised on a gateway whose Search lives at a custom path.
+            firstResultUrl: search.results[0]?.url ?? null,
+          });
+        } catch {
+          // Fall through to the original, clearer error below.
+        }
+      }
+    }
     throw connectionStepError("Search", searchUrl, config.baseUrl, error);
   }
   costUsd += search.costUsd;
   searchOk = search.results.length > 0;
 
-  if (search.results[0]) {
-    try {
-      const page = await deepseekFetchPage(config, {
-        url: search.results[0].url,
-        qps: 1,
-      });
-      costUsd += page.costUsd;
-      fetchOk = Boolean(page.content);
-    } catch (error) {
-      // Fetch is best effort: Search working already proves the key and base
-      // URL, and an individual publisher's site may legitimately refuse Fetch.
-      const detail = error instanceof Error ? error.message : "unknown error";
+  return await finishTest({
+    config,
+    models,
+    searchOk,
+    costUsd,
+    searchPath,
+    firstResultUrl: search.results[0]?.url ?? null,
+  });
+}
+
+/**
+ * Completes a connection test once Search is known to work, including Fetch
+ * detection for custom endpoints.
+ */
+async function finishTest(input: {
+  config: DeepSeekConfig;
+  models: string[];
+  searchOk: boolean;
+  costUsd: number;
+  searchPath: string | null;
+  firstResultUrl?: string | null;
+}): Promise<{
+  ok: boolean;
+  message: string;
+  models: string[];
+  searchOk: boolean;
+  fetchOk: boolean;
+  costUsd: number;
+  searchPath: string | null;
+  fetchPath: string | null;
+}> {
+  const { config, models, searchOk } = input;
+  let costUsd = input.costUsd;
+  let fetchOk = false;
+  let fetchPath =
+    cleanEndpointPath(config.fetchPath) ?? DEEPSEEK_DEFAULT_FETCH_PATH;
+  const isOfficialHost = /^https:\/\/api\.deepseek\.com$/i.test(config.baseUrl);
+
+  if (input.firstResultUrl) {
+    // Probe Fetch against the first search hit, then a stable, always-scrapable
+    // URL, so one unreadable hit (a news/RSS redirect, a PDF, a login wall) cannot
+    // make a working Fetch look broken.
+    const probeUrls = [input.firstResultUrl, "https://example.com/"];
+
+    // Candidate paths, deduplicated. The configured/default path comes first. On a
+    // custom endpoint without an explicit path we also try the known conventions,
+    // because a gateway may not use DeepSeek's proprietary mount point.
+    const attemptPaths: string[] = [fetchPath];
+    if (!isOfficialHost && !config.fetchPath) {
+      for (const candidate of FETCH_PATH_CANDIDATES) {
+        if (!attemptPaths.includes(candidate)) attemptPaths.push(candidate);
+      }
+    }
+
+    // Keep the most informative failure. A detected path that fails for a real
+    // reason (an upstream scraper error) explains far more than the bare
+    // "Not found" returned by an absent default path, and would otherwise be
+    // thrown away in favour of the less useful message.
+    let bestError: string | null = null;
+    let bestErrorPath: string | null = null;
+
+    outer: for (const probeUrl of probeUrls) {
+      for (const path of attemptPaths) {
+        try {
+          const page = await deepseekFetchPage(
+            { ...config, fetchPath: path },
+            // A bounded manual probe (at most a handful of requests), so it is not
+            // paced like bulk research. The 1 req/s default would make a fully
+            // failing endpoint take ~10s of pure throttling before reporting.
+            { url: probeUrl, qps: 5 },
+          );
+          costUsd += page.costUsd;
+          if (page.content) {
+            fetchOk = true;
+            fetchPath = path;
+            break outer;
+          }
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "unknown error";
+          // A route that merely does not exist tells us nothing new; anything
+          // else is a real explanation worth surfacing.
+          if (!/not found|HTTP 404|HTTP 405/i.test(detail)) {
+            if (!bestError || bestError.length < detail.length) {
+              bestError = detail;
+              bestErrorPath = path;
+            }
+          }
+        }
+      }
+    }
+
+    if (!fetchOk) {
       return {
         ok: models.length > 0 && searchOk,
         message:
-          `Model API reachable (${models.length} models). Search working. ` +
-          `Fetch could not retrieve ${search.results[0].url}: ${detail}`,
+          `Model API reachable (${models.length} models). ` +
+          `${searchOk ? "Search working." : "Search returned no results for a common query."} ` +
+          `Fetch could not retrieve a page: ${
+            bestError ? `${bestError} (from ${bestErrorPath})` : "no Fetch endpoint responded."
+          }`,
         models,
         searchOk,
         fetchOk: false,
         costUsd,
+        searchPath: input.searchPath,
+        fetchPath: null,
       };
     }
   }
@@ -683,10 +990,20 @@ export async function testDeepSeekConnection(config: DeepSeekConfig): Promise<{
     message:
       `Model API reachable (${models.length} models). ` +
       `${searchOk ? "Search working." : "Search returned no results for a common query."} ` +
-      `${fetchOk ? "Fetch working." : "Fetch could not retrieve the first result."}`,
+      (input.firstResultUrl
+        ? `${fetchOk ? "Fetch working." : "Fetch could not retrieve the first result."}`
+        : "Fetch not exercised, because Search returned no page to read.") +
+      (isOfficialHost
+        ? ""
+        : ` Custom endpoint detected: Search at ${input.searchPath ?? DEEPSEEK_DEFAULT_SEARCH_PATH}` +
+          (fetchOk ? `, Fetch at ${fetchPath}.` : ".")),
     models,
     searchOk,
     fetchOk,
     costUsd,
+    searchPath: input.searchPath,
+    // Only report a Fetch path we actually proved. Returning the default here
+    // would let the caller persist a route that was never exercised.
+    fetchPath: fetchOk ? fetchPath : null,
   };
 }

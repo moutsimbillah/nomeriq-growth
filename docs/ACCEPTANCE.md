@@ -86,12 +86,21 @@ Test Files  5 passed (5)
 - the schema invariant itself: `spent_usd` is stored at the same scale as `cost_usd`
 - migration 005 applies **idempotently** to a database that already holds data
 
-`tests/deepseek-provider.test.ts` (6 tests) and `tests/deepseek-connection-errors.test.ts` (4 tests) pin the provider's HTTP contract and its failure reporting:
+`tests/deepseek-provider.test.ts` (6 tests), `tests/deepseek-connection-errors.test.ts` (4 tests), `tests/deepseek-custom-endpoint.test.ts` (8 tests) and `tests/deepseek-endpoint-paths.test.ts` (17 tests) pin the provider's HTTP contract, its failure reporting and its support for DeepSeek-compatible gateways:
 
 - Search, Fetch and the model list are called at the exact documented paths for **either** base-URL spelling
 - a `/v1` base URL never produces a doubled `/v1/v1` path
 - a connection failure names the failing step, the URL and the base URL in use, with a base-URL hint on 404/405
 - a 401 reports the provider's authentication message and deliberately does **not** suggest changing the base URL
+- an insufficient balance is reported as a billing condition, not a configuration mistake
+- Search and Fetch paths are configurable per credential, and unsafe values (traversal, embedded whitespace/quotes, absolute URLs to another host) are refused rather than followed
+- a custom endpoint without explicit paths is probed, and the paths that answered are reported so they can be persisted
+- the official `api.deepseek.com` host is **not** probed speculatively; only the documented paths are attempted there
+- a Fetch failure against one unreadable search hit (a news/RSS URL a scraper cannot read) does not mark Fetch broken when a plain page succeeds
+- a capability that was never exercised is never reported as working: if Search returns no page to read, Fetch is reported as untested and no Fetch path is returned
+- a path that could not be proven is not returned as if it had been, so a failed detection cannot persist a route that does not work
+
+This last group matters because a compatible gateway was measured live. The **route map** was established with a deliberately invalid placeholder key on `vyceai.com`, so that 401 means "route exists, needs auth" and 404 means "no such route": `POST /v1/tools/search` → 404 while `POST /v1/search` → 401, and `POST /v1/tools/fetch` → 404 while `POST /v1/scrape` → 401. That host does implement Search and Fetch, just not under DeepSeek's proprietary names. Treating it as "chat only" was wrong, which is what the configurable paths fix.
 
 `tests/workflow.test.ts` (15 tests) covers the original sales workflows plus generic-email deduplication in both directions.
 
@@ -148,9 +157,11 @@ Migrations were applied to a fresh database end to end, confirming `research_job
 ## Not claimed
 
 - No live unsolicited email was sent.
-- No live DeepSeek request was made; there was no `DEEPSEEK_API_KEY` in this environment. The unverified variable is the live service's exact response body, not the request shape or the engine logic.
+- No live request was made to the **official** `api.deepseek.com` service; there was no `DEEPSEEK_API_KEY` for it in this environment. The unverified variable is that service's exact response body, not the request shape or the engine logic. (For the one live custom-endpoint diagnostic that *was* run, see the last bullet.)
 - No real IONOS mailbox was connected here.
 - 100 leads were not produced. The engine provably reaches 10 verified leads in test and the target count scales to any number, but running it against the live web for 100 real businesses requires live search spend. That volume is left genuinely unproduced rather than invented.
 - OpenAI/Anthropic calls were not exercised; the deterministic writer and the adapters are present.
 - Supabase/Vercel deployment was not executed here; the schema is PostgreSQL-compatible and the runbook is included.
 - Sites that require a logged-in browser session or heavy JavaScript rendering may not yield a published email through Fetch; the engine reports such candidates as failed rather than qualifying them.
+- **The one exception to the above:** a live custom-endpoint diagnostic was run against `vyceai.com`, outside the engine and without sending email, to explain a connection test that reported a bare "not found". Probing with an invalid placeholder key established the route map in the previous section; a separate call against the gateway's Fetch route showed it is backed by Firecrawl, which answered HTTP 200 with `{"error":"Failed to scrape page with Firecrawl"}` for `https://example.com/`. That is an upstream failure on that host rather than a defect in Growth: the adapter surfaces the provider's own message instead of swallowing it, and reports Fetch as unavailable rather than presenting empty content as a retrieved page. Per the founder's instruction, no further live spend was pursued against that endpoint.
+

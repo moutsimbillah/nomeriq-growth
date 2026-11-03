@@ -14,7 +14,10 @@ export const dynamic = "force-dynamic";
 const schema = z.object({
   apiKey: z.string().max(500).optional(),
   baseUrl: z.string().max(500).optional(),
-  model: z.string().max(100).optional(),
+  model: z.string().max(300).optional(),
+  // Optional custom mount points for Search/Fetch on a compatible gateway.
+  searchPath: z.string().max(300).nullable().optional(),
+  fetchPath: z.string().max(300).nullable().optional(),
 });
 
 export async function GET() {

@@ -5,6 +5,7 @@ import {
   getDeepSeekPublicSettings,
   recordDeepSeekTest,
   resolveDeepSeekConfig,
+  saveDeepSeekSettings,
   testDeepSeekConnection,
 } from "@/lib/deepseek/provider";
 import { recordResearchUsage } from "@/lib/services/research-usage";
@@ -18,7 +19,7 @@ export const maxDuration = 60;
 export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
-    await requireEditor();
+    const user = await requireEditor();
     const { config, error } = await resolveDeepSeekConfig();
     if (!config) {
       throw new AppError(
@@ -27,6 +28,7 @@ export async function POST(request: Request) {
         "deepseek_not_configured",
       );
     }
+    const current = await getDeepSeekPublicSettings();
     let result;
     try {
       result = await testDeepSeekConnection(config);
@@ -37,6 +39,24 @@ export async function POST(request: Request) {
       throw new AppError(message, 502, "deepseek_test_failed");
     }
     await recordDeepSeekTest({ ok: result.ok, message: result.message });
+
+    // A custom endpoint may implement Search and Fetch at non-DeepSeek paths.
+    // Persist what actually worked, but only when the credential came from the
+    // database (an environment-configured key has no row to update) and only when
+    // the detected path differs from what is already stored.
+    if (
+      config.source === "database" &&
+      result.ok &&
+      (result.searchPath !== (current?.searchPath ?? null) ||
+        result.fetchPath !== (current?.fetchPath ?? null))
+    ) {
+      await saveDeepSeekSettings({
+        searchPath: result.searchPath,
+        fetchPath: result.fetchPath,
+        userId: user.id,
+      }).catch(() => undefined);
+    }
+
     await recordResearchUsage({
       operation: "search",
       model: config.model,

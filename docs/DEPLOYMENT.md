@@ -42,6 +42,8 @@ The index query must show `prospect_emails_business_email_unique` and must **not
 
 Migration `005_spend_precision.sql` widens `spent_usd`/`budget_usd` to six decimals and repairs any drift already recorded by re-deriving it from the real usage rows. It is additive and safe to re-run.
 
+Migration `006_endpoint_paths.sql` adds nullable `search_path`/`fetch_path` columns to `provider_credentials`, letting a DeepSeek-compatible gateway declare where its Search and Fetch live. `NULL` means "use the DeepSeek default" (`/v1/tools/search`, `/v1/tools/fetch`), so the official API and existing rows are unaffected. Also additive and safe to re-run.
+
 ## 2. Configure Vercel
 
 Import this repository as a new Vercel project. Node.js 22+ runtime.
@@ -63,6 +65,8 @@ Set these environment variables in Production (and Preview if desired):
 | `DEEPSEEK_API_KEY` | Optional; required for the autonomous research engine |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | `deepseek-flash` |
+| `DEEPSEEK_SEARCH_PATH` | Optional; defaults to `/v1/tools/search`. Set only for a compatible gateway that mounts Search elsewhere. |
+| `DEEPSEEK_FETCH_PATH` | Optional; defaults to `/v1/tools/fetch`. Set only for a compatible gateway that mounts Fetch elsewhere. |
 | `RESEARCH_WORKER_MAX_JOBS` | `3` — due jobs advanced per cron invocation |
 | `AUTO_MIGRATE` | `false` |
 
@@ -129,6 +133,14 @@ Set the key one of two ways:
 
 - **Recommended for production:** `DEEPSEEK_API_KEY` in Vercel. The key stays server-side and is never returned to the browser.
 - **Runtime:** save it under **Settings → DeepSeek**, where it is encrypted with `APP_ENCRYPTION_KEY` and overrides the environment value. Use **Test connection** to verify the base URL and model.
+
+#### DeepSeek-compatible gateways
+
+Any host that speaks DeepSeek's OpenAI-compatible surface (`GET /models`, `POST /chat/completions`) can be used as the base URL. The autonomous engine additionally needs Search and Fetch, and a gateway may mount those somewhere other than DeepSeek's proprietary `/v1/tools/search` and `/v1/tools/fetch` — a common convention is `/v1/search` plus `/v1/scrape`.
+
+Leave the two path fields blank: **Test connection** probes the known conventions, then reports and persists what actually answered. Set them explicitly if the gateway uses a path outside that list. Detection distinguishes a missing route from a present one by status code: a route that exists answers 401 (needs auth) even to a probe, while an absent one answers 404.
+
+A gateway that serves only chat cannot drive discovery. The test says so explicitly rather than failing with a bare "not found", and names the capability that is missing.
 
 Then, in Growth:
 
