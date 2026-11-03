@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Download,
+  KeyRound,
   LoaderCircle,
   Plus,
   ShieldOff,
@@ -159,6 +160,127 @@ export function TeamManager({ users }: { users: UserRow[] }) {
           </SubmitBar>
         </div>
       </Modal>
+      <ChangePasswordCard />
+    </div>
+  );
+}
+
+function ChangePasswordCard() {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  async function change() {
+    setError(null);
+    setNotice(null);
+    if (newPassword.length < 8) {
+      setError("Use at least 8 characters.");
+      return;
+    }
+    if (newPassword.length > 16) {
+      setError("Use at most 16 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("The two new passwords do not match.");
+      return;
+    }
+    setPending(true);
+    try {
+      const data = await apiRequest("/api/settings/password", {
+        method: "POST",
+        body: { currentPassword, newPassword, confirmPassword },
+      });
+      const revoked =
+        typeof data?.sessionsRevoked === "number" ? data.sessionsRevoked : 0;
+      setNotice(
+        revoked > 0
+          ? `Password changed. Every other device has been signed out. ${revoked} other ${
+              revoked === 1 ? "session was" : "sessions were"
+            } signed out.`
+          : "Password changed. Every other device has been signed out.",
+      );
+    } catch (caught) {
+      const message =
+        caught instanceof Error ? caught.message : "Could not change password.";
+      setError(
+        /invalid_password|incorrect/i.test(message)
+          ? "Your current password is incorrect."
+          : message,
+      );
+    } finally {
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-xl border border-line bg-white/50 px-3.5 py-3">
+      <div className="text-[12px] font-bold text-ink">Change your password</div>
+      <p className="text-[10px] text-muted">
+        This changes the password for the account you are signed in with. Every
+        other signed-in device will be signed out.
+      </p>
+      <div className="mt-3 space-y-3">
+        <div>
+          <label className="label" htmlFor="change-password-current">
+            Current password
+          </label>
+          <input
+            id="change-password-current"
+            className="input"
+            type="password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
+          />
+        </div>
+        <div>
+          <label className="label" htmlFor="change-password-new">
+            New password
+          </label>
+          <input
+            id="change-password-new"
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            value={newPassword}
+            onChange={(event) => setNewPassword(event.target.value)}
+          />
+          <p className="mt-1 text-[9.5px] text-faint">8 to 16 characters.</p>
+        </div>
+        <div>
+          <label className="label" htmlFor="change-password-confirm">
+            Confirm new password
+          </label>
+          <input
+            id="change-password-confirm"
+            className="input"
+            type="password"
+            autoComplete="new-password"
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+          />
+        </div>
+        <InlineError>{error}</InlineError>
+        {notice && <Notice tone="success">{notice}</Notice>}
+        <SubmitBar>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={change}
+            disabled={pending}
+          >
+            {pending ? <LoaderCircle size={13} className="spin" /> : <KeyRound size={13} />}
+            {pending ? "Changing…" : "Change password"}
+          </button>
+        </SubmitBar>
+      </div>
     </div>
   );
 }

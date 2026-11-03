@@ -10,9 +10,14 @@ const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const KEY_LENGTH = 64;
 
+/** Lowest password length any entry point allows. Callers enforce their own policy:
+ *  setup and team creation require 10, change-password allows 8. This guard exists
+ *  only so a caller that forgets cannot hash something trivially short. */
+export const PASSWORD_HARD_MIN_LENGTH = 8;
+
 export function hashPassword(password: string): string {
-  if (password.length < 10) {
-    throw new Error("Password must be at least 10 characters.");
+  if (password.length < PASSWORD_HARD_MIN_LENGTH) {
+    throw new Error(`Password must be at least ${PASSWORD_HARD_MIN_LENGTH} characters.`);
   }
   const salt = randomBytes(16).toString("base64");
   const hash = scryptSync(password, salt, KEY_LENGTH, {
