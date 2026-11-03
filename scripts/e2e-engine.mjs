@@ -57,8 +57,9 @@ function assert(condition, message) {
 
 /* ------------------------------- DeepSeek stub ----------------------------- */
 
-// One qualifying provider: publishes a paid signal subscription and a contact
-// email, so it must be saved as a verified lead with a draft.
+// One richly described qualifying provider. Publishes a paid signal
+// subscription and a contact email, so it must be saved as a verified lead with
+// a draft.
 const SITE = {
   domain: "e2e-signals.example.com",
   name: "E2E Signal House",
@@ -72,6 +73,54 @@ const SITE = {
   contact: `<html><body><h1>Contact</h1>
     <p>Email our team: desk@e2e-signals.example.com</p></body></html>`,
 };
+
+// Ten further qualifying providers, each with its own domain and its own
+// non-generic inbox, so the engine must treat them as ten distinct identities.
+// A broker is included to prove decoys never inflate the count.
+const ACCEPTANCE_COUNT = 10;
+const ACCEPTANCE_SITES = Array.from({ length: ACCEPTANCE_COUNT }, (_, index) => {
+  const domain = `accept-${index}.example.com`;
+  const name = `Acceptance Signal ${index}`;
+  const email = `desk${index}@${domain}`;
+  const signals = `Paid ${index % 2 === 0 ? "forex" : "crypto"} signals with VIP access. Subscribe monthly for $${40 + index} per month. Join now.`;
+  return {
+    domain,
+    name,
+    email,
+    home: `<html><body><h1>${name}</h1><p>${signals}</p>
+      <a href="/pricing">Pricing</a><a href="/contact">Contact</a></body></html>`,
+    pricing: `<html><body><h1>Pricing</h1><p>${signals}</p>
+      Subscription plans and membership pricing.</body></html>`,
+    contact: `<html><body><h1>Contact</h1><p>Email our team: ${email}</p></body></html>`,
+    categories: [index % 2 === 0 ? "forex" : "crypto"],
+  };
+});
+
+// A broker: has a website and a published email, but must never qualify.
+const BROKER_SITE = {
+  domain: "accept-broker.example.com",
+  name: "Acceptance Brokerage",
+  email: "support@accept-broker.example.com",
+  home: `<html><body><h1>Acceptance Brokerage</h1>
+    <p>We are a broker. Open an account with us, leverage up to 1:500.</p>
+    <a href="/contact">Contact</a></body></html>`,
+  pricing: `<html><body><h1>Spreads</h1><p>Raw spreads from 0.1 pips.</p></body></html>`,
+  contact: `<html><body><h1>Contact</h1>
+    <p>Contact us at support@accept-broker.example.com</p></body></html>`,
+  excluded: true,
+};
+
+const ALL_SITES = [SITE, ...ACCEPTANCE_SITES, BROKER_SITE];
+
+function findSite(url) {
+  let host;
+  try {
+    host = new URL(String(url)).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+  return ALL_SITES.find((site) => site.domain === host) ?? null;
+}
 
 function readBody(request) {
   return new Promise((resolve) => {
@@ -98,64 +147,88 @@ function startStub() {
 
     if (url.pathname === "/v1/tools/search") {
       stats.searches += 1;
+      // Every site is discoverable from any query, so the query plan alone
+      // determines how many candidates surface per tick.
       return send({
-        results: [
-          {
-            rerank_score: 2.1,
-            title: SITE.name,
-            url: `https://${SITE.domain}/`,
-            snippet: `${SITE.name} sells VIP trading signals.`,
-            summary: `${SITE.name} offers a paid monthly signal subscription.`,
-            content: "",
-            site_name: SITE.name,
-            site_icon: null,
-            date: null,
-            authority: 2,
-          },
-        ],
+        results: ALL_SITES.map((site, index) => ({
+          rerank_score: 2.1 - index * 0.01,
+          title: site.name,
+          url: `https://${site.domain}/`,
+          snippet: `${site.name} sells VIP trading signals.`,
+          summary: `${site.name} offers a paid monthly signal subscription.`,
+          content: "",
+          site_name: site.name,
+          site_icon: null,
+          date: null,
+          authority: 2,
+        })),
       });
     }
 
     if (url.pathname === "/v1/tools/fetch") {
       stats.fetches += 1;
+      const site = findSite(parsed.url);
+      if (!site) return send({ title: "", content: "" });
       const target = String(parsed.url ?? "");
       const content = target.includes("/pricing")
-        ? SITE.pricing
+        ? site.pricing
         : target.includes("/contact")
-          ? SITE.contact
-          : SITE.home;
-      return send({ title: `${SITE.name} page`, content });
+          ? site.contact
+          : site.home;
+      return send({ title: `${site.name} page`, content });
     }
 
     if (url.pathname === "/chat/completions") {
       stats.chats += 1;
-      const user = String(parsed.messages?.find((m) => m.role === "user")?.content ?? "");
-      const isDraft = /first-contact email/i.test(
-        String(parsed.messages?.find((m) => m.role === "system")?.content ?? ""),
+      const system = String(
+        parsed.messages?.find((m) => m.role === "system")?.content ?? "",
       );
-      const data = isDraft
-        ? {
-            subject: `Question about your ${SITE.name} signal service`,
-            body:
-              "Hi there,\n\nI noticed you publish a monthly subscription for your VIP forex and gold signals, including entry, stop and target levels.\n\nI work on Nomeriq, a white-label platform for businesses that sell trading signals. One operational question: how does your team currently deliver signal updates and later take-profit revisions to subscribers?\n\nBest,\nFounder\nNomeriq",
-          }
-        : {
-            isSignalProvider: true,
-            sellsPaidSignals: true,
-            categories: ["forex", "metals"],
-            businessName: SITE.name,
-            country: "Testland",
-            signalDescription:
-              "Sells monthly VIP forex and gold signal subscriptions with entry, stop-loss and take-profit levels.",
-            pricingDetails: "$49 per month, published on the official pricing page.",
-            evidenceSummary:
-              "The official pricing page shows a paid signal subscription and the contact page publishes a business email.",
-            contactEmail: SITE.email,
-            emailSourceUrl: `https://${SITE.domain}/contact`,
-            exclusionReason: null,
-            confidence: 0.92,
-            observation: `They publish a monthly $49 VIP signal subscription${user.includes("x") ? "" : ""}.`,
-          };
+      const user = String(parsed.messages?.find((m) => m.role === "user")?.content ?? "");
+      const isDraft = /first-contact email/i.test(system);
+      // Resolve which candidate this call concerns from its website line, the
+      // same way the real model would be told.
+      const site = findSite(user.match(/Official website:\s*(\S+)/)?.[1]) ?? SITE;
+
+      if (isDraft) {
+        const draft = {
+          subject: `Question about your ${site.name} signal service`,
+          body:
+            `Hi there,\n\nI noticed you publish a monthly subscription for your VIP signals at ${site.name}, including entry, stop and target levels.\n\n` +
+            "I work on Nomeriq, a white-label platform for businesses that sell trading signals. One operational question: how does your team currently deliver signal updates and later take-profit revisions to subscribers?\n\n" +
+            "Best,\nFounder\nNomeriq",
+        };
+        return send({
+          model: "deepseek-flash",
+          choices: [{ message: { role: "assistant", content: JSON.stringify(draft) } }],
+          usage: { prompt_tokens: 800, completion_tokens: 200 },
+        });
+      }
+
+      const qualifies = !site.excluded;
+      const data = {
+        isSignalProvider: qualifies,
+        sellsPaidSignals: qualifies,
+        categories: qualifies ? (site.categories ?? ["forex", "metals"]) : [],
+        businessName: site.name,
+        country: "Testland",
+        signalDescription: qualifies
+          ? "Sells monthly VIP signal subscriptions with entry, stop-loss and take-profit levels."
+          : null,
+        pricingDetails: qualifies
+          ? "$49 per month, published on the official pricing page."
+          : null,
+        evidenceSummary: qualifies
+          ? "The official pricing page shows a paid signal subscription and the contact page publishes a business email."
+          : null,
+        // Only ever an email that the fetched page actually published.
+        contactEmail: qualifies ? site.email : null,
+        emailSourceUrl: qualifies ? `https://${site.domain}/contact` : null,
+        exclusionReason: qualifies ? null : "broker or brokerage services",
+        confidence: qualifies ? 0.92 : 0.1,
+        observation: qualifies
+          ? "They publish a monthly VIP signal subscription with a public price."
+          : null,
+      };
       return send({
         model: "deepseek-flash",
         choices: [{ message: { role: "assistant", content: JSON.stringify(data) } }],
@@ -503,10 +576,120 @@ async function main() {
   assert(page.status === 200, `research page rendered (status ${page.status})`);
   assert(page.text.includes("Autonomous discovery"), "engine panel present");
 
+  /* ------------------- the brief's 10-lead acceptance bar ------------------- */
+
+  log(`The brief's acceptance bar: ${ACCEPTANCE_COUNT} genuinely new qualified leads`);
+  const bigTarget = await request("/api/research", {
+    method: "POST",
+    headers: { Origin: BASE },
+    body: JSON.stringify({
+      name: `E2E acceptance ${ACCEPTANCE_COUNT}`,
+      targetCount: ACCEPTANCE_COUNT,
+      categories: ["forex", "crypto", "metals"],
+      regions: "Worldwide",
+      requirements: "Paid trading-signal providers with a published business email.",
+      engine: "deepseek",
+      budgetUsd: 25,
+      concurrency: 4,
+    }),
+  });
+  assert(bigTarget.status === 200, `acceptance target created (status ${bigTarget.status})`);
+  const bigJob = bigTarget.json.data;
+  assert(
+    bigJob.targetCount === ACCEPTANCE_COUNT,
+    `target set to ${bigJob.targetCount} leads`,
+  );
+
+  await request(`/api/research/${bigJob.id}/engine`, {
+    method: "POST",
+    headers: { Origin: BASE },
+    body: JSON.stringify({ action: "start", runNow: true }),
+  });
+
+  // Drive the durable worker through repeated bounded ticks, exactly as cron
+  // would. Each invocation is independent, so this also re-proves resumability.
+  let bigState = (await request(`/api/research/${bigJob.id}/engine`)).json.data;
+  let rounds = 0;
+  while (bigState.job.verifiedCount < ACCEPTANCE_COUNT && rounds < 40) {
+    await request("/api/cron/research", {
+      headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+    });
+    bigState = (await request(`/api/research/${bigJob.id}/engine`)).json.data;
+    rounds += 1;
+  }
+
+  const bigJobFinal = bigState.job;
+  console.log(
+    `  verified=${bigJobFinal.verifiedCount} target=${bigJobFinal.targetCount} ` +
+      `status=${bigJobFinal.status} spent=$${bigJobFinal.spentUsd} rounds=${rounds}`,
+  );
+  assert(
+    bigJobFinal.verifiedCount === ACCEPTANCE_COUNT,
+    `${ACCEPTANCE_COUNT} genuinely new leads were verified and saved`,
+  );
+  assert(bigJobFinal.status === "completed", "the target completed when the bar was reached");
+  assert(bigJobFinal.remaining === 0, "remaining count is honestly zero");
+
+  // Every lead must be independently real: published email, its source, a
+  // website, and one unsent draft.
+  const accepted = await agent("search_prospects", { jobId: bigJob.id, limit: 100 });
+  const bigLeads = accepted.json.data.prospects ?? [];
+  assert(
+    bigLeads.length === ACCEPTANCE_COUNT,
+    `all ${ACCEPTANCE_COUNT} leads are readable with a jobId filter (${bigLeads.length})`,
+  );
+
+  const emails = new Set();
+  let draftTotal = 0;
+  for (const lead of bigLeads) {
+    if (!lead.contactEmail || !lead.contactEmailSource || !lead.websiteUrl) {
+      throw new Error(`lead ${lead.businessName} is missing a published email or source`);
+    }
+    if (lead.qualificationStatus !== "verified") {
+      throw new Error(`lead ${lead.businessName} is not verified`);
+    }
+    emails.add(String(lead.contactEmail).toLowerCase());
+    const draftResponse = await request(`/api/leads/${lead.id}/draft`);
+    const leadDraft = draftResponse.json?.data;
+    if (!leadDraft) throw new Error(`lead ${lead.businessName} has no first-contact draft`);
+    if (leadDraft.status === "sent") {
+      throw new Error(`draft for ${lead.businessName} was sent; it must only be saved`);
+    }
+    if (!leadDraft.sentAt) draftTotal += 1;
+  }
+  assert(emails.size === ACCEPTANCE_COUNT, `${ACCEPTANCE_COUNT} distinct inboxes, no merged identities`);
+  assert(draftTotal === ACCEPTANCE_COUNT, `${ACCEPTANCE_COUNT} personalized drafts await review`);
+
+  // The broker was discoverable and fetchable, but must never have qualified.
+  const broker = bigLeads.find((lead) => lead.businessName === BROKER_SITE.name);
+  assert(broker === undefined, "the broker decoy was rejected, not counted");
+
+  const bigUsage = bigState.usage;
+  assert(bigUsage.costUsd > 0, `real itemized cost recorded: $${bigUsage.costUsd}`);
+  assert(
+    Math.abs(bigState.budget.spentUsd - bigUsage.costUsd) < 1e-9,
+    "job spend equals the sum of recorded usage rows",
+  );
+  assert(
+    bigUsage.costUsd < bigState.budget.budgetUsd,
+    `spend $${bigUsage.costUsd} stayed inside the $${bigState.budget.budgetUsd} budget`,
+  );
+
+  // Nothing anywhere in this run may have been sent.
+  const anyConversation = await request(`/api/leads/${bigLeads[0].id}/conversation`);
+  assert(
+    anyConversation.json.data === null,
+    "no conversation exists for any acceptance lead, so no email was sent",
+  );
+
   console.log("\n================ E2E ENGINE VERIFICATION PASSED ================");
   console.log(
     `Real HTTP calls through the provider adapter — searches: ${stats.searches}, ` +
       `fetches: ${stats.fetches}, model calls: ${stats.chats}, model list: ${stats.models}`,
+  );
+  console.log(
+    `Acceptance bar reached over the real HTTP path: ${bigJobFinal.verifiedCount} verified leads, ` +
+      `${draftTotal} drafts, $${bigUsage.costUsd} recorded spend.`,
   );
   console.log("No email was sent. Every draft is awaiting founder review in Growth.");
 }
@@ -520,6 +703,12 @@ main()
   .finally(async () => {
     server?.kill("SIGINT");
     await new Promise((resolve) => setTimeout(resolve, 1500));
-    await fs.rm(PGLITE_DIR, { recursive: true, force: true }).catch(() => undefined);
+    // KEEP_E2E_DB=1 preserves the database so a failing reconciliation can be
+    // inspected directly instead of guessed at.
+    if (!process.env.KEEP_E2E_DB) {
+      await fs.rm(PGLITE_DIR, { recursive: true, force: true }).catch(() => undefined);
+    } else {
+      console.log(`\nDatabase kept at ${PGLITE_DIR} (KEEP_E2E_DB=1).`);
+    }
     process.exit(process.exitCode ?? 0);
   });

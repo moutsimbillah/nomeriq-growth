@@ -31,9 +31,16 @@ select conname from pg_constraint where conname = 'research_jobs_status_check';
 select column_name from information_schema.columns
   where table_name = 'research_candidates' and column_name in ('identity_key', 'prospect_id', 'draft_id');
 select indexname from pg_indexes where tablename = 'prospect_emails';
+-- Spend must be stored at the same scale as the usage rows it sums, or the
+-- budget gate drifts. Both must report 6.
+select table_name, numeric_scale from information_schema.columns
+  where (table_name = 'research_jobs' and column_name = 'spent_usd')
+     or (table_name = 'research_usage' and column_name = 'cost_usd');
 ```
 
-The last query must show `prospect_emails_business_email_unique` and must **not** show a global unique index on `normalized_email`. That partial index is what stops two unrelated businesses with a shared `info@` inbox from colliding.
+The index query must show `prospect_emails_business_email_unique` and must **not** show a global unique index on `normalized_email`. That partial index is what stops two unrelated businesses with a shared `info@` inbox from colliding.
+
+Migration `005_spend_precision.sql` widens `spent_usd`/`budget_usd` to six decimals and repairs any drift already recorded by re-deriving it from the real usage rows. It is additive and safe to re-run.
 
 ## 2. Configure Vercel
 
@@ -132,6 +139,7 @@ Then, in Growth:
 ### Cost and behaviour to expect
 
 - DeepSeek Search and Fetch are billed per **successful** request; chat is billed per token. Every operation is written to `research_usage` and the UI's spend figure is the sum of those rows.
+- Job spend is stored at full six-decimal precision, so the budget gate compares against the founder's limit exactly rather than drifting by accumulated rounding. If you are upgrading a database that ran before `005_spend_precision.sql`, that migration also repairs the recorded totals.
 - Verifications that fail are retried at most `MAX_CANDIDATE_ATTEMPTS` times, then recorded as failed. They never become leads.
 - A candidate claim lasts 15 minutes and then expires, so a worker that dies mid-candidate never blocks that business permanently.
 - Budget exhaustion pauses and preserves progress. Resuming after a top-up continues from the persisted candidate queue — it never restarts a finished job or recounts existing leads.

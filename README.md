@@ -175,8 +175,8 @@ npm test
 ```
 
 ```text
-Test Files  2 passed (2)
-     Tests  33 passed (33)
+Test Files  3 passed (3)
+     Tests  41 passed (41)
 ```
 
 The 14 workflow tests cover:
@@ -196,17 +196,22 @@ The 14 workflow tests cover:
 - archive + suppression behavior
 - generic inboxes (`info@`) not merging unrelated businesses, while a non-generic contact email still deduplicates
 
-The 18 engine tests cover:
+The 21 engine tests cover:
 
+- **reaching the brief's 10-lead acceptance bar** — exactly 10 verified leads, each with a published email, its source URL, a website and one unsent draft, with broker decoys rejected
+- **scaling the same target beyond 10** without duplicating earlier leads, and a completed target adding nothing on re-run
 - discovering, verifying, saving a lead with a draft, and recording itemized real cost
 - resuming an interrupted job from persisted state instead of restarting
 - never restarting a completed job from zero
 - duplicate-safe multi-worker claims, claim expiry and requeue
 - recording each engine operation as real DeepSeek usage with cost
+- honouring the `search_prospects` filters it advertises (`jobId`, `qualification`)
 - email extraction that refuses model-invented addresses
 - evidence rules that reject brokers, indicator/bot sellers and education-only sites
 - budget exhaustion pausing safely with progress preserved
 - terminal-state guards, cancellation, and honest `stopReason` reporting
+
+The 5 spend-reconciliation tests guard budget accuracy: job spend must stay exactly equal to the sum of its usage rows, including on a database that had already accumulated drift before migration 005, and that migration must apply idempotently.
 
 A separate end-to-end harness runs the real provider adapter over HTTP against a local DeepSeek stub, alongside the built app:
 
@@ -214,7 +219,7 @@ A separate end-to-end harness runs the real provider adapter over HTTP against a
 node scripts/e2e-engine.mjs
 ```
 
-It creates a target, starts it, drives the worker through the cron route, and asserts lead creation, draft creation, itemized usage, cron auth enforcement and that no email was sent.
+It creates a target, starts it, drives the worker through the cron route, and asserts lead creation, draft creation, itemized usage, cron auth enforcement and that no email was sent. It then runs the brief's acceptance bar itself: the stub serves 11 qualifying providers plus a broker, and the harness drives the real HTTP path to **10 verified leads with 10 drafts**, rejecting the broker and proving job spend equals the sum of its usage rows.
 
 The production build is also validated:
 
@@ -251,8 +256,8 @@ See [SECURITY.md](SECURITY.md). Important boundaries:
 
 ## Deliberate limits
 
-- The 100-lead target is a real target, not a fabricated count. Two providers were researched and seeded by hand; the autonomous engine is the mechanism that continues toward the target.
-- Live DeepSeek calls could not be exercised in the build environment because no `DEEPSEEK_API_KEY` was available. The engine is verified offline through an injected provider (18 tests) and end to end against a local DeepSeek HTTP stub using the real adapter (`scripts/e2e-engine.mjs`). Point it at a real key and the request shape is the only unverified variable.
+- The 100-lead target is a real target, not a fabricated count. The engine provably reaches the brief's 10-lead bar in the test suite and the target count scales from there; the local database additionally holds two hand-researched providers. Running to 100 against the live web needs live search spend.
+- Live DeepSeek calls could not be exercised in the build environment because no `DEEPSEEK_API_KEY` was available. The engine is verified offline through an injected provider (20 tests, including the 10-lead acceptance bar) and end to end against a local DeepSeek HTTP stub using the real adapter (`scripts/e2e-engine.mjs`). Point it at a real key and the request shape is the only unverified variable.
 - Live IONOS SMTP/IMAP cannot be verified without your real credentials; the adapters are implemented and the sandbox workflow is tested end to end.
 - IMAP attachment storage is capped; large attachments are recorded as metadata but not downloadable.
 - The engine is not a browser-driving agent. It researches through DeepSeek's official Search and Fetch tools; sites that require a logged-in browser session or heavy JavaScript rendering may not yield a published email.

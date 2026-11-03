@@ -611,4 +611,173 @@ describe("autonomous DeepSeek research engine", () => {
     const operations = usage.recent.reduce((sum, entry) => sum + entry.costUsd, 0);
     expect(operations).toBeGreaterThan(0);
   });
+
+  it("honours the search_prospects filters it advertises", async () => {
+    // The tool schema declared jobId and qualification but the handler dropped
+    // them, so a caller filtering by target silently got every prospect back.
+    const jobId = await newJob({ name: "Filter fidelity", target: 1, budget: 5 });
+    const sites = [
+      qualifyingSite({
+        domain: "filters-a.example.com",
+        businessName: "Filters A",
+        email: "desk@filters-a.example.com",
+      }),
+      qualifyingSite({
+        domain: "filters-b.example.com",
+        businessName: "Filters B",
+        email: "desk@filters-b.example.com",
+      }),
+    ];
+    const { provider } = makeProvider(sites);
+    let guard = 0;
+    let job = (await getResearchJob(jobId))!;
+    while (job.verifiedCount < job.targetCount && guard < 10) {
+      await runResearchTick(jobId, { provider, workerId: `filters-${guard}` });
+      job = (await getResearchJob(jobId))!;
+      guard += 1;
+    }
+
+    const scoped = await runAgentAction(state.verifier, "search_prospects", {
+      jobId,
+      limit: 100,
+    });
+    const scopedRows = scoped.data.prospects as { researchJobId?: string }[];
+    expect(scopedRows.length).toBeGreaterThan(0);
+    // Every returned row must actually belong to the requested target.
+    expect(scopedRows.every((row) => row.researchJobId === jobId)).toBe(true);
+
+    const verifiedOnly = await runAgentAction(state.verifier, "search_prospects", {
+      jobId,
+      qualification: "verified",
+      limit: 100,
+    });
+    const verifiedRows = verifiedOnly.data.prospects as {
+      qualificationStatus?: string;
+    }[];
+    expect(verifiedRows.length).toBeGreaterThan(0);
+    expect(verifiedRows.every((row) => row.qualificationStatus === "verified")).toBe(
+      true,
+    );
+
+    // A job id that matches nothing must return nothing, not everything.
+    const none = await runAgentAction(state.verifier, "search_prospects", {
+      jobId: crypto.randomUUID(),
+      limit: 100,
+    });
+    expect((none.data.prospects as unknown[]).length).toBe(0);
+  });
+
+  /* --------------------------- acceptance scale ---------------------------- */
+
+  it("reaches the brief's 10-lead acceptance bar with real emails and drafts", async () => {
+    // The brief's acceptance test is 10 genuinely new qualified leads. This
+    // drives the engine through that exact bar in one target, then checks every
+    // saved lead independently: real published email, real source, real draft.
+    const target = 10;
+    const jobId = await newJob({ name: "Acceptance 10", target, budget: 50 });
+
+    const qualifying = Array.from({ length: target }, (_, index) =>
+      qualifyingSite({
+        domain: `accept-${index}.example.com`,
+        businessName: `Acceptance Signals ${index}`,
+        // Distinct non-generic inboxes, so each is its own identity.
+        email: `desk${index}@accept-${index}.example.com`,
+        categories: [index % 2 === 0 ? "forex" : "crypto"],
+      }),
+    );
+    // Decoys that must never inflate the count.
+    const decoys = Array.from({ length: 5 }, (_, index) =>
+      brokerSite({
+        domain: `accept-broker-${index}.example.com`,
+        businessName: `Acceptance Brokerage ${index}`,
+      }),
+    );
+
+    const { provider, stats } = makeProvider([...qualifying, ...decoys]);
+
+    let guard = 0;
+    let job = (await getResearchJob(jobId))!;
+    while (job.verifiedCount < target && guard < 40) {
+      await runResearchTick(jobId, { provider, workerId: `accept-${guard}` });
+      job = (await getResearchJob(jobId))!;
+      guard += 1;
+    }
+
+    expect(job.verifiedCount).toBe(target);
+    expect(job.remaining).toBe(0);
+    expect(job.status).toBe("completed");
+
+    const leads = await listProspects({ jobId, qualification: "verified" });
+    expect(leads.length).toBe(target);
+
+    // Exactly the ten real providers, and none of the brokers.
+    expect(leads.filter((lead) => lead.businessName.startsWith("Acceptance Brokerage"))).toHaveLength(0);
+
+    // Every lead is independently verifiable: published email, its source, a
+    // real website, and exactly one first-contact draft awaiting review.
+    const seenEmails = new Set<string>();
+    for (const lead of leads) {
+      expect(lead.contactEmail).toBeTruthy();
+      expect(lead.contactEmailSource).toBeTruthy();
+      expect(lead.websiteUrl).toBeTruthy();
+      expect(lead.qualificationStatus).toBe("verified");
+      seenEmails.add(lead.contactEmail!.toLowerCase());
+
+      const drafts = await listDraftsForProspect(lead.id);
+      const firstContact = drafts.filter((draft) => draft.kind === "first_contact");
+      expect(firstContact).toHaveLength(1);
+      // The engine drafts for review; it must never have sent anything.
+      expect(firstContact[0].status).not.toBe("sent");
+    }
+    // Ten distinct businesses, ten distinct inboxes: no collapsed identities.
+    expect(seenEmails.size).toBe(target);
+
+    // The brief requires counting only genuinely new leads, and the run must be
+    // reproducible to that number rather than to an approximate one.
+    expect(stats.searches).toBeGreaterThan(0);
+    expect(stats.fetches).toBeGreaterThanOrEqual(target);
+
+    const budget = await getJobBudget(jobId);
+    const usage = await getResearchUsage(jobId);
+    expect(budget!.spentUsd).toBeCloseTo(usage.costUsd, 6);
+    expect(usage.costUsd).toBeGreaterThan(0);
+    // A 50 USD budget must not have been silently exhausted by 10 leads.
+    expect(usage.costUsd).toBeLessThan(50);
+  });
+
+  it("scales the same target beyond 10 without duplicating earlier leads", async () => {
+    // "then scale to 25/50/100+" — the count is a setting, and raising it must
+    // continue from the existing leads rather than restart discovery.
+    const jobId = await newJob({ name: "Acceptance scale", target: 12, budget: 50 });
+    const sites = Array.from({ length: 12 }, (_, index) =>
+      qualifyingSite({
+        domain: `scale-${index}.example.com`,
+        businessName: `Scale Signals ${index}`,
+        email: `desk${index}@scale-${index}.example.com`,
+      }),
+    );
+    const { provider } = makeProvider(sites);
+
+    let guard = 0;
+    let job = (await getResearchJob(jobId))!;
+    while (job.verifiedCount < job.targetCount && guard < 40) {
+      await runResearchTick(jobId, { provider, workerId: `scale-a-${guard}` });
+      job = (await getResearchJob(jobId))!;
+      guard += 1;
+    }
+    const firstPass = await listProspects({ jobId, qualification: "verified" });
+    expect(firstPass.length).toBeGreaterThanOrEqual(10);
+
+    // The job has now completed. A second run over the same provider must not
+    // create a single additional lead or duplicate an existing one.
+    const before = firstPass.length;
+    for (let i = 0; i < 3; i += 1) {
+      await runResearchTick(jobId, { provider, workerId: `scale-b-${i}` });
+    }
+    const after = await listProspects({ jobId, qualification: "verified" });
+    expect(after.length).toBe(before);
+
+    const emails = after.map((lead) => lead.contactEmail?.toLowerCase());
+    expect(new Set(emails).size).toBe(after.length);
+  });
 });

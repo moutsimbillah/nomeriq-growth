@@ -211,11 +211,18 @@ export async function runAgentAction(
       const status = typeof args.status === "string" ? args.status : undefined;
       const category =
         typeof args.category === "string" ? args.category : undefined;
+      // These two were declared in the tool schema but dropped here, so a caller
+      // filtering by target silently received every prospect in the database.
+      const jobId = typeof args.jobId === "string" ? args.jobId : undefined;
+      const qualification =
+        typeof args.qualification === "string" ? args.qualification : undefined;
       const limit = Math.min(Number(args.limit || 25), 100);
       const prospects = await listProspects({
         query,
         status,
         category,
+        jobId,
+        qualification,
         limit,
       });
       result = { prospects, count: prospects.length };
@@ -495,6 +502,11 @@ export const TOOL_DEFINITIONS = [
         query: { type: "string" },
         status: { type: "string" },
         category: { type: "string", enum: CATEGORIES.map((c) => c.value) },
+        jobId: { type: "string", description: "Restrict to one research target." },
+        qualification: {
+          type: "string",
+          enum: ["verified", "candidate", "rejected"],
+        },
         limit: { type: "integer", minimum: 1, maximum: 100 },
       },
       additionalProperties: false,

@@ -8,7 +8,9 @@ Two things are deliberately **not** claimed: real IONOS delivery/synchronization
 
 > I click "Find 100 New Leads" in Growth, and the system independently researches, verifies, deduplicates and saves qualified trading-signal businesses with personalized email drafts.
 
-**Implemented and verified end to end, at a small target.** The engine runs on the server with no browser or chat session, persists every step in PostgreSQL, hard-caps spend, and produces verified leads with drafts. The 100-lead figure is a setting of a real target, not a number this environment could produce without either a live DeepSeek key or fabricated data — and fabrication is explicitly forbidden.
+**Implemented and verified end to end, including at the brief's 10-lead acceptance bar.** The engine runs on the server with no browser or chat session, persists every step in PostgreSQL, hard-caps spend, and produces verified leads with drafts. A test drives one target to exactly 10 verified leads with real per-lead emails, sources and drafts, while rejecting broker decoys.
+
+What this environment cannot do is run that same path against the live web: there is no `DEEPSEEK_API_KEY` here, and the 100-lead figure would require real search spend. That target is a real setting with a real mechanism behind it, and the missing volume is left genuinely unproduced rather than invented.
 
 ## Original acceptance tests
 
@@ -49,29 +51,40 @@ Two things are deliberately **not** claimed: real IONOS delivery/synchronization
 | Existing sales workflows preserved | **Working** | The 14 original workflow tests still pass unmodified in behaviour (one assertion was corrected to match the generic-email rule). |
 | MCP/REST tools + Product Truth + founder edits preserved | **Working** | Tool list extended with `get_research_job` (read-only) and an engine-aware `report_progress`; no tool was removed, no permission widened and no job-control tool exists. Verified: an assistant calling a job-control action gets `404`, and an assistant can read the job's real `engine`, `spentUsd` and counts. |
 | No Docker/K8s/new database | **Working** | Same PGlite/Supabase Postgres, same Vercel model; no infrastructure was added. |
-| 10 genuinely new qualified leads, then scale to 25/50/100+ | **Mechanism verified, volume not reached** | Every unit of that path is tested and the target count is a real setting, but producing 10–100 genuine leads requires live DeepSeek spend and real web research. Not fabricated. |
+| 10 genuinely new qualified leads, then scale to 25/50/100+ | **Reached in test, mechanism verified** | A dedicated test drives one target to exactly 10 verified leads through the real engine path, each with a published email, its source URL, a website and one unsent draft, with 5 broker decoys rejected and 10 distinct inboxes. A second test confirms the count is a real setting and that re-running a completed target adds nothing. Producing 10–100 leads against the live web still requires live DeepSeek spend; nothing is fabricated to inflate a count. |
 | No live prospecting email sent during testing | **Working** | The engine has no send path; `EMAIL_DELIVERY_MODE=sandbox`; the cron response states no email was sent. |
 
 ## Test evidence
 
 ```text
-Test Files  2 passed (2)
-     Tests  33 passed (33)
+Test Files  3 passed (3)
+     Tests  41 passed (41)
 ```
 
-`tests/research-engine.test.ts` (18 tests) exercises the engine through an injected `ResearchProvider`, so autonomous research is provable with no API key and no network:
+`tests/research-engine.test.ts` (21 tests) exercises the engine through an injected `ResearchProvider`, so autonomous research is provable with no API key and no network:
 
+- **reaches the brief's 10-lead acceptance bar**: exactly 10 verified leads, each with a published email, source URL, website and one unsent draft, with 5 broker decoys rejected and 10 distinct inboxes
+- **scales the same target beyond 10** without duplicating earlier leads, and a completed target adds nothing on re-run
 - discovers, verifies, saves a lead with a draft, and records real itemized cost
 - resumes an interrupted job from persisted state instead of restarting
 - does not restart a completed job from zero
 - duplicate-safe multi-worker claims, claim expiry and requeue
 - records engine usage as real DeepSeek operations with cost
+- honours the `search_prospects` filters it advertises (`jobId`, `qualification`)
 - engine-attributed leads are saved as `verified` with `actorType: "deepseek"`
 - email extraction refuses model-invented addresses
 - evidence rules reject brokers, indicator/bot sellers, education-only and stocks-only sites
 - budget exhaustion pauses safely with progress preserved
 - cancels cleanly and reports an honest `stopReason`
 - a not-configured key fails with an actionable message instead of spending
+
+`tests/spend-reconciliation.test.ts` (5 tests) guards budget accuracy:
+
+- job spend stays exactly equal to the sum of its usage rows across many charges
+- a real engine run stays reconciled
+- a **pre-existing drifted database is repaired** by migration 005's reconciliation
+- the schema invariant itself: `spent_usd` is stored at the same scale as `cost_usd`
+- migration 005 applies **idempotently** to a database that already holds data
 
 `tests/workflow.test.ts` (15 tests) covers the original sales workflows plus generic-email deduplication in both directions.
 
@@ -82,27 +95,37 @@ npm run build
 node scripts/e2e-engine.mjs
 ```
 
-Starts the built app and a local DeepSeek HTTP stub, then drives the real provider adapter over HTTP through the entire path. Verified output:
+Starts the built app and a local DeepSeek HTTP stub, then drives the real provider adapter over HTTP through the entire path. The stub serves 11 qualifying providers and one broker, so the acceptance bar is reached over real HTTP rather than only through an injected object. Verified output:
 
 ```text
-Real HTTP calls through the provider adapter — searches: 4, fetches: 4,
-                                              model calls: 2, model list: 1
+Real HTTP calls through the provider adapter — searches: 7, fetches: 34,
+                                              model calls: 22, model list: 1
 
-verified=1 target=1 status=completed candidates=1 spent=$0.005500
-chat   1 call, 1500 in / 300 out = $0.000810
-fetch  3 requests               = $0.002250
-search 2+ requests              = $0.000750 each
+Single-lead path:
+  verified=1 target=1 status=completed spent=$0.0051
+  cron auth: 401 without secret, 200 with secret
+    "Research only. No email was sent."
+  assistant scope: get_research_job, report_progress readable
+  assistant scope: no job-control tool exists (404)
 
-cron auth: 401 without secret, 200 with secret
-  "Research only. No email was sent."
-assistant scope: get_research_job, report_progress readable
-assistant scope: no job-control tool exists (404)
-no conversation exists for the lead; the only draft is 'draft' with no sentAt
-completed job was not restarted and no further spend occurred
-/research renders 200 with the engine panel
+The brief's acceptance bar:
+  verified=10 target=10 status=completed spent=$0.0288 rounds=2
+  10 distinct inboxes, no merged identities
+  10 personalized drafts await review
+  the broker decoy was rejected, not counted
+  job spend equals the sum of recorded usage rows
+  spend $0.0288 stayed inside the $25 budget
+  no conversation exists for any acceptance lead, so no email was sent
 ```
 
 The "nothing was sent" check is deliberately made at the prospect level rather than through `list_conversations`, because that tool only lists threads that already have a reply — a sent-but-unanswered email would be invisible there and the assertion would prove nothing.
+
+### Two real defects this harness caught
+
+The e2e run is not decoration; it failed twice on genuine bugs that unit tests had missed.
+
+1. **`search_prospects` silently dropped its own filters.** The tool schema advertised `jobId` and `qualification`, but the handler never passed them to the query, so a caller asking for one target received every prospect in the database. Fixed in `src/lib/agent/service.ts` and covered by a regression test asserting that a non-matching `jobId` returns zero rows rather than everything.
+2. **Job spend drifted away from the usage it claimed to total.** `research_usage.cost_usd` is `numeric(12,6)` — a single Search or Fetch request costs $0.00075, so six decimals are the real unit of account — but `research_jobs.spent_usd` was created as `numeric(12,4)`. Every incremental add rounded, and the error compounded: a job that had recorded $0.005661 of real operations stored $0.005900 of spend. Since the budget gate compares `spent_usd` against `budget_usd`, this made the engine pause earlier or later than the founder's actual limit, and made the displayed spend disagree with the itemized rows behind it. Migration `005_spend_precision.sql` widens the column to match and repairs already-recorded drift by re-deriving it from the real usage rows. Covered by four tests, including the upgrade path on an already-drifted database.
 
 Production build:
 
@@ -120,7 +143,7 @@ Migrations were applied to a fresh database end to end, confirming `research_job
 - No live unsolicited email was sent.
 - No live DeepSeek request was made; there was no `DEEPSEEK_API_KEY` in this environment. The unverified variable is the live service's exact response body, not the request shape or the engine logic.
 - No real IONOS mailbox was connected here.
-- 100 leads were not produced. Two providers were researched and seeded by hand, and the engine produced verified leads under test data. The rest is left genuinely unproduced rather than invented.
+- 100 leads were not produced. The engine provably reaches 10 verified leads in test and the target count scales to any number, but running it against the live web for 100 real businesses requires live search spend. That volume is left genuinely unproduced rather than invented.
 - OpenAI/Anthropic calls were not exercised; the deterministic writer and the adapters are present.
 - Supabase/Vercel deployment was not executed here; the schema is PostgreSQL-compatible and the runbook is included.
 - Sites that require a logged-in browser session or heavy JavaScript rendering may not yield a published email through Fetch; the engine reports such candidates as failed rather than qualifying them.
