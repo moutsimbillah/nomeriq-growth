@@ -53,7 +53,9 @@ export function IntegrationsManager({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [assistant, setAssistant] = useState<"chatgpt" | "claude" | "custom">("claude");
+  const [assistant, setAssistant] = useState<
+    "chatgpt" | "claude" | "deepseek" | "hermes" | "custom"
+  >("claude");
   const [scopes, setScopes] = useState<string[]>(SCOPES.map(([scope]) => scope));
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -286,20 +288,22 @@ export function IntegrationsManager({
           <div>
             <label className="label">Assistant</label>
             <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-line bg-paper/50 p-1">
-              {(["claude", "chatgpt", "custom"] as const).map((value) => (
-                <button
-                  type="button"
-                  key={value}
-                  onClick={() => setAssistant(value)}
-                  className={`rounded-lg px-2 py-2 text-[10.5px] font-semibold capitalize transition ${
-                    assistant === value
-                      ? "bg-white text-ink shadow-sm"
-                      : "text-muted hover:text-ink"
-                  }`}
-                >
-                  {value}
-                </button>
-              ))}
+              {(["claude", "chatgpt", "deepseek", "hermes", "custom"] as const).map(
+                (value) => (
+                  <button
+                    type="button"
+                    key={value}
+                    onClick={() => setAssistant(value)}
+                    className={`rounded-lg px-2 py-2 text-[10.5px] font-semibold capitalize transition ${
+                      assistant === value
+                        ? "bg-white text-ink shadow-sm"
+                        : "text-muted hover:text-ink"
+                    }`}
+                  >
+                    {value}
+                  </button>
+                ),
+              )}
             </div>
           </div>
           <div>

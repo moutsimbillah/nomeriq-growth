@@ -25,6 +25,14 @@ export function WorkspaceSettingsForm({
   const [delay1, setDelay1] = useState(settings.followUpDelay1Days);
   const [delay2, setDelay2] = useState(settings.followUpDelay2Days);
   const [syncStaleHours, setSyncStaleHours] = useState(settings.syncStaleHours);
+  const [researchBudget, setResearchBudget] = useState(
+    settings.researchDefaultBudgetUsd,
+  );
+  const [researchConcurrency, setResearchConcurrency] = useState(
+    settings.researchDefaultConcurrency,
+  );
+  const [searchQps, setSearchQps] = useState(settings.deepseekSearchQps);
+  const [fetchQps, setFetchQps] = useState(settings.deepseekFetchQps);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -47,9 +55,13 @@ export function WorkspaceSettingsForm({
           followUpDelay2Days: delay2,
           syncStaleHours,
           timezone: settings.timezone,
+          researchDefaultBudgetUsd: researchBudget,
+          researchDefaultConcurrency: researchConcurrency,
+          deepseekSearchQps: searchQps,
+          deepseekFetchQps: fetchQps,
         },
       });
-      setNotice("Sending identity and follow-up rules saved.");
+      setNotice("Sending identity, follow-up rules and research limits saved.");
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not save settings.");
@@ -167,6 +179,67 @@ export function WorkspaceSettingsForm({
           {followUpMax === 0
             ? "Follow-ups are disabled. Replies and opt-outs still stop any existing prepared drafts."
             : `A thread waits ${delay1} day${delay1 === 1 ? "" : "s"} after contact, then ${delay2} day${delay2 === 1 ? "" : "s"} between later follow-ups. Any reply, opt-out or suppression stops the sequence.`}
+        </p>
+      </div>
+
+      <div className="rounded-xl border border-line p-4">
+        <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+          Autonomous research defaults
+        </div>
+        <p className="mt-1.5 text-[10.5px] leading-5 text-muted">
+          Applied to every new DeepSeek research target. Existing jobs keep the
+          budget they started with.
+        </p>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <label className="label">Default budget (USD)</label>
+            <input
+              type="number"
+              min={0.05}
+              max={1000}
+              step={0.5}
+              className="input"
+              value={researchBudget}
+              onChange={(event) => setResearchBudget(Number(event.target.value))}
+            />
+          </div>
+          <div>
+            <label className="label">Concurrency</label>
+            <input
+              type="number"
+              min={1}
+              max={8}
+              className="input"
+              value={researchConcurrency}
+              onChange={(event) => setResearchConcurrency(Number(event.target.value))}
+            />
+          </div>
+          <div>
+            <label className="label">Search QPS</label>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              className="input"
+              value={searchQps}
+              onChange={(event) => setSearchQps(Number(event.target.value))}
+            />
+          </div>
+          <div>
+            <label className="label">Fetch QPS</label>
+            <input
+              type="number"
+              min={1}
+              max={25}
+              className="input"
+              value={fetchQps}
+              onChange={(event) => setFetchQps(Number(event.target.value))}
+            />
+          </div>
+        </div>
+        <p className="mt-2 text-[10px] leading-4 text-faint">
+          DeepSeek&apos;s account limits are 100 QPS for Search and 25 QPS for Fetch.
+          Stay at or below them.
         </p>
       </div>
 

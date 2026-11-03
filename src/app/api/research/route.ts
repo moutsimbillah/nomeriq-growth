@@ -17,6 +17,9 @@ const schema = z.object({
   regions: z.string().optional(),
   requirements: z.string().optional(),
   notes: z.string().optional(),
+  engine: z.enum(["manual", "deepseek"]).optional(),
+  budgetUsd: z.number().positive().max(1000).optional(),
+  concurrency: z.number().int().min(1).max(8).optional(),
 });
 
 export async function GET() {

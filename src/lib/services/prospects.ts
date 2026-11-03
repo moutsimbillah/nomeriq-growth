@@ -5,6 +5,7 @@ import {
   asStringArray,
   domainFromUrl,
   isEmail,
+  isGenericBusinessEmail,
   iso,
   normalizeEmail,
   normalizeHandle,
@@ -53,9 +54,12 @@ export async function checkDuplicate(input: {
   const domainKeys = [domainFromUrl(input.websiteUrl)].filter(
     (value): value is string => Boolean(value),
   );
-  const emails = (input.emails ?? [])
+  const allEmails = (input.emails ?? [])
     .filter((value) => isEmail(value))
     .map(normalizeEmail);
+  // info@ / support@ can be shared by unrelated businesses. Match those only
+  // when another strong identity (domain, name, social) already matches.
+  const emails = allEmails.filter((value) => !isGenericBusinessEmail(value));
   const aliasKeys = [input.businessName, ...(input.aliases ?? [])]
     .filter((value): value is string => Boolean(value?.trim()))
     .map(normalizeName)
@@ -185,7 +189,7 @@ export interface SaveProspectInput {
   aliases?: string[];
   researchJobId?: string | null;
   qualificationStatus?: "candidate" | "verified";
-  actorType?: "founder" | "chatgpt" | "claude" | "api" | "seed";
+  actorType?: "founder" | "chatgpt" | "claude" | "deepseek" | "api" | "seed";
   actorUserId?: string | null;
   actorKeyId?: string | null;
 }

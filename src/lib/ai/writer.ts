@@ -1,12 +1,19 @@
 import type { ProductTruth, ProspectDetail } from "@/lib/types";
 import { truncate, wordCount } from "@/lib/utils";
 import type { WorkspaceSettings } from "@/lib/services/settings";
+import {
+  deepseekChatJson,
+  resolveDeepSeekConfig,
+  type DeepSeekConfig,
+  type DeepSeekUsage,
+} from "@/lib/deepseek/provider";
 
 export interface GeneratedDraft {
   subject: string;
   body: string;
   model: string | null;
   usedAi: boolean;
+  usage?: DeepSeekUsage | null;
 }
 
 const GENERIC_LOCALS = new Set([
@@ -294,18 +301,63 @@ function parseModelJson(text: string): { subject: string; body: string } {
   };
 }
 
+export interface DraftGenerationOptions {
+  provider?: "openai" | "anthropic" | "deepseek";
+  deepseekConfig?: DeepSeekConfig;
+}
+
 export async function generateFirstContact(
   prospect: ProspectDetail,
   truth: ProductTruth,
   settings: WorkspaceSettings,
+  options: DraftGenerationOptions = {},
 ): Promise<GeneratedDraft> {
   const fallback = deterministicFirstContact(prospect, settings);
-  const provider = (process.env.AI_PROVIDER || "none").toLowerCase();
+  const provider = (
+    options.provider ||
+    process.env.AI_PROVIDER ||
+    "none"
+  ).toLowerCase();
   if (provider === "none") return fallback;
 
   try {
     const system = aiSystemPrompt();
     const user = aiUserPrompt(prospect, truth);
+    if (provider === "deepseek") {
+      const resolved = options.deepseekConfig
+        ? { config: options.deepseekConfig, error: null }
+        : await resolveDeepSeekConfig();
+      if (!resolved.config) {
+        console.warn(resolved.error);
+        return fallback;
+      }
+      const ai = await deepseekChatJson<{ subject: string; body: string }>(
+        resolved.config,
+        { system, user, maxTokens: 700, temperature: 0.4 },
+      );
+      if (
+        typeof ai.data.subject !== "string" ||
+        typeof ai.data.body !== "string"
+      ) {
+        throw new Error("DeepSeek draft response did not contain subject and body.");
+      }
+      const body = [
+        ai.data.body.trim(),
+        "",
+        "Best,",
+        settings.senderSignature || "Founder\nNomeriq",
+      ].join("\n");
+      if (wordCount(body) < 20) {
+        return { ...fallback, usage: ai.usage };
+      }
+      return {
+        subject: ai.data.subject.trim().slice(0, 160),
+        body,
+        model: ai.usage.model,
+        usedAi: true,
+        usage: ai.usage,
+      };
+    }
     const result =
       provider === "openai"
         ? await callOpenAI(system, user)
@@ -325,6 +377,7 @@ export async function generateFirstContact(
       body,
       model: result.model,
       usedAi: true,
+      usage: null,
     };
   } catch (error) {
     console.error("AI draft generation failed; using deterministic writer.", error);

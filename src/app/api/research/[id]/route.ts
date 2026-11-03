@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const schema = z.object({
-  status: z.enum(["active", "paused", "completed", "archived"]),
+  status: z.enum(["active", "paused", "completed", "archived", "cancelled"]),
 });
 
 export async function PATCH(

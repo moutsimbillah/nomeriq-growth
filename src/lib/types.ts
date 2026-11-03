@@ -173,6 +173,16 @@ export interface DraftWarning {
   severity: "warning" | "info";
 }
 
+export type ResearchEngine = "manual" | "deepseek";
+export type ResearchJobStatus =
+  | "active"
+  | "paused"
+  | "completed"
+  | "archived"
+  | "cancelled"
+  | "failed"
+  | "budget_paused";
+
 export interface ResearchJob {
   id: string;
   name: string;
@@ -180,15 +190,107 @@ export interface ResearchJob {
   categories: Category[];
   regions: string;
   requirements: string;
-  status: "active" | "paused" | "completed" | "archived";
+  status: ResearchJobStatus;
+  engine: ResearchEngine;
   notes: string;
   createdAt: string;
+  startedAt: string | null;
   completedAt: string | null;
+  stoppedAt: string | null;
+  lastWorkerAt: string | null;
+  nextRunAt: string | null;
+  stopReason: string | null;
+  lastError: string | null;
+  budgetUsd: number;
+  spentUsd: number;
+  concurrency: number;
+  searchQueriesUsed: number;
+  candidatesDiscovered: number;
+  failedVerifications: number;
+  candidatesPending: number;
+  candidatesQualified: number;
   verifiedCount: number;
   emailCount: number;
   draftCount: number;
   duplicatesRejected: number;
   remaining: number;
+}
+
+export type ResearchCandidateStatus =
+  | "pending"
+  | "researching"
+  | "qualified"
+  | "duplicate"
+  | "rejected"
+  | "failed";
+
+export interface ResearchCandidate {
+  id: string;
+  jobId: string;
+  identityKey: string;
+  businessName: string | null;
+  websiteUrl: string | null;
+  domainKey: string | null;
+  sourceUrl: string | null;
+  searchQuery: string | null;
+  status: ResearchCandidateStatus;
+  /** The claim this worker holds while researching, when one is held. */
+  claimId?: string | null;
+  attempts: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ResearchUsageEntry {
+  operation: "search" | "fetch" | "chat" | "draft";
+  model: string | null;
+  requestCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  status: "success" | "error";
+  createdAt: string | null;
+}
+
+export interface ResearchUsageSummary {
+  costUsd: number;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  searches: number;
+  fetches: number;
+  modelCalls: number;
+  recent: ResearchUsageEntry[];
+}
+
+export interface ResearchRunSummary {
+  id: string;
+  workerId: string;
+  status: "running" | "completed" | "failed" | "interrupted" | "budget_paused" | "cancelled";
+  startedAt: string;
+  lastHeartbeatAt: string;
+  endedAt: string | null;
+  processed: number;
+  saved: number;
+  errors: number;
+  stopReason: string | null;
+}
+
+export interface ResearchTickResult {
+  jobId: string | null;
+  status: string;
+  processed: number;
+  saved: number;
+  duplicates: number;
+  rejected: number;
+  failed: number;
+  searches: number;
+  fetches: number;
+  modelCalls: number;
+  spentUsd: number;
+  stopReason: string | null;
+  notes: string[];
 }
 
 export interface CampaignSummary {

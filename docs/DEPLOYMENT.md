@@ -19,9 +19,21 @@ Apply the schema from this checkout before deploying:
 DATABASE_URL="postgresql://..." AUTO_MIGRATE=true npm run db:migrate
 ```
 
-You should see both migrations applied. Migration `002_supabase_security.sql` enables RLS and revokes `anon`/`authenticated` access when those Supabase roles exist. Growth never uses the Supabase Data API.
+You should see all migrations applied. Migration `002_supabase_security.sql` enables RLS and revokes `anon`/`authenticated` access when those Supabase roles exist, and `003`/`004` extend that parity to the research-engine tables. Growth never uses the Supabase Data API.
 
 Confirm in Supabase that the `public` schema tables exist and that the Data API is not needed. If the project exposes the Data API by default, keep the RLS/revoke migration in place or disable API exposure for the schema.
+
+Verify the engine tables and the research status constraint before going live:
+
+```sql
+select id from _migrations order by id;
+select conname from pg_constraint where conname = 'research_jobs_status_check';
+select column_name from information_schema.columns
+  where table_name = 'research_candidates' and column_name in ('identity_key', 'prospect_id', 'draft_id');
+select indexname from pg_indexes where tablename = 'prospect_emails';
+```
+
+The last query must show `prospect_emails_business_email_unique` and must **not** show a global unique index on `normalized_email`. That partial index is what stops two unrelated businesses with a shared `info@` inbox from colliding.
 
 ## 2. Configure Vercel
 
@@ -36,11 +48,15 @@ Set these environment variables in Production (and Preview if desired):
 | `DATABASE_POOL_MAX` | `5` |
 | `SESSION_SECRET` | 48+ random bytes, base64 |
 | `APP_ENCRYPTION_KEY` | Exactly 32 random bytes, base64 |
-| `CRON_SECRET` | Random secret used by the optional cron |
+| `CRON_SECRET` | Random secret used by the cron routes |
 | `EMAIL_DELIVERY_MODE` | `sandbox` for the first deploy |
 | `AI_PROVIDER` | `none`, `openai` or `anthropic` |
 | `OPENAI_API_KEY` | Optional |
 | `ANTHROPIC_API_KEY` | Optional |
+| `DEEPSEEK_API_KEY` | Optional; required for the autonomous research engine |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` |
+| `DEEPSEEK_MODEL` | `deepseek-flash` |
+| `RESEARCH_WORKER_MAX_JOBS` | `3` — due jobs advanced per cron invocation |
 | `AUTO_MIGRATE` | `false` |
 
 Do **not** use the local PGlite database in production. Vercel's filesystem is not a durable database. Growth intentionally fails with an actionable message if production starts without `DATABASE_URL`.
@@ -85,6 +101,53 @@ Authorization: Bearer $CRON_SECRET
 
 The route prepares follow-up **drafts only**. It never sends. Remove the cron from `vercel.json` if you prefer manual preparation. Vercel Hobby plans may have restrictions on cron frequency; run it manually or from another scheduler if needed.
 
+## 5b. Autonomous DeepSeek research engine
+
+`vercel.json` also schedules the research worker:
+
+```
+POST /api/cron/research   every 5 minutes
+Authorization: Bearer $CRON_SECRET
+```
+
+This is the process that makes research durable and independent of any browser or chat session. One invocation:
+
+1. Fails closed if `CRON_SECRET` is unset or the database is unreachable.
+2. Marks runs from crashed workers as interrupted so they do not look active.
+3. Advances at most `RESEARCH_WORKER_MAX_JOBS` due `deepseek` jobs by one bounded tick each.
+
+It **only researches**. The response body states that no email was sent, and there is no send path reachable from this route.
+
+Set the key one of two ways:
+
+- **Recommended for production:** `DEEPSEEK_API_KEY` in Vercel. The key stays server-side and is never returned to the browser.
+- **Runtime:** save it under **Settings → DeepSeek**, where it is encrypted with `APP_ENCRYPTION_KEY` and overrides the environment value. Use **Test connection** to verify the base URL and model.
+
+Then, in Growth:
+
+1. **Settings → Workspace** — set the default research budget, concurrency and the DeepSeek Search/Fetch QPS limits to match your plan's quota.
+2. **Research → New research target** — choose the **DeepSeek engine**, set the target count and a budget you are willing to spend. The target is created **paused**.
+3. Press **Start**. The engine will spend only against the recorded budget and will pause with `budget_paused` rather than overrun it.
+
+### Cost and behaviour to expect
+
+- DeepSeek Search and Fetch are billed per **successful** request; chat is billed per token. Every operation is written to `research_usage` and the UI's spend figure is the sum of those rows.
+- Verifications that fail are retried at most `MAX_CANDIDATE_ATTEMPTS` times, then recorded as failed. They never become leads.
+- A candidate claim lasts 15 minutes and then expires, so a worker that dies mid-candidate never blocks that business permanently.
+- Budget exhaustion pauses and preserves progress. Resuming after a top-up continues from the persisted candidate queue — it never restarts a finished job or recounts existing leads.
+- Vercel function duration is capped at 300s for this route. If a deployment's plan allows less, the worker still makes progress: each tick is bounded and the next invocation continues.
+
+### Verifying the engine without spending money
+
+`scripts/e2e-engine.mjs` starts the built app plus a local DeepSeek HTTP stub and drives the whole path through the real provider adapter:
+
+```bash
+npm run build
+node scripts/e2e-engine.mjs
+```
+
+It asserts lead creation, draft creation, itemized usage, cron authorization and that no email was sent. It never contacts `api.deepseek.com`.
+
 ## 6. Assistant access
 
 In **Settings → AI integrations**, create one key for ChatGPT and one for Claude.
@@ -109,7 +172,10 @@ After deployment:
 
 - `/api/health` returns `ok: true` and `database: reachable`.
 - Sign in and confirm the session cookie is `HttpOnly`, `Secure` and `SameSite=Lax`.
-- Confirm `/dashboard`, `/leads`, `/email`, `/product-truth` and `/settings` load with no 500s.
+- Confirm `/dashboard`, `/leads`, `/email`, `/product-truth`, `/research` and `/settings` load with no 500s.
+- **Settings → DeepSeek**: confirm the key status reads configured, run **Test connection**, and confirm the key itself is never displayed.
+- Trigger the research cron by hand with the wrong secret and confirm `401`; with the right secret and confirm `200` plus `note: "Research only. No email was sent."`.
+- Create a small DeepSeek target with a deliberately tiny budget, start it, and confirm the UI shows real spend, real candidate counters and a truthful **Why it stopped** line. Confirm a completed target does not restart from zero.
 - Create a sandbox mailbox if no IONOS account is connected yet.
 - Send one sandbox draft and simulate one reply. Confirm follow-ups cancel and the reply thread is preserved.
 - Test one real email to your own business address before contacting prospects.
@@ -118,4 +184,4 @@ After deployment:
 
 ## Cost shape
 
-The intended production setup is one Vercel project, one small Supabase database, one optional daily cron, and IONOS mail. No containers, queues, separate workers or paid enrichment API are required. AI usage is optional and pay-per-call.
+The intended production setup is one Vercel project, one small Supabase database, two cron entries (daily follow-ups at 07:00 UTC and the research worker every 5 minutes), and IONOS mail. No containers, queues, separate workers, Redis or paid enrichment API are required. DeepSeek usage is pay-per-call and hard-capped by each target's recorded budget.

@@ -14,6 +14,7 @@ import type { Draft, DraftWarning } from "@/lib/types";
 import { getProspect, getProspectEmails } from "./prospects";
 import { getProductTruth, getWorkspaceSettings } from "./settings";
 import { recordDraftSaved } from "./research";
+import { recordResearchUsage } from "./research-usage";
 import { mapDraft } from "./mappers";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -86,9 +87,10 @@ async function recipientIsVerified(
 
 export async function generateDraftForProspect(input: {
   prospectId: string;
-  actorType: "founder" | "chatgpt" | "claude" | "api" | "seed";
+  actorType: "founder" | "chatgpt" | "claude" | "deepseek" | "api" | "seed";
   actorUserId?: string | null;
   force?: boolean;
+  provider?: "openai" | "anthropic" | "deepseek";
 }): Promise<Draft> {
   const prospect = await getProspect(input.prospectId);
   if (!prospect) throw new AppError("Prospect not found.", 404);
@@ -121,7 +123,23 @@ export async function generateDraftForProspect(input: {
     getProductTruth(),
     getWorkspaceSettings(),
   ]);
-  const generated = await generateFirstContact(prospect, truth, settings);
+  const generated = await generateFirstContact(prospect, truth, settings, {
+    provider: input.provider,
+  });
+  if (generated.usage && prospect.researchJobId) {
+    await recordResearchUsage({
+      jobId: prospect.researchJobId,
+      operation: "draft",
+      model: generated.usage.model,
+      inputTokens: generated.usage.inputTokens,
+      cachedInputTokens: generated.usage.cachedInputTokens,
+      outputTokens: generated.usage.outputTokens,
+      costUsd: generated.usage.costUsd,
+      metadata: { prospectId: prospect.id, usedAi: generated.usedAi },
+    }).catch((error) => {
+      console.error("Could not record DeepSeek draft usage", error);
+    });
+  }
   const warnings = validateDraft({
     subject: generated.subject,
     body: generated.body,
@@ -228,7 +246,7 @@ export async function savePreparedFirstContactDraft(input: {
   prospectId: string;
   subject: string;
   body: string;
-  actorType: "chatgpt" | "claude" | "api";
+  actorType: "chatgpt" | "claude" | "deepseek" | "api";
   actorUserId?: string | null;
 }): Promise<{ draft: Draft; preserved: boolean }> {
   const prospect = await getProspect(input.prospectId);
@@ -319,7 +337,7 @@ export async function saveDraft(input: {
   subject: string;
   body: string;
   recipientEmail: string;
-  actorType: "founder" | "chatgpt" | "claude" | "api" | "seed";
+  actorType: "founder" | "chatgpt" | "claude" | "deepseek" | "api" | "seed";
   actorUserId?: string | null;
 }): Promise<Draft> {
   const draft = await getDraft(input.id);

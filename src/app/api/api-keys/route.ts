@@ -14,7 +14,8 @@ export const dynamic = "force-dynamic";
 
 const schema = z.object({
   name: z.string().min(2).max(100),
-  assistant: z.enum(["chatgpt", "claude", "custom"]),
+  // Must stay in step with the api_keys.assistant CHECK constraint.
+  assistant: z.enum(["chatgpt", "claude", "deepseek", "hermes", "custom"]),
   scopes: z.array(z.enum(ALLOWED_SCOPES)).optional(),
 });
 

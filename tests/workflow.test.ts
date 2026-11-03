@@ -224,7 +224,11 @@ describe("Nomeriq Growth end-to-end workflow", () => {
     expect(duplicate.duplicate).toBe(true);
     expect(duplicate.prospect.id).toBe(state.alphaId);
     expect(duplicate.matchedOn).toContain("official website domain");
-    expect(duplicate.matchedOn).toContain("contact email");
+
+    // A shared generic inbox must never be the reason two records merge, because
+    // unrelated businesses publish the same info@/hello@ address. The official
+    // domain is the identity that deduplicated this record.
+    expect(duplicate.matchedOn).not.toContain("contact email");
 
     const db = await getDb();
     await expect(
@@ -236,6 +240,41 @@ describe("Nomeriq Growth end-to-end workflow", () => {
 
     const job = await getResearchJob(state.jobId);
     expect(job?.duplicatesRejected).toBeGreaterThanOrEqual(1);
+  });
+
+  it("still deduplicates on a non-generic contact email", async () => {
+    // A business-specific address remains a strong identity signal.
+    const first = await saveProspect({
+      businessName: "Email Identity One",
+      websiteUrl: "https://email-identity-one.example.com",
+      categories: ["forex"],
+      signalDescription: "Paid forex signal subscriptions.",
+      email: "daniel@email-identity-one.example.com",
+      emailSourceUrl: "https://email-identity-one.example.com/contact",
+      sources: [source("https://email-identity-one.example.com/pricing")],
+      qualificationStatus: "verified",
+      actorType: "founder",
+      actorUserId: state.userId,
+    });
+    expect(first.created).toBe(true);
+
+    // Same person's address, a different site and name: must be caught.
+    const second = await saveProspect({
+      businessName: "A Completely Different Name",
+      websiteUrl: "https://unrelated-landing.example.net",
+      categories: ["forex"],
+      signalDescription: "Paid forex signal subscriptions.",
+      email: "daniel@email-identity-one.example.com",
+      emailSourceUrl: "https://unrelated-landing.example.net/contact",
+      sources: [source("https://unrelated-landing.example.net/pricing")],
+      qualificationStatus: "verified",
+      actorType: "founder",
+      actorUserId: state.userId,
+    });
+    expect(second.created).toBe(false);
+    expect(second.duplicate).toBe(true);
+    expect(second.prospect.id).toBe(first.prospect.id);
+    expect(second.matchedOn).toContain("contact email");
   });
 
   it("refuses a verified lead without a contact email or evidence", async () => {

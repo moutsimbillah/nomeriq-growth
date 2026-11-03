@@ -9,6 +9,7 @@ import {
   PenLine,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   UsersRound,
 } from "lucide-react";
 import {
@@ -20,10 +21,12 @@ import { getSyncHealth } from "@/lib/email/sync";
 import { getSendUsage } from "@/lib/services/email-sending";
 import { listApiKeys } from "@/lib/agent/apiKeys";
 import { listSuppressions } from "@/lib/services/suppressions";
+import { getDeepSeekPublicSettings } from "@/lib/deepseek/provider";
 import { Card, PageHeader, SectionHeading } from "@/components/ui";
 import { WorkspaceSettingsForm } from "@/components/settings/workspace-form";
 import { EmailAccountsManager } from "@/components/settings/email-accounts";
 import { IntegrationsManager } from "@/components/settings/integrations";
+import { DeepSeekSettings } from "@/components/settings/deepseek";
 import {
   BackupPanel,
   SuppressionManager,
@@ -77,13 +80,15 @@ function SettingsSection({
 }
 
 export default async function SettingsPage() {
-  const [settings, accounts, apiKeys, users, suppressions] = await Promise.all([
-    getWorkspaceSettings(),
-    listEmailAccounts(),
-    listApiKeys(),
-    listUsers(),
-    listSuppressions(),
-  ]);
+  const [settings, accounts, apiKeys, users, suppressions, deepseekSettings] =
+    await Promise.all([
+      getWorkspaceSettings(),
+      listEmailAccounts(),
+      listApiKeys(),
+      listUsers(),
+      listSuppressions(),
+      getDeepSeekPublicSettings(),
+    ]);
   const usages: Record<string, Awaited<ReturnType<typeof getSendUsage>>> = {};
   const health: Record<
     string,
@@ -127,6 +132,7 @@ export default async function SettingsPage() {
             {[
               ["outreach", "Sending identity", PenLine],
               ["email", "Email accounts", Mail],
+              ["deepseek", "DeepSeek engine", Sparkles],
               ["integrations", "AI integrations", Bot],
               ["team", "Users", UsersRound],
               ["privacy", "Privacy & data", ShieldCheck],
@@ -183,10 +189,20 @@ export default async function SettingsPage() {
           </SettingsSection>
 
           <SettingsSection
+            id="deepseek"
+            icon={Sparkles}
+            eyebrow="Autonomous discovery"
+            title="DeepSeek research provider"
+            description="The engine that finds, verifies and saves qualified trading-signal providers without an open browser or chat session. It never sends email."
+          >
+            <DeepSeekSettings initial={deepseekSettings} />
+          </SettingsSection>
+
+          <SettingsSection
             id="integrations"
             icon={Bot}
             eyebrow="MCP + REST"
-            title="ChatGPT and Claude"
+            title="ChatGPT, Claude and Hermes"
             description="One shared database, one skill document, separate scoped keys. Research assistants can save verified work but can never send email or alter system policy."
           >
             <IntegrationsManager

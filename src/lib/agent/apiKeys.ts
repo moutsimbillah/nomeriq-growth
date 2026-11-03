@@ -18,7 +18,7 @@ export type ApiScope = (typeof ALLOWED_SCOPES)[number];
 export interface ApiKeyIdentity {
   id: string;
   name: string;
-  assistant: "chatgpt" | "claude" | "custom";
+  assistant: "chatgpt" | "claude" | "deepseek" | "hermes" | "custom";
   scopes: string[];
 }
 
@@ -28,7 +28,7 @@ function hashKey(key: string): string {
 
 export async function createApiKey(input: {
   name: string;
-  assistant: "chatgpt" | "claude" | "custom";
+  assistant: "chatgpt" | "claude" | "deepseek" | "hermes" | "custom";
   scopes?: string[];
   userId: string;
 }): Promise<{ id: string; key: string; prefix: string }> {

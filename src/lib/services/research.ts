@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db/client";
 import { AppError, asStringArray, iso, number } from "@/lib/utils";
-import type { Category, ResearchJob } from "@/lib/types";
+import type { Category, ResearchJob, ResearchJobStatus } from "@/lib/types";
+import { getWorkspaceSettings } from "./settings";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -22,7 +23,13 @@ const JOB_SELECT = `
     ) AS draft_count,
     (SELECT count(*) FROM research_events ev
       WHERE ev.job_id = j.id AND ev.event_type = 'duplicate_rejected'
-    ) AS duplicates_rejected
+    ) AS duplicates_rejected,
+    (SELECT count(*) FROM research_candidates rc
+      WHERE rc.job_id = j.id AND rc.status IN ('pending', 'researching')
+    ) AS candidates_pending,
+    (SELECT count(*) FROM research_candidates rc
+      WHERE rc.job_id = j.id AND rc.status = 'qualified'
+    ) AS candidates_qualified
   FROM research_jobs j
 `;
 
@@ -36,10 +43,25 @@ function mapJob(row: any): ResearchJob {
     categories: asStringArray(row.categories) as Category[],
     regions: row.regions,
     requirements: row.requirements,
-    status: row.status,
+    status: row.status as ResearchJobStatus,
+    engine: row.engine === "deepseek" ? "deepseek" : "manual",
     notes: row.notes,
     createdAt: iso(row.created_at) ?? "",
+    startedAt: iso(row.started_at),
     completedAt: iso(row.completed_at),
+    stoppedAt: iso(row.stopped_at),
+    lastWorkerAt: iso(row.last_worker_at),
+    nextRunAt: iso(row.next_run_at),
+    stopReason: row.stop_reason,
+    lastError: row.last_error,
+    budgetUsd: number(row.budget_usd, 5),
+    spentUsd: number(row.spent_usd),
+    concurrency: number(row.concurrency, 1),
+    searchQueriesUsed: number(row.search_queries_used),
+    candidatesDiscovered: number(row.candidates_discovered),
+    failedVerifications: number(row.failed_verifications),
+    candidatesPending: number(row.candidates_pending),
+    candidatesQualified: number(row.candidates_qualified),
     verifiedCount: verified,
     emailCount: number(row.email_count),
     draftCount: number(row.draft_count),
@@ -72,6 +94,9 @@ export async function createResearchJob(input: {
   regions?: string;
   requirements?: string;
   notes?: string;
+  engine?: "manual" | "deepseek";
+  budgetUsd?: number;
+  concurrency?: number;
   userId: string;
 }): Promise<ResearchJob> {
   if (!input.name.trim()) throw new AppError("Give the research job a name.");
@@ -81,12 +106,25 @@ export async function createResearchJob(input: {
   if (!input.categories.length) {
     throw new AppError("Select at least one category for the research job.");
   }
+  const engine = input.engine ?? "manual";
+  // Defaults come from workspace settings so the founder configures budget and
+  // concurrency once instead of per job.
+  const settings = await getWorkspaceSettings();
+  const budgetUsd = input.budgetUsd ?? settings.researchDefaultBudgetUsd;
+  const concurrency = input.concurrency ?? settings.researchDefaultConcurrency;
+  if (!(budgetUsd > 0) || budgetUsd > 1_000) {
+    throw new AppError("Research budget must be between $0.01 and $1,000.");
+  }
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) {
+    throw new AppError("Research concurrency must be between 1 and 8.");
+  }
   const db = await getDb();
   const id = crypto.randomUUID();
   await db.query(
     `INSERT INTO research_jobs
-      (id, name, target_count, categories, regions, requirements, notes, created_by)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)`,
+      (id, name, target_count, categories, regions, requirements, notes, engine,
+       budget_usd, concurrency, status, created_by)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12)`,
     [
       id,
       input.name.trim(),
@@ -96,6 +134,10 @@ export async function createResearchJob(input: {
       input.requirements?.trim() ||
         "Commercial trading-signal providers only, with a publicly published business email and source URL.",
       input.notes?.trim() || "",
+      engine,
+      budgetUsd,
+      concurrency,
+      engine === "deepseek" ? "paused" : "active",
       input.userId,
     ],
   );
@@ -104,30 +146,104 @@ export async function createResearchJob(input: {
 
 export async function updateResearchJobStatus(
   id: string,
-  status: "active" | "paused" | "completed" | "archived",
+  status: "active" | "paused" | "completed" | "archived" | "cancelled",
 ): Promise<ResearchJob> {
   const db = await getDb();
+  const job = await getResearchJob(id);
+  if (!job) throw new AppError("Research job not found.", 404);
   const result = await db.query(
     `UPDATE research_jobs
-     SET status = $1, completed_at = $2, updated_at = now()
-     WHERE id = $3`,
-    [status, status === "completed" ? new Date().toISOString() : null, id],
+     SET status = $1,
+       completed_at = CASE
+         WHEN $1 = 'completed' THEN now()
+         WHEN $1 = 'active' THEN null
+         ELSE completed_at END,
+       stopped_at = CASE
+         WHEN $1 = 'active' THEN null
+         WHEN $1 IN ('cancelled', 'completed') THEN now()
+         ELSE stopped_at END,
+       stop_reason = CASE
+         WHEN $1 = 'cancelled' THEN coalesce(stop_reason, 'Cancelled by the founder.')
+         WHEN $1 = 'active' THEN null
+         ELSE stop_reason END,
+       started_at = CASE WHEN $1 = 'active' THEN coalesce(started_at, now()) ELSE started_at END,
+       next_run_at = CASE WHEN $1 = 'active' THEN now() ELSE next_run_at END,
+       updated_at = now()
+     WHERE id = $2`,
+    [status, id],
   );
   if (!result.rowCount) throw new AppError("Research job not found.", 404);
+  const eventType = eventTypeForStatus(status);
+  if (eventType) {
+    await recordResearchEvent(id, eventType, {
+      detail: { status },
+      actorType: "founder",
+    });
+  }
   return (await getResearchJob(id))!;
 }
 
+/**
+ * Maps a job status to an allowed `research_events.event_type`. The database
+ * constrains this column, so statuses without a dedicated event return null
+ * rather than an invalid type.
+ */
+function eventTypeForStatus(status: string): string | null {
+  if (status === "active") return "job_resumed";
+  if (status === "cancelled") return "job_cancelled";
+  if (status === "completed") return "job_completed";
+  if (status === "paused") return "job_paused";
+  return null;
+}
+
+export async function recordResearchEvent(
+  jobId: string,
+  eventType: string,
+  input: {
+    prospectId?: string | null;
+    detail?: Record<string, unknown>;
+    actorType?: string;
+  } = {},
+): Promise<void> {
+  const db = await getDb();
+  await db.query(
+    `INSERT INTO research_events
+      (id, job_id, event_type, prospect_id, detail, created_by_type)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
+    [
+      crypto.randomUUID(),
+      jobId,
+      eventType,
+      input.prospectId ?? null,
+      JSON.stringify(input.detail ?? {}),
+      input.actorType ?? "deepseek",
+    ],
+  );
+}
+
+/**
+ * Marks a job complete once its verified count reaches the target. Guarded on
+ * the current status so concurrent workers cannot double-complete a job or
+ * reopen a cancelled one.
+ */
 export async function refreshResearchJobStatus(jobId: string): Promise<void> {
   const job = await getResearchJob(jobId);
   if (!job) return;
   if (job.verifiedCount >= job.targetCount && job.status === "active") {
     const db = await getDb();
-    await db.query(
+    const result = await db.query(
       `UPDATE research_jobs
-       SET status = 'completed', completed_at = now(), updated_at = now()
+       SET status = 'completed', completed_at = now(), stopped_at = now(),
+         stop_reason = 'Target reached.', updated_at = now()
        WHERE id = $1 AND status = 'active'`,
       [jobId],
     );
+    if (result.rowCount) {
+      await recordResearchEvent(jobId, "job_completed", {
+        detail: { verifiedCount: job.verifiedCount, target: job.targetCount },
+        actorType: "deepseek",
+      });
+    }
   }
 }
 

@@ -62,12 +62,14 @@ async function findThreadConversation(
 async function findProspectByEmail(email: string) {
   const db = await getDb();
   const result = await db.query<any>(
-    `SELECT p.id FROM prospects p
+    `SELECT DISTINCT p.id FROM prospects p
      JOIN prospect_emails pe ON pe.prospect_id = p.id
-     WHERE pe.normalized_email = $1 AND p.archived_at IS NULL LIMIT 1`,
+     WHERE pe.normalized_email = $1 AND p.archived_at IS NULL LIMIT 2`,
     [normalizeEmail(email)],
   );
-  return result.rows[0]?.id ?? null;
+  // A shared generic inbox is ambiguous; only attach when exactly one prospect
+  // owns it. Thread headers and domain matching still resolve the rest.
+  return result.rows.length === 1 ? result.rows[0].id : null;
 }
 
 async function findProspectByDomain(domain: string | null) {

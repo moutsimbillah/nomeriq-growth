@@ -15,6 +15,7 @@ import type {
   ProspectSource,
   ProspectSummary,
   ProductTruth,
+  ResearchCandidate,
 } from "@/lib/types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -140,4 +141,22 @@ export function mapProductTruth(row: any): ProductTruth {
 
 export function mapClassification(value: string): Classification {
   return value as Classification;
+}
+
+export function mapResearchCandidate(row: any): ResearchCandidate {
+  return {
+    id: row.id,
+    jobId: row.job_id,
+    identityKey: row.identity_key,
+    businessName: row.business_name,
+    websiteUrl: row.website_url,
+    domainKey: row.domain_key,
+    sourceUrl: row.source_url,
+    searchQuery: row.search_query,
+    status: row.status,
+    attempts: number(row.attempts),
+    lastError: row.last_error,
+    createdAt: iso(row.created_at) ?? new Date().toISOString(),
+    updatedAt: iso(row.updated_at) ?? new Date().toISOString(),
+  };
 }

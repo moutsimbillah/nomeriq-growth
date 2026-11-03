@@ -2,7 +2,16 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ArrowRight, LoaderCircle, Pause, Play, Plus, Target } from "lucide-react";
+import {
+  ArrowRight,
+  LoaderCircle,
+  Pause,
+  Play,
+  Plus,
+  Sparkles,
+  Target,
+  Users,
+} from "lucide-react";
 import { CATEGORIES, type Category, type ResearchJob } from "@/lib/types";
 import { apiRequest, InlineError, Modal, SubmitBar } from "./client-ui";
 import { Notice } from "./ui";
@@ -11,13 +20,17 @@ const TARGET_PRESETS = [25, 50, 100, 250];
 
 export function NewResearchButton({
   defaultOpen = false,
+  className,
 }: {
   defaultOpen?: boolean;
+  className?: string;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(defaultOpen);
+  const [engine, setEngine] = useState<"deepseek" | "manual">("deepseek");
   const [name, setName] = useState("Batch 02 — new commercial signal providers");
   const [target, setTarget] = useState(100);
+  const [budget, setBudget] = useState(5);
   const [categories, setCategories] = useState<Category[]>([
     "forex",
     "metals",
@@ -44,6 +57,8 @@ export function NewResearchButton({
           regions,
           requirements,
           notes: "",
+          engine,
+          ...(engine === "deepseek" ? { budgetUsd: Number(budget) } : {}),
         },
       });
       setOpen(false);
@@ -59,7 +74,7 @@ export function NewResearchButton({
     <>
       <button
         type="button"
-        className="btn-primary"
+        className={className ?? "btn-primary"}
         onClick={() => setOpen(true)}
       >
         <Plus size={14} />
@@ -73,6 +88,48 @@ export function NewResearchButton({
         width="lg"
       >
         <div className="space-y-5">
+          <div>
+            <div className="label">Who does the research</div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setEngine("deepseek")}
+                className={`rounded-xl border px-3.5 py-3 text-left transition ${
+                  engine === "deepseek"
+                    ? "border-forest/30 bg-lime/20"
+                    : "border-line bg-white/50 hover:border-ink/25"
+                }`}
+              >
+                <div className="flex items-center gap-2 text-[12px] font-semibold text-ink">
+                  <Sparkles size={13} className="text-forest" />
+                  DeepSeek engine
+                </div>
+                <p className="mt-1 text-[10.5px] leading-4 text-muted">
+                  Growth runs the search, verification and drafting itself. Start it
+                  and close the tab.
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => setEngine("manual")}
+                className={`rounded-xl border px-3.5 py-3 text-left transition ${
+                  engine === "manual"
+                    ? "border-forest/30 bg-lime/20"
+                    : "border-line bg-white/50 hover:border-ink/25"
+                }`}
+              >
+                <div className="flex items-center gap-2 text-[12px] font-semibold text-ink">
+                  <Users size={13} className="text-muted" />
+                  ChatGPT / Claude session
+                </div>
+                <p className="mt-1 text-[10.5px] leading-4 text-muted">
+                  You run a connected assistant against the same database through MCP
+                  or the REST API.
+                </p>
+              </button>
+            </div>
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-[1fr_140px]">
             <div>
               <label className="label" htmlFor="job-name">
@@ -117,6 +174,29 @@ export function NewResearchButton({
               </button>
             ))}
           </div>
+
+          {engine === "deepseek" && (
+            <div className="rounded-xl border border-line bg-paper/60 p-3.5">
+              <label className="label" htmlFor="job-budget">
+                DeepSeek spending limit (USD)
+              </label>
+              <input
+                id="job-budget"
+                type="number"
+                min={0.05}
+                max={1000}
+                step={0.5}
+                className="input"
+                value={budget}
+                onChange={(event) => setBudget(Number(event.target.value))}
+              />
+              <p className="mt-2 text-[10px] leading-4 text-faint">
+                The engine pauses safely when this is reached and keeps all progress.
+                Search and Fetch bill at $0.75 per 1,000 successful requests; model
+                cost depends on tokens.
+              </p>
+            </div>
+          )}
 
           <div>
             <div className="label">Markets in scope</div>
@@ -177,10 +257,20 @@ export function NewResearchButton({
             />
           </div>
 
-          <Notice tone="info">
-            Growth does not pretend this runs on its own. The target stays
-            resumable while a connected ChatGPT/Claude session, or the founder,
-            does the actual public research.
+          <Notice tone={engine === "deepseek" ? "success" : "info"}>
+            {engine === "deepseek" ? (
+              <>
+                The engine searches, fetches official pages, verifies a paid signal
+                offering, confirms a published contact email and saves a personalized
+                draft. It never sends email — every draft waits for your review.
+              </>
+            ) : (
+              <>
+                Growth does not pretend this runs on its own. The target stays
+                resumable while a connected ChatGPT/Claude session, or the founder,
+                does the actual public research.
+              </>
+            )}
           </Notice>
           <InlineError>{error}</InlineError>
           <SubmitBar>

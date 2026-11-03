@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AppError, isEmail, truncate } from "@/lib/utils";
 import { CATEGORIES } from "@/lib/types";
-import type { Category } from "@/lib/types";
+import type { Category, ResearchJob } from "@/lib/types";
 import {
   checkDuplicate,
   getProspect,
@@ -78,6 +78,39 @@ const saveDraftSchema = z.object({
   body: z.string().min(20),
 });
 
+const getResearchJobSchema = z.object({
+  jobId: z.string().uuid(),
+});
+
+/**
+ * Shape one research job for assistants. Engine fields are included so an
+ * assistant can see real spend and the real reason a job stopped instead of
+ * guessing from chat memory.
+ */
+function describeResearchJobForAgent(job: ResearchJob) {
+  return {
+    id: job.id,
+    name: job.name,
+    status: job.status,
+    engine: job.engine,
+    target: job.targetCount,
+    newVerifiedLeads: job.verifiedCount,
+    publishedContactEmails: job.emailCount,
+    draftsSaved: job.draftCount,
+    duplicatesRejected: job.duplicatesRejected,
+    remaining: job.remaining,
+    candidatesPending: job.candidatesPending,
+    candidatesQualified: job.candidatesQualified,
+    failedVerifications: job.failedVerifications,
+    searchQueriesUsed: job.searchQueriesUsed,
+    budgetUsd: job.budgetUsd,
+    spentUsd: job.spentUsd,
+    stopReason: job.stopReason,
+    lastError: job.lastError,
+    lastWorkerAt: job.lastWorkerAt,
+  };
+}
+
 const duplicateSchema = z.object({
   businessName: z.string().optional().nullable(),
   websiteUrl: z.string().optional().nullable(),
@@ -98,9 +131,12 @@ function failValidation(error: z.ZodError): never {
   );
 }
 
-function actorTypeFor(key: ApiKeyIdentity): "chatgpt" | "claude" | "api" {
+function actorTypeFor(
+  key: ApiKeyIdentity,
+): "chatgpt" | "claude" | "deepseek" | "api" {
   if (key.assistant === "chatgpt") return "chatgpt";
   if (key.assistant === "claude") return "claude";
+  if (key.assistant === "deepseek") return "deepseek";
   return "api";
 }
 
@@ -141,7 +177,20 @@ export async function runAgentAction(
     case "list_research_jobs": {
       requireScope(key, "research:read");
       const jobs = await listResearchJobs();
-      result = { jobs };
+      result = {
+        jobs: jobs.map(describeResearchJobForAgent),
+        engineNote:
+          "Jobs with engine \"deepseek\" are researched by Growth itself on the server, without a browser or chat session. Their status, spend and stopReason are the real recorded values. Research assistants cannot start, pause, resume or cancel a job; the founder controls that in Growth.",
+      };
+      break;
+    }
+    case "get_research_job": {
+      requireScope(key, "research:read");
+      const parsed = getResearchJobSchema.safeParse(args);
+      if (!parsed.success) failValidation(parsed.error);
+      const job = await getResearchJob(parsed.data.jobId);
+      if (!job) throw new AppError("Research job not found.", 404);
+      result = { job: describeResearchJobForAgent(job) };
       break;
     }
     case "report_progress": {
@@ -150,17 +199,9 @@ export async function runAgentAction(
       const overview = await getResearchOverview();
       result = {
         overview,
-        jobs: jobs.map((job) => ({
-          id: job.id,
-          name: job.name,
-          status: job.status,
-          target: job.targetCount,
-          newVerifiedLeads: job.verifiedCount,
-          publishedContactEmails: job.emailCount,
-          draftsSaved: job.draftCount,
-          duplicatesRejected: job.duplicatesRejected,
-          remaining: job.remaining,
-        })),
+        jobs: jobs.map(describeResearchJobForAgent),
+        note:
+          "These counts come from the database. Report them even when they fall short of the target, and include the recorded reason a job is not running.",
       };
       break;
     }
@@ -410,7 +451,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: "get_instructions",
     description:
-      "Read the one shared Nomeriq Growth research, qualification and outreach skill used by ChatGPT and Claude.",
+      "Read the one shared Nomeriq Growth research, qualification and outreach skill used by every assistant and by the autonomous DeepSeek engine.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -421,14 +462,27 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "list_research_jobs",
-    description: "List persistent research targets and their remaining database-derived counts.",
+    description:
+      "List persistent research targets with real database-derived counts, engine, spend and stop reason. DeepSeek jobs run server-side; only the founder starts or stops them.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    readOnly: true,
+  },
+  {
+    name: "get_research_job",
+    description:
+      "Read one research target, including whether the autonomous DeepSeek engine owns it, its real spend and the recorded reason it stopped.",
+    inputSchema: {
+      type: "object",
+      properties: { jobId: { type: "string" } },
+      required: ["jobId"],
+      additionalProperties: false,
+    },
     readOnly: true,
   },
   {
     name: "report_progress",
     description:
-      "Report target, new verified leads, published emails, drafts, duplicates rejected and remaining counts from the database.",
+      "Report target, new verified leads, published emails, drafts, duplicates rejected, remaining and recorded stop reason from the database.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     readOnly: true,
   },

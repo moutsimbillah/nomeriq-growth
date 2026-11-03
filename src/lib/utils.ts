@@ -17,6 +17,40 @@ export function normalizeEmail(value: string): string {
   return value.trim().toLowerCase();
 }
 
+const GENERIC_EMAIL_LOCALS = new Set([
+  "info",
+  "support",
+  "contact",
+  "sales",
+  "hello",
+  "admin",
+  "team",
+  "office",
+  "help",
+  "service",
+  "services",
+  "enquiries",
+  "enquiry",
+  "marketing",
+  "billing",
+  "press",
+  "careers",
+  "jobs",
+  "general",
+  "mail",
+  "inquiries",
+]);
+
+/**
+ * Generic inboxes can be shared by unrelated businesses and must not, by
+ * themselves, merge two prospect records. Website/name/thread identity still
+ * deduplicates the same business.
+ */
+export function isGenericBusinessEmail(email: string): boolean {
+  const local = normalizeEmail(email).split("@")[0] ?? "";
+  return GENERIC_EMAIL_LOCALS.has(local);
+}
+
 export function domainFromUrl(value: string | null | undefined): string | null {
   if (!value?.trim()) return null;
   try {

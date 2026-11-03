@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/follow-ups",
       "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/research",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

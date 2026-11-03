@@ -18,6 +18,12 @@ const schema = z.object({
   followUpDelay2Days: z.number().int().min(1).max(60).optional(),
   syncStaleHours: z.number().int().min(1).max(720).optional(),
   timezone: z.string().min(1).max(100).optional(),
+  // Autonomous research defaults. Bounded to match the workspace_settings
+  // CHECK constraints so an invalid value fails here with a clear message.
+  researchDefaultBudgetUsd: z.number().positive().max(1000).optional(),
+  researchDefaultConcurrency: z.number().int().min(1).max(8).optional(),
+  deepseekSearchQps: z.number().int().min(1).max(100).optional(),
+  deepseekFetchQps: z.number().int().min(1).max(25).optional(),
 });
 
 export async function PUT(request: Request) {

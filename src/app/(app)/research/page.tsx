@@ -15,6 +15,8 @@ import {
   listResearchJobs,
 } from "@/lib/services/research";
 import { listEmailAccounts } from "@/lib/email/accounts";
+import { getDeepSeekPublicSettings } from "@/lib/deepseek/provider";
+import { listResearchRuns } from "@/lib/services/research-runs";
 import {
   Card,
   CategoryList,
@@ -26,6 +28,7 @@ import {
 } from "@/components/ui";
 import { CopyButton } from "@/components/client-ui";
 import { JobStatusButton, NewResearchButton } from "@/components/research-actions";
+import { ResearchEnginePanel } from "@/components/research-engine";
 import { relativeTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -36,16 +39,24 @@ export default async function ResearchPage({
   searchParams: Promise<{ new?: string }>;
 }) {
   const params = await searchParams;
-  const [jobs, events, accounts] = await Promise.all([
+  const [jobs, events, accounts, deepseek] = await Promise.all([
     listResearchJobs(),
     getRecentResearchEvents(14),
     listEmailAccounts(),
+    getDeepSeekPublicSettings(),
   ]);
   const activeJobs = jobs.filter((job) => job.status !== "archived");
   const totalTarget = activeJobs.reduce((sum, job) => sum + job.targetCount, 0);
   const totalVerified = activeJobs.reduce((sum, job) => sum + job.verifiedCount, 0);
   const totalDrafts = activeJobs.reduce((sum, job) => sum + job.draftCount, 0);
   const primaryJob = activeJobs.find((job) => job.status === "active") ?? activeJobs[0];
+  const engineJob =
+    activeJobs.find((job) => job.engine === "deepseek" && job.status === "active") ??
+    activeJobs.find((job) => job.engine === "deepseek");
+  const engineSpend = activeJobs
+    .filter((job) => job.engine === "deepseek")
+    .reduce((sum, job) => sum + job.spentUsd, 0);
+  const recentRuns = engineJob ? await listResearchRuns(engineJob.id, 5) : [];
 
   const brief = primaryJob
     ? `Research job: ${primaryJob.name}\nJob ID: ${primaryJob.id}\nTarget: ${primaryJob.targetCount} verified commercial trading-signal providers\nAlready verified: ${primaryJob.verifiedCount}\nDrafts saved: ${primaryJob.draftCount}\nRemaining: ${primaryJob.remaining}\nMarkets: ${primaryJob.categories.join(", ")}\nRegions: ${primaryJob.regions}\n\nBefore doing anything, call get_instructions and read_product_truth through Nomeriq Growth. Then continue this exact target from the remaining count. For every candidate, verify paid signals in forex, metals, crypto, indices, or commodities; find an official website and a publicly published business email with its source URL; call check_duplicate against the entire Growth database; then save_prospect and save_draft. Never guess an email, never duplicate an existing business, and never send email.`
@@ -56,7 +67,7 @@ export default async function ResearchPage({
       <PageHeader
         eyebrow="Persistent lead discovery"
         title="The search, made repeatable."
-        description="Define a target once. ChatGPT and Claude research against the same database, return existing records instead of duplicates, and leave every verified lead with a saved draft."
+        description="Start autonomous DeepSeek discovery that runs on the server without an open browser or chat session. ChatGPT and Claude research the same database, and every verified lead keeps a saved draft."
         actions={
           <>
             {brief && (
@@ -70,6 +81,65 @@ export default async function ResearchPage({
           </>
         }
       />
+
+      {engineJob ? (
+        <section className="mb-4">
+          <ResearchEnginePanel job={engineJob} configured={deepseek.configured} />
+          {recentRuns.length > 0 && (
+            <Card className="mt-3 p-4">
+              <SectionHeading
+                title="Worker runs"
+                description="Each run is a real, bounded worker invocation recorded in the database."
+              />
+              <div className="mt-3 space-y-1.5">
+                {recentRuns.map((run) => (
+                  <div
+                    key={run.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-paper/50 px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${
+                          run.status === "running"
+                            ? "bg-lime"
+                            : run.status === "completed"
+                              ? "bg-forest"
+                              : "bg-amber"
+                        }`}
+                      />
+                      <span className="font-mono text-[10px] text-muted">
+                        {run.workerId}
+                      </span>
+                      <span className="text-[9.5px] uppercase tracking-[0.1em] text-faint">
+                        {run.status}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-[9.5px] text-faint">
+                      <span>{run.processed} processed</span>
+                      <span>{run.saved} saved</span>
+                      {run.errors > 0 && <span className="text-rust">{run.errors} errors</span>}
+                      <span>{relativeTime(run.startedAt)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </section>
+      ) : (
+        <section className="mb-4">
+          <Notice
+            tone="info"
+            title="Autonomous discovery is not running yet."
+            action={<NewResearchButton className="btn-secondary btn-sm shrink-0" />}
+          >
+            Create a DeepSeek research target to let Growth find, verify and save
+            qualified trading-signal providers on its own. Nothing is sent to those
+            businesses — drafts wait for your review.
+            {engineSpend > 0 && ` Recorded DeepSeek spend so far: $${engineSpend.toFixed(4)}.`}
+          </Notice>
+        </section>
+      )}
 
       {activeJobs.length === 0 ? (
         <Card>
@@ -131,6 +201,14 @@ export default async function ResearchPage({
                           <span className="text-[9.5px] text-faint">
                             {job.regions}
                           </span>
+                          {job.engine === "deepseek" && (
+                            <>
+                              <span className="text-[9px] text-faint">·</span>
+                              <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-forest">
+                                DeepSeek
+                              </span>
+                            </>
+                          )}
                         </div>
                         <h2 className="mt-2 text-[18px] font-bold tracking-[-0.02em] text-ink">
                           {job.name}
@@ -148,14 +226,24 @@ export default async function ResearchPage({
                     </div>
 
                     <div className="mt-5 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-5">
-                      {[
-                        ["Target", job.targetCount],
-                        ["Verified", job.verifiedCount],
-                        ["Emails", job.emailCount],
-                        ["Drafts", job.draftCount],
-                        ["Duplicates", job.duplicatesRejected],
-                      ].map(([label, value]) => (
-                        <div key={label}>
+                      {(
+                        job.engine === "deepseek"
+                          ? [
+                              ["Target", job.targetCount],
+                              ["Verified", job.verifiedCount],
+                              ["Candidates", job.candidatesDiscovered],
+                              ["Duplicates", job.duplicatesRejected],
+                              ["Spend", `$${job.spentUsd.toFixed(4)}`],
+                            ]
+                          : [
+                              ["Target", job.targetCount],
+                              ["Verified", job.verifiedCount],
+                              ["Emails", job.emailCount],
+                              ["Drafts", job.draftCount],
+                              ["Duplicates", job.duplicatesRejected],
+                            ]
+                      ).map(([label, value]) => (
+                        <div key={String(label)}>
                           <div className="text-[18px] font-bold leading-none text-ink">
                             {value}
                           </div>

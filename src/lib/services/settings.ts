@@ -13,6 +13,10 @@ export interface WorkspaceSettings {
   followUpDelay2Days: number;
   syncStaleHours: number;
   timezone: string;
+  researchDefaultBudgetUsd: number;
+  researchDefaultConcurrency: number;
+  deepseekSearchQps: number;
+  deepseekFetchQps: number;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -72,6 +76,10 @@ export async function getWorkspaceSettings(): Promise<WorkspaceSettings> {
     followUpDelay2Days: number(row.follow_up_delay_2_days, 7),
     syncStaleHours: number(row.sync_stale_hours, 24),
     timezone: row.timezone,
+    researchDefaultBudgetUsd: number(row.research_default_budget_usd, 5),
+    researchDefaultConcurrency: number(row.research_default_concurrency, 1),
+    deepseekSearchQps: number(row.deepseek_search_qps, 2),
+    deepseekFetchQps: number(row.deepseek_fetch_qps, 1),
   };
 }
 
@@ -105,7 +113,11 @@ export async function updateWorkspaceSettings(
        follow_up_delay_2_days = $7,
        sync_stale_hours = $8,
        timezone = $9,
-       updated_by = $10,
+       research_default_budget_usd = $10,
+       research_default_concurrency = $11,
+       deepseek_search_qps = $12,
+       deepseek_fetch_qps = $13,
+       updated_by = $14,
        updated_at = now()
      WHERE id = 'default'`,
     [
@@ -118,6 +130,10 @@ export async function updateWorkspaceSettings(
       next.followUpDelay2Days,
       next.syncStaleHours,
       next.timezone,
+      next.researchDefaultBudgetUsd,
+      next.researchDefaultConcurrency,
+      next.deepseekSearchQps,
+      next.deepseekFetchQps,
       userId,
     ],
   );
