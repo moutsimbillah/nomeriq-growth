@@ -177,8 +177,8 @@ npm test
 The integration and engine suites use a temporary PGlite database and the sandbox mailbox, with no network access: the engine is exercised through an injected `ResearchProvider`, so autonomous research is provable offline without an API key.
 
 ```text
-Test Files  8 passed (8)
-     Tests  86 passed (86)
+Test Files  12 passed (12)
+     Tests  117 passed (117)
 ```
 
 The 14 workflow tests cover:
