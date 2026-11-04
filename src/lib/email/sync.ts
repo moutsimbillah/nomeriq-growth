@@ -308,7 +308,11 @@ async function applyOutboundEffect(
   });
 }
 
-async function storeParsedMessage(input: {
+/**
+ * Exported so the duplicate-and-fill behaviour can be tested without an IMAP server: it takes a parsed
+ * message and does the database work, which is the part that can be wrong.
+ */
+export async function storeParsedMessage(input: {
   parsed: ParsedMail;
   account: EmailAccountRecord;
   direction: "inbound" | "outbound";
@@ -318,7 +322,13 @@ async function storeParsedMessage(input: {
   uidValidity: number;
   isSeen: boolean;
   internalDate: Date | null;
-}): Promise<{ inserted: boolean; conversationId: string | null; prospectId: string | null }> {
+}): Promise<{
+  inserted: boolean;
+  /** True when an existing row was given the body it was missing. */
+  filled: boolean;
+  conversationId: string | null;
+  prospectId: string | null;
+}> {
   const db = await getDb();
   const parsed = input.parsed;
   const fromEntry = parsed.from?.value?.[0];
@@ -352,8 +362,18 @@ async function storeParsedMessage(input: {
     : null;
   const date = parsedDate || input.internalDate || new Date();
 
-  const duplicate = await db.query(
-    `SELECT 1 FROM messages
+  const rawMessageHeaders = JSON.stringify({
+    returnPath: parsed.headers.get("return-path") || null,
+    replyTo: parsed.headers.get("reply-to") || null,
+    folderLabel: input.folderLabel,
+  });
+
+  const text = bodyText(parsed);
+  const html = parsed.html ? String(parsed.html).slice(0, 500_000) : null;
+  const snippet = truncate(stripQuotedReply(text), 220);
+
+  const duplicate = await db.query<{ id: string; body_text: string | null }>(
+    `SELECT id, body_text FROM messages
      WHERE (account_id = $1 AND folder = $2 AND uidvalidity = $3 AND uid = $4)
         OR (account_id = $1 AND message_id = $5)
      LIMIT 1`,
@@ -365,8 +385,47 @@ async function storeParsedMessage(input: {
       messageId,
     ],
   );
-  if (duplicate.rows.length) {
-    return { inserted: false, conversationId: null, prospectId: null };
+  const existing = duplicate.rows[0];
+  if (existing) {
+    // A row that arrived with no body is filled in rather than skipped: an imported message, or a sync
+    // that ran before the body could be read, would otherwise stay blank for ever. Only a BLANK body is
+    // filled — a body already stored is never replaced by a second copy of the same message, so the
+    // first sync that read it keeps what it saw. The update is guarded on blankness too, so two syncs
+    // racing on the same message cannot both claim to have filled it.
+    if (existing.body_text && existing.body_text.trim()) {
+      return { inserted: false, filled: false, conversationId: null, prospectId: null };
+    }
+    const filled = await db.query<{ conversation_id: string | null; prospect_id: string | null }>(
+      `UPDATE messages SET
+         body_text = $2,
+         body_html = coalesce(body_html, $3),
+         snippet = coalesce(snippet, $4),
+         subject = CASE WHEN subject IS NULL OR subject = '' OR subject = '(no subject)'
+                        THEN $5 ELSE subject END,
+         cc_emails = CASE WHEN cc_emails IS NULL OR cc_emails = '[]'::jsonb
+                          THEN $6::jsonb ELSE cc_emails END,
+         from_name = coalesce(nullif(from_name, ''), $7),
+         raw_headers = coalesce(raw_headers, $8::jsonb)
+       WHERE id = $1 AND (body_text IS NULL OR btrim(body_text) = '')
+       RETURNING conversation_id, prospect_id`,
+      [
+        existing.id,
+        text,
+        html,
+        snippet,
+        subject,
+        JSON.stringify(ccEmails),
+        fromEntry?.name || null,
+        rawMessageHeaders,
+      ],
+    );
+    const row = filled.rows[0];
+    return {
+      inserted: false,
+      filled: Boolean(row),
+      conversationId: row?.conversation_id ?? null,
+      prospectId: row?.prospect_id ?? null,
+    };
   }
 
   const owner = await resolveMessageOwner({
@@ -379,7 +438,6 @@ async function storeParsedMessage(input: {
     when: date.toISOString(),
   });
 
-  const text = bodyText(parsed);
   const messageDbId = crypto.randomUUID();
   const attachmentMetadata = (parsed.attachments ?? []).map((attachment) => ({
     id: crypto.randomUUID(),
@@ -425,15 +483,11 @@ async function storeParsedMessage(input: {
       attachmentMetadata.length ? JSON.stringify(attachmentMetadata) : "[]",
       input.direction === "outbound",
       owner.matchedBy,
-      JSON.stringify({
-        returnPath: parsed.headers.get("return-path") || null,
-        replyTo: parsed.headers.get("reply-to") || null,
-        folderLabel: input.folderLabel,
-      }),
+      rawMessageHeaders,
     ],
   );
   if (!insert.rowCount) {
-    return { inserted: false, conversationId: null, prospectId: null };
+    return { inserted: false, filled: false, conversationId: null, prospectId: null };
   }
 
   let storedBytes = 0;
@@ -482,6 +536,7 @@ async function storeParsedMessage(input: {
 
   return {
     inserted: true,
+    filled: false,
     conversationId: owner.conversationId,
     prospectId: owner.prospectId,
   };
