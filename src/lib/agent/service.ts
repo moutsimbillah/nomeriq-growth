@@ -511,6 +511,10 @@ export const TOOL_DEFINITIONS = [
     description:
       "Read the one shared Nomeriq Growth research, qualification and outreach skill used by every assistant and by the autonomous DeepSeek engine.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    // Reading the skill is read-only. Without this flag the MCP annotations report
+    // readOnlyHint: false, and a client that gates consequential calls on that hint treats
+    // "read your instructions" as if it could change something.
+    readOnly: true,
   },
   {
     name: "read_product_truth",
