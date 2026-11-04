@@ -63,7 +63,7 @@ export default async function ProductTruthPage() {
               title="How this is used"
               description="Knowledge, not a second approval chain."
             />
-            <div className="mt-4 space-y-3 text-[10.5px] leading-5 text-muted">
+            <div className="mt-4 space-y-3 text-12 leading-5 text-muted">
               <p>
                 <strong className="text-ink">AI first-contact drafts</strong> are
                 generated only from approved claims, then checked for pricing,
@@ -92,7 +92,7 @@ export default async function ProductTruthPage() {
             />
             <div className="mt-4 space-y-0">
               {revisions.length === 0 ? (
-                <p className="text-[11px] text-muted">
+                <p className="text-12 text-muted">
                   No revisions yet. The current seed version is the first record.
                 </p>
               ) : (
@@ -109,13 +109,13 @@ export default async function ProductTruthPage() {
                       }`}
                     />
                     <div className="min-w-0">
-                      <div className="text-[10.5px] font-semibold text-ink">
+                      <div className="text-12 font-semibold text-ink">
                         Version {revision.version}
                         <span className="ml-1.5 font-normal text-faint">
                           {revision.status === "approved" ? "approved" : "draft"}
                         </span>
                       </div>
-                      <div className="mt-0.5 flex items-center gap-1 text-[9px] text-faint">
+                      <div className="mt-0.5 flex items-center gap-1 text-12 text-faint">
                         <Clock3 size={8} />
                         {relativeTime(revision.createdAt)}
                         {revision.authorName ? ` · ${revision.authorName}` : ""}
@@ -129,10 +129,10 @@ export default async function ProductTruthPage() {
 
           {truth.status !== "approved" && (
             <div className="rounded-[18px] border border-amber/25 bg-amber/[0.06] p-5">
-              <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-amber">
+              <div className="flex items-center gap-2 text-12 font-bold uppercase tracking-[0.12em] text-amber">
                 <ShieldAlert size={12} /> Approval required
               </div>
-              <p className="mt-2 text-[10.5px] leading-5 text-[#76501a]">
+              <p className="mt-2 text-12 leading-5 text-[#76501a]">
                 Until this is approved, Growth intentionally restricts AI to the
                 single factual platform description. That protects outreach from
                 invented features, pricing or outcomes.
@@ -141,7 +141,7 @@ export default async function ProductTruthPage() {
           )}
 
           {truth.approvedAt && (
-            <div className="px-1 text-[9.5px] text-faint">
+            <div className="px-1 text-12 text-faint">
               Last approved {formatDateTime(truth.approvedAt)}
             </div>
           )}

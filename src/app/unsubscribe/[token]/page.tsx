@@ -15,10 +15,10 @@ export default async function UnsubscribePage({
         <div className="mb-10 flex items-center gap-2.5">
           <LogoMark />
           <div>
-            <div className="text-[12px] font-bold tracking-[0.15em] text-ink">
+            <div className="text-12 font-bold tracking-[0.15em] text-ink">
               NOMERIQ
             </div>
-            <div className="text-[9px] font-semibold uppercase tracking-[0.22em] text-muted">
+            <div className="text-12 font-semibold uppercase tracking-[0.22em] text-muted">
               Growth
             </div>
           </div>

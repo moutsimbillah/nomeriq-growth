@@ -95,7 +95,7 @@ export function ClassificationSelect({
           />
         )}
       </div>
-      {error && <p className="mt-1 text-[9.5px] text-rust">{error}</p>}
+      {error && <p className="mt-1 text-12 text-rust">{error}</p>}
     </div>
   );
 }
@@ -247,8 +247,8 @@ export function ReplyComposer({
             <X size={16} />
           </div>
           <div>
-            <h2 className="text-[13px] font-bold text-ink">Replying is blocked</h2>
-            <p className="mt-1 text-[11px] leading-5 text-muted">
+            <h2 className="text-13 font-bold text-ink">Replying is blocked</h2>
+            <p className="mt-1 text-12 leading-5 text-muted">
               {blockedReason ||
                 "This conversation is suppressed or has no valid inbound sender."}
             </p>
@@ -265,9 +265,9 @@ export function ReplyComposer({
           <div>
             <div className="flex items-center gap-2">
               <Send size={14} className="text-muted" />
-              <h2 className="text-[13px] font-bold text-ink">Write reply</h2>
+              <h2 className="text-13 font-bold text-ink">Write reply</h2>
             </div>
-            <p className="mt-0.5 text-[10px] text-faint">
+            <p className="mt-0.5 text-12 text-faint">
               To {recipient} · your click sends the reviewed version
             </p>
           </div>
@@ -307,7 +307,7 @@ export function ReplyComposer({
         </div>
 
         {suggestionNote && (
-          <div className="rounded-lg border border-line bg-lime/10 px-2.5 py-2 text-[10px] leading-4 text-forest">
+          <div className="rounded-lg border border-line bg-lime/10 px-2.5 py-2 text-12 leading-4 text-forest">
             {suggestionNote}
           </div>
         )}
@@ -317,7 +317,7 @@ export function ReplyComposer({
             {attachments.map((attachment, index) => (
               <div
                 key={`${attachment.filename}-${index}`}
-                className="flex items-center justify-between rounded-lg border border-line bg-white/60 px-2.5 py-1.5 text-[10px]"
+                className="flex items-center justify-between rounded-lg border border-line bg-white/60 px-2.5 py-1.5 text-12"
               >
                 <span className="flex items-center gap-1.5 truncate text-muted">
                   <FileText size={10} />
@@ -345,7 +345,7 @@ export function ReplyComposer({
 
         {error && <InlineError>{error}</InlineError>}
         {notice && (
-          <div className="rounded-lg border border-forest/20 bg-lime/15 px-2.5 py-2 text-[10px] leading-4 text-forest">
+          <div className="rounded-lg border border-forest/20 bg-lime/15 px-2.5 py-2 text-12 leading-4 text-forest">
             {notice}
           </div>
         )}
@@ -388,7 +388,7 @@ export function ReplyComposer({
                 : "Send reply"}
           </button>
         </div>
-        <p className="text-[9px] leading-4 text-faint">
+        <p className="text-12 leading-4 text-faint">
           Essential safeguards only: verified sender, suppression check,
           idempotent delivery, truthful sender identity and an unsubscribe footer.
           No Product Truth checkbox is required because you are reviewing the

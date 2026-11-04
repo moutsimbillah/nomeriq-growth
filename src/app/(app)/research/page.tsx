@@ -74,7 +74,7 @@ export default async function ResearchPage({
               <CopyButton
                 value={brief}
                 label="Copy assistant brief"
-                className="h-10 px-4 text-[13px]"
+                className="h-10 px-4 text-13"
               />
             )}
             <NewResearchButton defaultOpen={params.new === "1"} />
@@ -107,14 +107,14 @@ export default async function ResearchPage({
                               : "bg-amber"
                         }`}
                       />
-                      <span className="font-mono text-[10px] text-muted">
+                      <span className="font-mono text-12 text-muted">
                         {run.workerId}
                       </span>
-                      <span className="text-[9.5px] uppercase tracking-[0.1em] text-faint">
+                      <span className="text-12 uppercase tracking-[0.1em] text-faint">
                         {run.status}
                       </span>
                     </div>
-                    <div className="flex flex-wrap items-center gap-3 text-[9.5px] text-faint">
+                    <div className="flex flex-wrap items-center gap-3 text-12 text-faint">
                       <span>{run.processed} processed</span>
                       <span>{run.saved} saved</span>
                       {run.errors > 0 && <span className="text-rust">{run.errors} errors</span>}
@@ -168,8 +168,8 @@ export default async function ResearchPage({
                   <item.icon size={15} />
                 </div>
                 <div>
-                  <div className="font-display text-[27px] leading-none">{item.value}</div>
-                  <div className="mt-1 text-[9.5px] font-bold uppercase tracking-[0.12em] text-faint">
+                  <div className="text-28 leading-none">{item.value}</div>
+                  <div className="mt-1 text-12 font-bold uppercase tracking-[0.12em] text-faint">
                     {item.label}
                   </div>
                 </div>
@@ -194,23 +194,23 @@ export default async function ResearchPage({
                                   : "bg-amber"
                             }`}
                           />
-                          <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-faint">
+                          <span className="text-12 font-bold uppercase tracking-[0.15em] text-faint">
                             {job.status}
                           </span>
-                          <span className="text-[9px] text-faint">·</span>
-                          <span className="text-[9.5px] text-faint">
+                          <span className="text-12 text-faint">·</span>
+                          <span className="text-12 text-faint">
                             {job.regions}
                           </span>
                           {job.engine === "deepseek" && (
                             <>
-                              <span className="text-[9px] text-faint">·</span>
-                              <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-forest">
+                              <span className="text-12 text-faint">·</span>
+                              <span className="text-12 font-bold uppercase tracking-[0.12em] text-forest">
                                 DeepSeek
                               </span>
                             </>
                           )}
                         </div>
-                        <h2 className="mt-2 text-[18px] font-bold tracking-[-0.02em] text-ink">
+                        <h2 className="mt-2 text-20 font-bold tracking-[-0.02em] text-ink">
                           {job.name}
                         </h2>
                         <div className="mt-2">
@@ -244,10 +244,10 @@ export default async function ResearchPage({
                             ]
                       ).map(([label, value]) => (
                         <div key={String(label)}>
-                          <div className="text-[18px] font-bold leading-none text-ink">
+                          <div className="text-20 font-bold leading-none text-ink">
                             {value}
                           </div>
-                          <div className="mt-1 text-[8.5px] font-bold uppercase tracking-[0.12em] text-faint">
+                          <div className="mt-1 text-12 font-bold uppercase tracking-[0.12em] text-faint">
                             {label}
                           </div>
                         </div>
@@ -255,14 +255,14 @@ export default async function ResearchPage({
                     </div>
                     <div className="mt-4">
                       <ProgressBar value={job.verifiedCount} max={job.targetCount} />
-                      <div className="mt-2 flex items-center justify-between text-[9.5px] text-faint">
+                      <div className="mt-2 flex items-center justify-between text-12 text-faint">
                         <span>
                           {job.verifiedCount} of {job.targetCount} counted leads
                         </span>
                         <span>{job.remaining} remaining</span>
                       </div>
                     </div>
-                    <p className="mt-3 line-clamp-2 text-[10.5px] leading-5 text-muted">
+                    <p className="mt-3 line-clamp-2 text-12 leading-5 text-muted">
                       {job.requirements}
                     </p>
                   </div>
@@ -275,10 +275,10 @@ export default async function ResearchPage({
                 />
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <div>
-                    <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+                    <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
                       Counts
                     </div>
-                    <ul className="mt-2 space-y-1.5 text-[10.5px] leading-5 text-muted">
+                    <ul className="mt-2 space-y-1.5 text-12 leading-5 text-muted">
                       {[
                         "Genuinely sells signals in Forex, metals, crypto, indices or commodities",
                         "Has an official website",
@@ -293,10 +293,10 @@ export default async function ResearchPage({
                     </ul>
                   </div>
                   <div>
-                    <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+                    <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
                       Never counts
                     </div>
-                    <ul className="mt-2 space-y-1.5 text-[10.5px] leading-5 text-muted">
+                    <ul className="mt-2 space-y-1.5 text-12 leading-5 text-muted">
                       {[
                         "Brokers, education-only, stocks/options-only",
                         "Indicators, bots, copy-trading only",
@@ -344,14 +344,14 @@ export default async function ResearchPage({
                     },
                   ].map((item) => (
                     <div key={item.step} className="flex gap-3">
-                      <span className="mt-0.5 font-display text-[17px] leading-none text-faint">
+                      <span className="mt-0.5 text-16 leading-none text-faint">
                         {item.step}
                       </span>
                       <div>
-                        <div className="text-[11.5px] font-semibold text-ink">
+                        <div className="text-12 font-semibold text-ink">
                           {item.title}
                         </div>
-                        <p className="mt-0.5 text-[10.5px] leading-5 text-muted">
+                        <p className="mt-0.5 text-12 leading-5 text-muted">
                           {item.body}
                         </p>
                       </div>
@@ -359,10 +359,10 @@ export default async function ResearchPage({
                   ))}
                 </div>
                 <div className="mt-5 rounded-xl border border-line bg-paper/60 p-3">
-                  <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-faint">
+                  <div className="flex items-center gap-2 text-12 font-bold uppercase tracking-[0.12em] text-faint">
                     <Bot size={12} /> Assistant endpoint
                   </div>
-                  <div className="mt-1.5 break-all font-mono text-[10px] text-muted">
+                  <div className="mt-1.5 break-all font-mono text-12 text-muted">
                     {(process.env.APP_URL || "http://localhost:3100") + "/api/mcp"}
                   </div>
                   <Link href="/settings#integrations" className="btn-ghost btn-xs mt-2 -ml-2">
@@ -378,7 +378,7 @@ export default async function ResearchPage({
                 />
                 <div className="mt-4 space-y-0">
                   {events.length === 0 ? (
-                    <p className="text-[11px] text-muted">No research events yet.</p>
+                    <p className="text-12 text-muted">No research events yet.</p>
                   ) : (
                     events.map((event, index) => (
                       <div
@@ -404,7 +404,7 @@ export default async function ResearchPage({
                           )}
                         </span>
                         <div className="min-w-0">
-                          <div className="text-[10.5px] font-medium leading-4 text-ink">
+                          <div className="text-12 font-medium leading-4 text-ink">
                             {event.type === "verified_saved" && (
                               <>Verified {event.businessName || "prospect"}</>
                             )}
@@ -418,7 +418,7 @@ export default async function ResearchPage({
                               event.type,
                             ) && event.type.replace(/_/g, " ")}
                           </div>
-                          <div className="mt-0.5 flex items-center gap-1.5 text-[9px] text-faint">
+                          <div className="mt-0.5 flex items-center gap-1.5 text-12 text-faint">
                             <History size={9} />
                             {relativeTime(event.createdAt)} · {event.actorType}
                           </div>

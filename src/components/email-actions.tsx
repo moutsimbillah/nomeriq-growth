@@ -103,7 +103,7 @@ export function FollowUpReview({
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <span className="badge capitalize">{draft.status}</span>
-            <span className="text-[10px] text-faint">
+            <span className="text-12 text-faint">
               To {draft.recipientEmail}
             </span>
           </div>
@@ -130,7 +130,7 @@ export function FollowUpReview({
               {draft.warnings.map((warning) => (
                 <div
                   key={warning.code}
-                  className="rounded-lg border border-amber/20 bg-amber/[0.05] px-2.5 py-1.5 text-[10px] leading-4 text-[#76501a]"
+                  className="rounded-lg border border-amber/20 bg-amber/[0.05] px-2.5 py-1.5 text-12 leading-4 text-[#76501a]"
                 >
                   {warning.message}
                 </div>
@@ -139,7 +139,7 @@ export function FollowUpReview({
           )}
           {error && <InlineError>{error}</InlineError>}
           {notice && (
-            <div className="rounded-lg border border-forest/20 bg-lime/15 px-2.5 py-2 text-[10.5px] text-forest">
+            <div className="rounded-lg border border-forest/20 bg-lime/15 px-2.5 py-2 text-12 text-forest">
               {notice}
             </div>
           )}
@@ -238,8 +238,8 @@ export function PrepareFollowUpsButton() {
         {pending ? <LoaderCircle size={12} className="spin" /> : <Sparkles size={12} />}
         {pending ? "Preparing…" : "Prepare due follow-ups"}
       </button>
-      {message && <span className="max-w-[300px] text-right text-[9.5px] text-muted">{message}</span>}
-      {error && <span className="max-w-[300px] text-right text-[9.5px] text-rust">{error}</span>}
+      {message && <span className="max-w-[300px] text-right text-12 text-muted">{message}</span>}
+      {error && <span className="max-w-[300px] text-right text-12 text-rust">{error}</span>}
     </div>
   );
 }
@@ -348,7 +348,7 @@ export function NewCampaignButton({
               <span className="label mb-0">Approved drafts</span>
               <button
                 type="button"
-                className="text-[10px] font-semibold text-muted underline underline-offset-4"
+                className="text-12 font-semibold text-muted underline underline-offset-4"
                 onClick={() =>
                   setSelected(
                     selected.length === drafts.length
@@ -388,10 +388,10 @@ export function NewCampaignButton({
                       {active && <span className="h-1.5 w-1.5 rounded-[2px] bg-lime" />}
                     </span>
                     <span className="min-w-0">
-                      <span className="block truncate text-[11.5px] font-semibold text-ink">
+                      <span className="block truncate text-12 font-semibold text-ink">
                         {draft.prospectName}
                       </span>
-                      <span className="mt-0.5 block truncate text-[9.5px] text-faint">
+                      <span className="mt-0.5 block truncate text-12 text-faint">
                         {draft.subject}
                       </span>
                     </span>
@@ -400,7 +400,7 @@ export function NewCampaignButton({
               })}
             </div>
           </div>
-          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-amber/20 bg-amber/[0.04] p-3 text-[10.5px] leading-5 text-[#76501a]">
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-xl border border-amber/20 bg-amber/[0.04] p-3 text-12 leading-5 text-[#76501a]">
             <input
               type="checkbox"
               checked={authorized}
@@ -641,16 +641,16 @@ export function CampaignActions({
         )}
       </div>
       {running && (
-        <span className="inline-flex items-center gap-1 text-[9px] text-amber">
+        <span className="inline-flex items-center gap-1 text-12 text-amber">
           <LoaderCircle size={9} className="spin" /> {statusLine || "Running in this tab…"}
         </span>
       )}
       {!running && statusLine && (
-        <span className="text-[9px] text-faint">{statusLine}</span>
+        <span className="text-12 text-faint">{statusLine}</span>
       )}
-      {error && <span className="max-w-[260px] text-right text-[9px] text-rust">{error}</span>}
+      {error && <span className="max-w-[260px] text-right text-12 text-rust">{error}</span>}
       {campaign.status === "active" && !running && (
-        <span className="inline-flex items-center gap-1 text-[8.5px] text-faint">
+        <span className="inline-flex items-center gap-1 text-12 text-faint">
           <Clock3 size={8} /> Keep this tab open while running.
         </span>
       )}

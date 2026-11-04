@@ -1,7 +1,18 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { agentProvenance } from "@/lib/agent/agentTag";
-import { AGENT_PILL_BASE, AGENT_PILL_CLASS, agentPillLabel } from "@/lib/agent/agentPill";
+import {
+  AGENT_PILL_A,
+  AGENT_PILL_A_MARK,
+  AGENT_PILL_B,
+  AGENT_PILL_B_STRIPE,
+  AGENT_PILL_BASE,
+  AGENT_PILL_SIZE,
+  AGENT_PILL_VARIANT,
+  agentInitial,
+  agentPillLabel,
+  type AgentPillVariant,
+} from "@/lib/agent/agentPill";
 import type { AgentTag, ChannelTag } from "@/lib/types";
 import {
   ArrowUpRight,
@@ -20,11 +31,14 @@ import {
 export function PageHeader({
   eyebrow,
   title,
+  titleAside,
   description,
   actions,
 }: {
   eyebrow?: ReactNode;
   title: ReactNode;
+  /** Rendered beside the title but OUTSIDE the h1, so it never inherits the display serif or its tracking. */
+  titleAside?: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
 }) {
@@ -32,9 +46,12 @@ export function PageHeader({
     <header className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
       <div className="max-w-2xl">
         {eyebrow && <div className="eyebrow mb-2.5">{eyebrow}</div>}
-        <h1 className="display-title text-[42px] sm:text-[50px]">{title}</h1>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className="display-title text-display sm:text-display-lg">{title}</h1>
+          {titleAside}
+        </div>
         {description && (
-          <p className="mt-3 max-w-xl text-[13px] leading-6 text-muted">
+          <p className="mt-3 max-w-xl text-13 leading-6 text-muted">
             {description}
           </p>
         )}
@@ -60,11 +77,11 @@ export function SectionHeading({
   return (
     <div className={cn("flex items-start justify-between gap-4", className)}>
       <div>
-        <h2 className="text-[15px] font-bold tracking-[-0.01em] text-ink">
+        <h2 className="text-16 font-bold tracking-[-0.01em] text-ink">
           {title}
         </h2>
         {description && (
-          <p className="mt-0.5 text-[11.5px] leading-5 text-muted">
+          <p className="mt-0.5 text-12 leading-5 text-muted">
             {description}
           </p>
         )}
@@ -108,24 +125,25 @@ export function StatusBadge({
   className?: string;
 }) {
   return (
-    <span
-      className={cn(
-        "pill whitespace-nowrap",
-        STATUS_STYLES[status],
-        className,
-      )}
-    >
+    <span className={cn("pill whitespace-nowrap", STATUS_STYLES[status], className)}>
+      {/* a stage is a soft pastel with a dot — never a filled badge, so it cannot read as an agent */}
+      <span className="badge-dot shrink-0" />
       {PIPELINE_LABELS[status]}
     </span>
   );
 }
 
+/**
+ * Markets are neutral by design: a grey outline for every one of them. They carry no coloured fill, so
+ * no market pill can ever be mistaken for an agent pill, and the agent palette owns the only saturated
+ * colours on a row.
+ */
 const CATEGORY_STYLES: Record<Category, string> = {
-  forex: "border-blue/15 bg-blue/[0.06] text-blue",
-  metals: "border-amber/20 bg-amber/[0.08] text-amber",
-  crypto: "border-[#7a5aa6]/15 bg-[#7a5aa6]/[0.07] text-[#6d4d97]",
-  indices: "border-forest/12 bg-forest/[0.05] text-forest",
-  commodities: "border-[#8d6a42]/15 bg-[#8d6a42]/[0.07] text-[#7f5c34]",
+  forex: "border-line-strong bg-white/60 text-muted",
+  metals: "border-line-strong bg-white/60 text-muted",
+  crypto: "border-line-strong bg-white/60 text-muted",
+  indices: "border-line-strong bg-white/60 text-muted",
+  commodities: "border-line-strong bg-white/60 text-muted",
 };
 
 export function CategoryPill({ category }: { category: Category }) {
@@ -152,7 +170,7 @@ export function CategoryList({
         <CategoryPill key={category} category={category} />
       ))}
       {rest > 0 && (
-        <span className="text-[10px] font-semibold text-faint">+{rest}</span>
+        <span className="text-12 font-semibold text-faint">+{rest}</span>
       )}
     </div>
   );
@@ -187,12 +205,12 @@ export function Metric({
           )}
         />
       )}
-      <div className="flex items-center gap-2 text-[10.5px] font-bold uppercase tracking-[0.13em] text-faint">
+      <div className="flex items-center gap-2 text-12 font-bold uppercase tracking-[0.13em] text-faint">
         {icon}
         {label}
       </div>
       <div className="stat-value mt-3">{value}</div>
-      {hint && <div className="mt-2 text-[11px] text-muted">{hint}</div>}
+      {hint && <div className="mt-2 text-12 text-muted">{hint}</div>}
     </Card>
   );
 }
@@ -249,9 +267,9 @@ export function EmptyState({
       <div className="mb-4 grid h-11 w-11 place-items-center rounded-full border border-line bg-white/60 text-muted">
         <Icon size={17} strokeWidth={1.7} />
       </div>
-      <div className="text-[13px] font-semibold text-ink">{title}</div>
+      <div className="text-13 font-semibold text-ink">{title}</div>
       {description && (
-        <p className="mt-1.5 max-w-sm text-[11.5px] leading-5 text-muted">
+        <p className="mt-1.5 max-w-sm text-12 leading-5 text-muted">
           {description}
         </p>
       )}
@@ -281,7 +299,7 @@ export function Notice({
   return (
     <div
       className={cn(
-        "flex flex-col gap-2 rounded-xl border px-4 py-3 text-[11.5px] leading-5 sm:flex-row sm:items-center sm:justify-between",
+        "flex flex-col gap-2 rounded-xl border px-4 py-3 text-12 leading-5 sm:flex-row sm:items-center sm:justify-between",
         tones[tone],
       )}
     >
@@ -330,9 +348,9 @@ export function Avatar({
     .map((word) => word[0]?.toUpperCase())
     .join("");
   const sizes = {
-    sm: "h-7 w-7 text-[9px]",
-    md: "h-9 w-9 text-[10px]",
-    lg: "h-11 w-11 text-[12px]",
+    sm: "h-7 w-7 text-12",
+    md: "h-9 w-9 text-12",
+    lg: "h-11 w-11 text-12",
   };
   return (
     <span
@@ -355,30 +373,60 @@ export function AgentPill({
   channel,
   note,
   size = "md",
+  variant = AGENT_PILL_VARIANT,
   className,
 }: {
   agent: AgentTag | null;
   channel: ChannelTag | null;
   note?: string | null;
   size?: "md" | "lg";
+  /** "A" solid, "B" striped card. Fixed app-wide; the preview page renders both for comparison. */
+  variant?: AgentPillVariant;
   className?: string;
 }) {
   if (!agent && !channel) return null;
   const tag = agent ?? "unknown";
   const provenance = agentProvenance(agent ?? null, channel ?? null);
   const tooltip = note ? `${provenance} — declared name: ${note}` : provenance;
+  const label = agentPillLabel(agent ?? "unknown", note);
+
+  if (variant === "B") {
+    return (
+      <span
+        title={tooltip}
+        className={cn(
+          AGENT_PILL_BASE,
+          AGENT_PILL_SIZE[size],
+          AGENT_PILL_B[tag],
+          "pl-0",
+          className,
+        )}
+      >
+        {/* the 2px stripe is decoration; the name beside it is the message */}
+        <span className={cn("mr-1.5 h-full w-[2px] shrink-0 self-stretch", AGENT_PILL_B_STRIPE[tag])} />
+        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", AGENT_PILL_B_STRIPE[tag])} />
+        <span className="truncate">{label}</span>
+      </span>
+    );
+  }
+
   return (
     <span
       title={tooltip}
-      className={cn(
-        AGENT_PILL_BASE,
-        AGENT_PILL_CLASS[tag],
-        size === "lg" && "px-3 py-1 text-[13px]",
-        className,
-      )}
+      className={cn(AGENT_PILL_BASE, AGENT_PILL_SIZE[size], AGENT_PILL_A[tag], className)}
     >
-      {/* the name is always text: colour alone never carries the meaning */}
-      {agentPillLabel(agent ?? "unknown", note)}
+      {/* the initial on a disc of the agent's full colour: a status pill has a plain dot, so the two
+          can never be mistaken for each other, and the name is always text beside it */}
+      <span
+        aria-hidden
+        className={cn(
+          "grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full text-12 font-bold leading-none text-white",
+          AGENT_PILL_A_MARK[tag],
+        )}
+      >
+        {agentInitial(tag)}
+      </span>
+      <span className="truncate">{label}</span>
     </span>
   );
 }
@@ -399,10 +447,10 @@ export function DataRow({
         className,
       )}
     >
-      <dt className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-faint">
+      <dt className="text-12 font-semibold uppercase tracking-[0.08em] text-faint">
         {label}
       </dt>
-      <dd className="wrap-anywhere min-w-0 text-[12px] leading-5 text-ink">{children}</dd>
+      <dd className="wrap-anywhere min-w-0 text-12 leading-5 text-ink">{children}</dd>
     </div>
   );
 }
@@ -421,13 +469,13 @@ export function Tabs({
           key={tab.href}
           href={tab.href}
           className={cn(
-            "relative shrink-0 px-3.5 py-2.5 text-[12px] font-semibold text-muted transition hover:text-ink",
+            "relative shrink-0 px-3.5 py-2.5 text-12 font-semibold text-muted transition hover:text-ink",
             active === tab.label && "text-ink",
           )}
         >
           {tab.label}
           {typeof tab.count === "number" && tab.count > 0 && (
-            <span className="ml-1.5 rounded-full bg-ink/[0.06] px-1.5 py-0.5 text-[9px] font-bold text-muted">
+            <span className="ml-1.5 rounded-full bg-ink/[0.06] px-1.5 py-0.5 text-12 font-bold text-muted">
               {tab.count}
             </span>
           )}
@@ -449,10 +497,10 @@ export function KeyValue({
 }) {
   return (
     <div>
-      <div className="text-[9.5px] font-bold uppercase tracking-[0.12em] text-faint">
+      <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
         {label}
       </div>
-      <div className="mt-0.5 text-[12px] text-ink">{value}</div>
+      <div className="mt-0.5 text-12 text-ink">{value}</div>
     </div>
   );
 }

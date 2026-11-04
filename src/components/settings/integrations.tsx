@@ -120,11 +120,11 @@ export function IntegrationsManager({
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-line bg-white/50 p-4">
-          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-faint">
+          <div className="flex items-center gap-2 text-12 font-bold uppercase tracking-[0.12em] text-faint">
             <Bot size={12} /> AI drafting
           </div>
           <div className="mt-2 flex items-center gap-2">
-            <span className="text-[12px] font-semibold capitalize text-ink">
+            <span className="text-12 font-semibold capitalize text-ink">
               {aiProvider === "none" ? "Deterministic writer" : aiProvider}
             </span>
             <span
@@ -137,16 +137,16 @@ export function IntegrationsManager({
               {hasOpenAI || hasAnthropic ? "configured" : "optional, no key"}
             </span>
           </div>
-          <p className="mt-2 text-[10px] leading-5 text-muted">
+          <p className="mt-2 text-12 leading-5 text-muted">
             Without an AI key, Growth uses its deterministic founder-style writer.
             Drafts still work, still get claim warnings, and never auto-send.
           </p>
         </div>
         <div className="rounded-xl border border-line bg-white/50 p-4">
-          <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-faint">
+          <div className="flex items-center gap-2 text-12 font-bold uppercase tracking-[0.12em] text-faint">
             <LockKeyhole size={12} /> Assistant boundary
           </div>
-          <p className="mt-2 text-[10px] leading-5 text-muted">
+          <p className="mt-2 text-12 leading-5 text-muted">
             API keys cannot send email, delete records, change Product Truth,
             alter settings or bypass suppression. There is no send scope to
             grant.
@@ -157,8 +157,8 @@ export function IntegrationsManager({
       <div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <div className="text-[12px] font-bold text-ink">API keys</div>
-            <p className="text-[10px] text-muted">
+            <div className="text-12 font-bold text-ink">API keys</div>
+            <p className="text-12 text-muted">
               Create one key per assistant or environment. Shown once, stored
               hashed.
             </p>
@@ -170,7 +170,7 @@ export function IntegrationsManager({
 
         <div className="mt-3 space-y-2">
           {keys.length === 0 && (
-            <div className="rounded-xl border border-dashed-line border-line px-4 py-5 text-center text-[10.5px] text-muted">
+            <div className="rounded-xl border border-dashed-line border-line px-4 py-5 text-center text-12 text-muted">
               No keys yet. Create one for Claude, one for ChatGPT, or a separate
               key for the REST API.
             </div>
@@ -191,7 +191,7 @@ export function IntegrationsManager({
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <KeyRound size={12} className="text-faint" />
-                    <span className="text-[11.5px] font-semibold text-ink">
+                    <span className="text-12 font-semibold text-ink">
                       {key.name}
                     </span>
                     <span className="badge capitalize">{key.assistant}</span>
@@ -209,7 +209,7 @@ export function IntegrationsManager({
                       </span>
                     )}
                   </div>
-                  <div className="mt-1 font-mono text-[9.5px] text-faint">
+                  <div className="mt-1 font-mono text-12 text-faint">
                     {key.prefix}••••••••
                   </div>
                   <div className="mt-1 flex flex-wrap gap-1">
@@ -219,7 +219,7 @@ export function IntegrationsManager({
                       </span>
                     ))}
                   </div>
-                  <div className="mt-1 text-[9px] text-faint">
+                  <div className="mt-1 text-12 text-faint">
                     Created {key.createdAt ? new Date(key.createdAt).toLocaleDateString("en-GB") : "unknown"}
                     {key.lastUsedAt
                       ? ` · last used ${new Date(key.lastUsedAt).toLocaleString("en-GB")}`
@@ -227,7 +227,7 @@ export function IntegrationsManager({
                   </div>
                   {!key.revokedAt && key.expiresAt && (
                     <div
-                      className={`mt-1 text-[9px] ${
+                      className={`mt-1 text-12 ${
                         expired
                           ? "font-semibold text-rust"
                           : expiringSoon
@@ -275,7 +275,7 @@ export function IntegrationsManager({
       </div>
 
       <div className="rounded-xl border border-line bg-paper/40 p-4">
-        <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-faint">
+        <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
           Connection endpoints
         </div>
         <div className="mt-3 space-y-2.5">
@@ -286,10 +286,10 @@ export function IntegrationsManager({
           ].map(([label, value]) => (
             <div key={label}>
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[9.5px] font-semibold text-muted">{label}</span>
+                <span className="text-12 font-semibold text-muted">{label}</span>
                 <CopyButton value={value} label="Copy" className="btn-ghost btn-xs" />
               </div>
-              <div className="mt-1 overflow-x-auto rounded-lg border border-line bg-white/70 px-2.5 py-2 font-mono text-[9.5px] text-ink scrollbar-thin">
+              <div className="mt-1 overflow-x-auto rounded-lg border border-line bg-white/70 px-2.5 py-2 font-mono text-12 text-ink scrollbar-thin">
                 {value}
               </div>
             </div>
@@ -297,16 +297,16 @@ export function IntegrationsManager({
         </div>
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <div className="rounded-lg border border-line bg-white/60 p-3">
-            <div className="text-[10px] font-bold text-ink">Claude</div>
-            <p className="mt-1 text-[9.5px] leading-4 text-muted">
+            <div className="text-12 font-bold text-ink">Claude</div>
+            <p className="mt-1 text-12 leading-4 text-muted">
               Add a custom connector using the MCP URL above. Set the
               Authorization header to <code>Bearer &lt;key&gt;</code>. Call{" "}
               <code>get_instructions</code> first.
             </p>
           </div>
           <div className="rounded-lg border border-line bg-white/60 p-3">
-            <div className="text-[10px] font-bold text-ink">ChatGPT</div>
-            <p className="mt-1 text-[9.5px] leading-4 text-muted">
+            <div className="text-12 font-bold text-ink">ChatGPT</div>
+            <p className="mt-1 text-12 leading-4 text-muted">
               Create a Custom GPT Action by importing the OpenAPI schema, then use
               bearer authentication with a Growth key. The same skill is available
               through <code>get_instructions</code>.
@@ -316,9 +316,9 @@ export function IntegrationsManager({
         <div className="mt-3 rounded-lg border border-line bg-white/60 p-3">
           <div className="flex items-center gap-2">
             <Download size={12} className="text-muted" />
-            <div className="text-[10px] font-bold text-ink">Assistant skill</div>
+            <div className="text-12 font-bold text-ink">Assistant skill</div>
           </div>
-          <p className="mt-1 text-[9.5px] leading-4 text-muted">
+          <p className="mt-1 text-12 leading-4 text-muted">
             A skill file with YAML frontmatter, downloaded as <code>SKILL.md</code>. The loader
             carries no research rules — it tells the assistant to read them from Growth on every
             session — so it never goes stale; upload it once. The full copy is a dated snapshot for
@@ -332,13 +332,13 @@ export function IntegrationsManager({
               <Download size={10} /> Full copy
             </a>
           </div>
-          <p className="mt-2 text-[9px] leading-4 text-faint">
+          <p className="mt-2 text-12 leading-4 text-faint">
             If you also use the older nomeriq-growth skill, turn it off, or the assistant may follow
             the old portal&apos;s tool names.
           </p>
         </div>
 
-        <div className="mt-3 flex items-center gap-2 text-[9px] text-faint">
+        <div className="mt-3 flex items-center gap-2 text-12 text-faint">
           <ShieldCheck size={10} />
           Both assistants read and write the same PostgreSQL records. No second
           prospect database.
@@ -371,7 +371,7 @@ export function IntegrationsManager({
                     type="button"
                     key={value}
                     onClick={() => setAssistant(value)}
-                    className={`rounded-lg px-2 py-2 text-[10.5px] font-semibold capitalize transition ${
+                    className={`rounded-lg px-2 py-2 text-12 font-semibold capitalize transition ${
                       assistant === value
                         ? "bg-white text-ink shadow-sm"
                         : "text-muted hover:text-ink"
@@ -396,7 +396,7 @@ export function IntegrationsManager({
                 </option>
               ))}
             </select>
-            <p className="mt-1 text-[9.5px] text-muted">
+            <p className="mt-1 text-12 text-muted">
               The key stops working after this date. Create a replacement before it
               expires and revoke the old key.
             </p>
@@ -407,7 +407,7 @@ export function IntegrationsManager({
               {SCOPES.map(([scope, label]) => (
                 <label
                   key={scope}
-                  className="flex items-start gap-2 rounded-lg border border-line bg-white/50 px-2.5 py-2 text-[10px] text-muted"
+                  className="flex items-start gap-2 rounded-lg border border-line bg-white/50 px-2.5 py-2 text-12 text-muted"
                 >
                   <input
                     type="checkbox"
@@ -460,7 +460,7 @@ export function IntegrationsManager({
         width="md"
       >
         <div className="rounded-xl border border-forest/20 bg-lime/10 p-4">
-          <div className="break-all font-mono text-[11px] leading-5 text-forest">
+          <div className="break-all font-mono text-12 leading-5 text-forest">
             {createdKey}
           </div>
         </div>

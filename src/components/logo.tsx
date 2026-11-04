@@ -9,7 +9,7 @@ export function LogoMark({ className }: { className?: string }) {
       )}
       aria-hidden
     >
-      <span className="font-display text-[23px] leading-none -translate-y-[1px]">
+      <span className="text-20 leading-none -translate-y-[1px]">
         N
       </span>
       <span className="absolute bottom-[5px] right-[5px] h-1 w-1 rounded-full bg-forest/70" />
@@ -22,11 +22,11 @@ export function Wordmark({ compact = false }: { compact?: boolean }) {
     <div className="flex items-center gap-2.5">
       <LogoMark />
       <div className="leading-none">
-        <div className="text-[13px] font-bold tracking-[0.14em] text-white">
+        <div className="text-13 font-bold tracking-[0.14em] text-white">
           NOMERIQ
         </div>
         {!compact && (
-          <div className="mt-1 text-[9px] font-semibold uppercase tracking-[0.25em] text-white/42">
+          <div className="mt-1 text-12 font-semibold uppercase tracking-[0.25em] text-white/42">
             Growth
           </div>
         )}

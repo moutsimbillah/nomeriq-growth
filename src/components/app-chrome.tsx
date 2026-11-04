@@ -71,7 +71,7 @@ export function AppChrome({
       </div>
 
       <div className="px-3">
-        <div className="mb-2 px-3 text-[9px] font-bold uppercase tracking-[0.2em] text-white/26">
+        <div className="mb-2 px-3 text-12 font-bold uppercase tracking-[0.2em] text-white/26">
           Workspace
         </div>
         <nav className="space-y-0.5">
@@ -96,12 +96,12 @@ export function AppChrome({
 
       <div className="mx-3 mt-6 rounded-2xl border border-white/[0.08] bg-white/[0.035] p-3.5">
         <div className="flex items-center justify-between">
-          <span className="text-[9px] font-bold uppercase tracking-[0.15em] text-white/32">
+          <span className="text-12 font-bold uppercase tracking-[0.15em] text-white/32">
             Send mode
           </span>
           <span
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide",
+              "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-12 font-bold uppercase tracking-wide",
               sendMode === "live"
                 ? "bg-lime/20 text-lime"
                 : "bg-amber/20 text-[#f5c976]",
@@ -116,13 +116,13 @@ export function AppChrome({
             {sendMode}
           </span>
         </div>
-        <p className="mt-2 truncate text-[10.5px] leading-4 text-white/44">
+        <p className="mt-2 truncate text-12 leading-4 text-white/44">
           {mailboxLabel || "No mailbox connected"}
         </p>
         {!productTruthReady && (
           <Link
             href="/product-truth"
-            className="mt-2.5 block rounded-lg bg-amber/10 px-2.5 py-1.5 text-[10px] font-semibold text-[#f1c474] hover:bg-amber/15"
+            className="mt-2.5 block rounded-lg bg-amber/10 px-2.5 py-1.5 text-12 font-semibold text-[#f1c474] hover:bg-amber/15"
           >
             Product Truth needs review
           </Link>
@@ -133,10 +133,10 @@ export function AppChrome({
         <div className="flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.035] px-2.5 py-2.5">
           <Avatar name={user.name} size="sm" />
           <div className="min-w-0 flex-1">
-            <div className="truncate text-[11.5px] font-semibold text-white/90">
+            <div className="truncate text-12 font-semibold text-white/90">
               {user.name}
             </div>
-            <div className="truncate text-[9.5px] text-white/35">{user.email}</div>
+            <div className="truncate text-12 text-white/35">{user.email}</div>
           </div>
           <button
             type="button"
@@ -187,7 +187,7 @@ export function AppChrome({
           <Wordmark compact />
           <span
             className={cn(
-              "rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide",
+              "rounded-full px-2 py-0.5 text-12 font-bold uppercase tracking-wide",
               sendMode === "live"
                 ? "bg-forest/10 text-forest"
                 : "bg-amber/10 text-amber",

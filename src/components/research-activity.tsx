@@ -145,11 +145,11 @@ export function ResearchActivityFeed({
   return (
     <div className="mt-4 rounded-xl border border-line bg-paper/60 p-3">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+        <div className="flex items-center gap-1.5 text-12 font-bold uppercase tracking-[0.12em] text-faint">
           <Radar size={11} /> Live activity
         </div>
         {active && (
-          <span className="inline-flex items-center gap-1.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-muted">
+          <span className="inline-flex items-center gap-1.5 text-12 font-semibold uppercase tracking-[0.12em] text-muted">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#a8d846]" />
             working
           </span>
@@ -166,9 +166,9 @@ export function ResearchActivityFeed({
         className="mt-2.5 max-h-[320px] space-y-1.5 overflow-y-auto pr-1"
       >
         {!loaded ? (
-          <p className="py-3 text-[10.5px] text-faint">Loading activity…</p>
+          <p className="py-3 text-12 text-faint">Loading activity…</p>
         ) : items.length === 0 ? (
-          <p className="py-3 text-[10.5px] leading-5 text-muted">
+          <p className="py-3 text-12 leading-5 text-muted">
             {active
               ? "Waiting for the first step… the engine records each search, page read and verdict here as it happens."
               : "No activity recorded for this target yet."}
@@ -183,20 +183,20 @@ export function ResearchActivityFeed({
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline gap-2">
-                  <span className="min-w-0 flex-1 break-words text-[11px] font-medium leading-4 text-ink">
+                  <span className="min-w-0 flex-1 break-words text-12 font-medium leading-4 text-ink">
                     {item.title}
                   </span>
                   {item.costUsd ? (
-                    <span className="shrink-0 font-mono text-[9px] text-faint">
+                    <span className="shrink-0 font-mono text-12 text-faint">
                       ${item.costUsd.toFixed(4)}
                     </span>
                   ) : null}
-                  <span className="shrink-0 font-mono text-[9px] text-faint">
+                  <span className="shrink-0 font-mono text-12 text-faint">
                     {clockTime(item.at)}
                   </span>
                 </div>
                 {item.detail && (
-                  <p className="mt-0.5 break-words text-[10px] leading-4 text-muted">
+                  <p className="mt-0.5 break-words text-12 leading-4 text-muted">
                     {item.detail}
                   </p>
                 )}
@@ -208,7 +208,7 @@ export function ResearchActivityFeed({
 
       <InlineError>{error}</InlineError>
 
-      <p className="mt-2.5 border-t border-line pt-2 text-[9.5px] leading-4 text-faint">
+      <p className="mt-2.5 border-t border-line pt-2 text-12 leading-4 text-faint">
         Recorded as it happens. A step only appears once the database has accepted
         it — nothing is streamed ahead of the real work.
       </p>

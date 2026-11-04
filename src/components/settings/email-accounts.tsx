@@ -270,10 +270,10 @@ export function EmailAccountsManager({
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-faint">
+          <div className="text-12 font-bold uppercase tracking-[0.14em] text-faint">
             {sendMode === "live" ? "Live sending is enabled" : "Sandbox sending"}
           </div>
-          <p className="mt-1 max-w-xl text-[10.5px] leading-5 text-muted">
+          <p className="mt-1 max-w-xl text-12 leading-5 text-muted">
             Connect the founder mailbox once. Credentials are encrypted with
             AES-256-GCM. SMTP is used only when the founder sends; IMAP is read
             for replies and external Sent mail.
@@ -288,10 +288,10 @@ export function EmailAccountsManager({
         {accounts.length === 0 && (
           <div className="rounded-xl border border-dashed-line border-line px-4 py-6 text-center">
             <Mail size={18} className="mx-auto text-faint" />
-            <div className="mt-2 text-[12px] font-semibold text-ink">
+            <div className="mt-2 text-12 font-semibold text-ink">
               No mailbox connected
             </div>
-            <p className="mt-1 text-[10.5px] text-muted">
+            <p className="mt-1 text-12 text-muted">
               Add an IONOS mailbox or use the sandbox mailbox for safe testing.
             </p>
           </div>
@@ -315,7 +315,7 @@ export function EmailAccountsManager({
                   </div>
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[12px] font-bold text-ink">
+                      <span className="text-12 font-bold text-ink">
                         {account.emailAddress}
                       </span>
                       {account.isDefault && (
@@ -342,7 +342,7 @@ export function EmailAccountsManager({
                             : "SMTP + IMAP"}
                       </span>
                     </div>
-                    <div className="mt-0.5 text-[10px] text-faint">
+                    <div className="mt-0.5 text-12 text-faint">
                       {account.fromName} · {account.name}
                       {account.provider !== "sandbox" &&
                         ` · ${account.smtpHost}:${account.smtpPort} / ${account.imapHost}:${account.imapPort}`}
@@ -359,34 +359,34 @@ export function EmailAccountsManager({
               </div>
 
               {account.lastError && (
-                <div className="mt-3 rounded-lg border border-rust/20 bg-rust/[0.04] px-2.5 py-2 text-[10px] leading-4 text-rust">
+                <div className="mt-3 rounded-lg border border-rust/20 bg-rust/[0.04] px-2.5 py-2 text-12 leading-4 text-rust">
                   {account.lastError}
                 </div>
               )}
 
               <div className="mt-3 grid gap-2 border-t border-line/80 pt-3 sm:grid-cols-3">
                 <div>
-                  <div className="text-[9px] font-bold uppercase tracking-[0.1em] text-faint">
+                  <div className="text-12 font-bold uppercase tracking-[0.1em] text-faint">
                     Configured safety cap
                   </div>
-                  <div className="mt-0.5 text-[10.5px] text-muted">
+                  <div className="mt-0.5 text-12 text-muted">
                     {usage?.sentLast24h ?? 0} / {account.dailySendLimit} in rolling
                     24h
                   </div>
                 </div>
                 <div>
-                  <div className="text-[9px] font-bold uppercase tracking-[0.1em] text-faint">
+                  <div className="text-12 font-bold uppercase tracking-[0.1em] text-faint">
                     Minimum interval
                   </div>
-                  <div className="mt-0.5 text-[10.5px] text-muted">
+                  <div className="mt-0.5 text-12 text-muted">
                     {account.minIntervalSeconds}s between sends
                   </div>
                 </div>
                 <div>
-                  <div className="text-[9px] font-bold uppercase tracking-[0.1em] text-faint">
+                  <div className="text-12 font-bold uppercase tracking-[0.1em] text-faint">
                     Last sync
                   </div>
-                  <div className="mt-0.5 text-[10.5px] text-muted">
+                  <div className="mt-0.5 text-12 text-muted">
                     {account.lastSyncAt
                       ? new Date(account.lastSyncAt).toLocaleString("en-GB")
                       : "Never"}
@@ -502,7 +502,7 @@ export function EmailAccountsManager({
                   onClick={() =>
                     providerChanged(provider.value as FormState["provider"])
                   }
-                  className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[10.5px] font-semibold transition ${
+                  className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-12 font-semibold transition ${
                     form.provider === provider.value
                       ? "bg-white text-ink shadow-sm"
                       : "text-muted hover:text-ink"
@@ -596,7 +596,7 @@ export function EmailAccountsManager({
               </div>
 
               <details className="group rounded-xl border border-line bg-paper/40 px-3.5 py-3">
-                <summary className="flex cursor-pointer list-none items-center justify-between text-[10.5px] font-semibold text-muted">
+                <summary className="flex cursor-pointer list-none items-center justify-between text-12 font-semibold text-muted">
                   SMTP / IMAP server settings
                   <ChevronDown size={13} className="transition group-open:rotate-180" />
                 </summary>
@@ -635,7 +635,7 @@ export function EmailAccountsManager({
                       onChange={(event) => update("imapPort", Number(event.target.value))}
                     />
                   </div>
-                  <label className="flex items-center gap-2 text-[10.5px] text-muted">
+                  <label className="flex items-center gap-2 text-12 text-muted">
                     <input
                       type="checkbox"
                       checked={form.smtpSecure}
@@ -643,7 +643,7 @@ export function EmailAccountsManager({
                     />
                     SMTP implicit TLS (port 465)
                   </label>
-                  <label className="flex items-center gap-2 text-[10.5px] text-muted">
+                  <label className="flex items-center gap-2 text-12 text-muted">
                     <input
                       type="checkbox"
                       checked={form.imapSecure}
@@ -686,7 +686,7 @@ export function EmailAccountsManager({
             </div>
           </div>
 
-          <label className="flex items-center gap-2 text-[10.5px] text-muted">
+          <label className="flex items-center gap-2 text-12 text-muted">
             <input
               type="checkbox"
               checked={form.isDefault}

@@ -65,10 +65,10 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
     <div className="card overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-5 py-4">
         <div>
-          <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-faint">
+          <div className="text-12 font-bold uppercase tracking-[0.15em] text-faint">
             Version {truth.version}
           </div>
-          <h2 className="mt-1 text-[15px] font-bold tracking-[-0.01em] text-ink">
+          <h2 className="mt-1 text-16 font-bold tracking-[-0.01em] text-ink">
             Founder-approved product facts
           </h2>
         </div>
@@ -182,7 +182,7 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
             </label>
             <textarea
               id="approved-claims"
-              className="textarea min-h-[140px] font-mono text-[11px]"
+              className="textarea min-h-[140px] font-mono text-12"
               value={approvedClaims}
               onChange={(event) => setApprovedClaims(event.target.value)}
             />
@@ -196,7 +196,7 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
             </label>
             <textarea
               id="prohibited-claims"
-              className="textarea min-h-[140px] font-mono text-[11px]"
+              className="textarea min-h-[140px] font-mono text-12"
               value={prohibitedClaims}
               onChange={(event) => setProhibitedClaims(event.target.value)}
             />
@@ -208,7 +208,7 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
 
         {error && <InlineError>{error}</InlineError>}
         {notice && (
-          <div className="rounded-lg border border-forest/20 bg-lime/15 px-3 py-2 text-[11px] text-forest">
+          <div className="rounded-lg border border-forest/20 bg-lime/15 px-3 py-2 text-12 text-forest">
             {notice}
           </div>
         )}

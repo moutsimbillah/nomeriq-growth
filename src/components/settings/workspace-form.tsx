@@ -122,7 +122,7 @@ export function WorkspaceSettingsForm({
       </div>
 
       <div className="rounded-xl border border-line bg-paper/40 p-4">
-        <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-faint">
+        <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
           Follow-up policy
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-4">
@@ -175,7 +175,7 @@ export function WorkspaceSettingsForm({
             />
           </div>
         </div>
-        <p className="mt-3 text-[10px] leading-5 text-muted">
+        <p className="mt-3 text-12 leading-5 text-muted">
           {followUpMax === 0
             ? "Follow-ups are disabled. Replies and opt-outs still stop any existing prepared drafts."
             : `A thread waits ${delay1} day${delay1 === 1 ? "" : "s"} after contact, then ${delay2} day${delay2 === 1 ? "" : "s"} between later follow-ups. Any reply, opt-out or suppression stops the sequence.`}
@@ -183,10 +183,10 @@ export function WorkspaceSettingsForm({
       </div>
 
       <div className="rounded-xl border border-line p-4">
-        <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+        <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
           Autonomous research defaults
         </div>
-        <p className="mt-1.5 text-[10.5px] leading-5 text-muted">
+        <p className="mt-1.5 text-12 leading-5 text-muted">
           Applied to every new DeepSeek research target. Existing jobs keep the
           budget they started with.
         </p>
@@ -237,24 +237,24 @@ export function WorkspaceSettingsForm({
             />
           </div>
         </div>
-        <p className="mt-2 text-[10px] leading-4 text-faint">
+        <p className="mt-2 text-12 leading-4 text-faint">
           DeepSeek documents a limit of 5 requests per second per account for
           Search and for Fetch. Growth refuses values above 5.
         </p>
       </div>
 
       <div className="rounded-xl border border-line bg-[#fffefb] p-4">
-        <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+        <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
           Footer preview
         </div>
-        <div className="mt-2 whitespace-pre-wrap text-[10.5px] leading-5 text-muted">
+        <div className="mt-2 whitespace-pre-wrap text-12 leading-5 text-muted">
           {`--\n${legalBusinessName} · ${postalAddress || "[postal address missing]"}\n${footerNote}\nUnsubscribe: ${appUrl}/unsubscribe/…`}
         </div>
       </div>
 
       <InlineError>{error}</InlineError>
       {notice && (
-        <div className="rounded-lg border border-forest/20 bg-lime/15 px-3 py-2 text-[11px] text-forest">
+        <div className="rounded-lg border border-forest/20 bg-lime/15 px-3 py-2 text-12 text-forest">
           {notice}
         </div>
       )}

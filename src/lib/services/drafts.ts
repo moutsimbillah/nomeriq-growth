@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
 import { tagsFromActorType } from "@/lib/agent/agentTag";
+import { addedWindow, COUNTED_ADDED_RANGES, type AddedRange } from "@/lib/dates/pakistan";
 import type { AgentTag, ChannelTag } from "@/lib/types";
 import { generateFirstContact } from "@/lib/ai/writer";
 import { validateDraft } from "@/lib/ai/claims";
@@ -58,10 +59,31 @@ export async function listDraftsForProspect(
   return result.rows.map(mapDraft);
 }
 
+export interface DraftFilters {
+  /** Which agent saved the draft, normalised. Reporting only. */
+  agent?: string;
+  /** Which Asia/Karachi day window it was saved in. */
+  added?: AddedRange;
+  addedFrom?: string;
+  addedTo?: string;
+  /** Injectable clock, so day boundaries are testable. */
+  now?: Date;
+}
+
+/** The SQL for an Asia/Karachi day window, pushing its two instants as params. */
+function addedCondition(filters: DraftFilters, params: unknown[]): string | null {
+  if (!filters.added) return null;
+  const window = addedWindow(filters.added, filters.now ?? new Date(), filters.addedFrom, filters.addedTo);
+  if (!window) return null;
+  params.push(window.from.toISOString(), window.to.toISOString());
+  return `d.created_at >= $${params.length - 1} AND d.created_at < $${params.length}`;
+}
+
 export async function listDrafts(
   status?: string,
   limit = 100,
   agent?: string,
+  filters: DraftFilters = {},
 ): Promise<Draft[]> {
   const db = await getDb();
   const params: unknown[] = [];
@@ -74,6 +96,8 @@ export async function listDrafts(
     params.push(agent);
     conditions.push(`d.source_agent = $${params.length}`);
   }
+  const added = addedCondition(filters, params);
+  if (added) conditions.push(added);
   params.push(Math.min(limit, 200));
   const result = await db.query<any>(
     `${DRAFT_SELECT}
@@ -544,6 +568,55 @@ export function draftWordCount(draft: Draft): number {
 
 export function latestWarning(draft: Draft): DraftWarning | null {
   return draft.warnings[0] ?? null;
+}
+
+/**
+ * Counts for the two filters on Email, Drafts. Like the leads facets, each axis is counted with every
+ * other filter applied but not its own, so an option shows what choosing it would return.
+ */
+export async function getDraftOriginFacets(
+  status?: string,
+  filters: DraftFilters = {},
+): Promise<{ agents: Record<string, number>; added: Record<string, number> }> {
+  const db = await getDb();
+  const base: string[] = [];
+  const baseParams: unknown[] = [];
+  if (status) {
+    baseParams.push(status);
+    base.push(`d.status = $${baseParams.length}`);
+  }
+  const where = base.length ? `WHERE ${base.join(" AND ")}` : "";
+
+  const agents: Record<string, number> = {};
+  {
+    const params = [...baseParams];
+    const condition = addedCondition(filters, params);
+    const rows = await db.query<{ source_agent: string | null; n: number }>(
+      `SELECT coalesce(d.source_agent, 'unknown') AS source_agent, count(*)::int AS n FROM drafts d
+        ${where}${condition ? `${where ? " AND" : "WHERE"} ${condition}` : ""} GROUP BY 1`,
+      params,
+    );
+    for (const row of rows.rows) agents[String(row.source_agent ?? "unknown")] = Number(row.n);
+  }
+
+  const added: Record<string, number> = {};
+  for (const range of COUNTED_ADDED_RANGES) {
+    const params = [...baseParams];
+    const agentClause = filters.agent
+      ? (params.push(filters.agent), `d.source_agent = $${params.length}`)
+      : null;
+    const condition = addedCondition({ ...filters, added: range }, params);
+    const clauses = [agentClause, condition].filter(Boolean) as string[];
+    const rows = await db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM drafts d ${where}${
+        clauses.length ? `${where ? " AND" : "WHERE"} ${clauses.join(" AND ")}` : ""
+      }`,
+      params,
+    );
+    added[range] = Number(rows.rows[0]?.n ?? 0);
+  }
+
+  return { agents, added };
 }
 
 export async function getDraftRevisions(id: string) {

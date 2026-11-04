@@ -112,8 +112,8 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
     <div className="mt-4 rounded-xl border border-line bg-white/50 px-3.5 py-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-[12px] font-bold text-ink">Provider failover order</div>
-          <p className="text-[10px] text-muted">
+          <div className="text-12 font-bold text-ink">Provider failover order</div>
+          <p className="text-12 text-muted">
             The engine tries these in order and only stops when every one of them fails. Lowest
             number is tried first. Keys are stored encrypted and never shown again.
           </p>
@@ -133,7 +133,7 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
       </div>
 
       {providers.length === 0 ? (
-        <p className="mt-3 text-[10px] text-faint">
+        <p className="mt-3 text-12 text-faint">
           No ordered provider yet — the engine is using the single DeepSeek credential above.
         </p>
       ) : (
@@ -144,30 +144,30 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
               className="flex flex-wrap items-center gap-2 rounded-lg border border-line/70 px-2.5 py-2"
             >
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 text-[11px] font-bold text-ink">
+                <div className="flex items-center gap-2 text-12 font-bold text-ink">
                   {row.name}
                   {!row.isEnabled && (
-                    <span className="rounded bg-line/60 px-1.5 py-0.5 text-[9px] font-medium text-muted">
+                    <span className="rounded bg-line/60 px-1.5 py-0.5 text-12 font-medium text-muted">
                       disabled
                     </span>
                   )}
                 </div>
-                <div className="truncate text-[9.5px] text-faint">
+                <div className="truncate text-12 text-faint">
                   {row.model} · {row.baseUrl}
                 </div>
                 {row.lastTestMessage && (
                   <div
-                    className={`text-[9.5px] ${row.lastTestOk ? "text-emerald-600" : "text-rose-600"}`}
+                    className={`text-12 ${row.lastTestOk ? "text-emerald-600" : "text-rose-600"}`}
                   >
                     {row.lastTestOk ? "Last test OK" : "Last test failed"} — {row.lastTestMessage}
                   </div>
                 )}
               </div>
 
-              <label className="flex items-center gap-1 text-[9.5px] text-muted">
+              <label className="flex items-center gap-1 text-12 text-muted">
                 Order
                 <input
-                  className="input w-14 px-1.5 py-0.5 text-[10px]"
+                  className="input w-14 px-1.5 py-0.5 text-12"
                   type="number"
                   min={1}
                   defaultValue={row.priority}

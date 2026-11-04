@@ -123,18 +123,18 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
         <div>
           <div className="flex items-center gap-2">
             <Sparkles size={14} className="text-forest" />
-            <h3 className="text-[14px] font-bold tracking-[-0.01em] text-ink">
+            <h3 className="text-14 font-bold tracking-[-0.01em] text-ink">
               DeepSeek research provider
             </h3>
           </div>
-          <p className="mt-1 max-w-xl text-[11.5px] leading-5 text-muted">
+          <p className="mt-1 max-w-xl text-12 leading-5 text-muted">
             Powers autonomous discovery: Search finds candidate businesses, Fetch
             retrieves official evidence, and the model verifies a paid signal
             offering and writes the first-contact draft.
           </p>
         </div>
         <span
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[9.5px] font-bold uppercase tracking-[0.12em] ${
+          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-12 font-bold uppercase tracking-[0.12em] ${
             state.configured
               ? "border-forest/25 bg-lime/25 text-forest"
               : "border-amber/30 bg-amber/10 text-amber"
@@ -163,7 +163,7 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
                 : "sk-…"
             }
           />
-          <p className="mt-1.5 text-[10px] leading-4 text-faint">
+          <p className="mt-1.5 text-12 leading-4 text-faint">
             Encrypted with AES-256-GCM before storage and never returned to the
             browser.
           </p>
@@ -187,7 +187,7 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
               ))}
             </datalist>
           )}
-          <p className="mt-1.5 text-[10px] leading-4 text-faint">
+          <p className="mt-1.5 text-12 leading-4 text-faint">
             Vendor-prefixed names are supported, for example{" "}
             <code>deepseek/deepseek-chat</code>.
             {models.length > 0 && (
@@ -210,7 +210,7 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
             onChange={(event) => setBaseUrl(event.target.value)}
             placeholder="https://api.deepseek.com"
           />
-          <p className="mt-1.5 text-[10px] leading-4 text-faint">
+          <p className="mt-1.5 text-12 leading-4 text-faint">
             A trailing <code>/v1</code> is stripped automatically. Any
             DeepSeek-compatible host works. If it implements Search and Fetch at
             different paths, leave the two fields below blank and the test will
@@ -252,7 +252,7 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
                 key={entry}
                 type="button"
                 onClick={() => setModel(entry)}
-                className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold transition ${
+                className={`rounded-full border px-2.5 py-1 text-12 font-semibold transition ${
                   entry === model
                     ? "border-forest bg-forest text-lime"
                     : "border-line bg-white/60 text-muted hover:border-ink/30"
@@ -267,7 +267,7 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
       )}
 
       {state.lastTestMessage && (
-        <p className="mt-3 text-[10.5px] leading-5 text-muted">
+        <p className="mt-3 text-12 leading-5 text-muted">
           <span className="font-semibold text-ink">Last test:</span>{" "}
           {state.lastTestMessage}
         </p>
@@ -301,7 +301,7 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
           )}
           {pending === "test" ? "Testing…" : "Test Search, Fetch and models"}
         </button>
-        <span className="text-[10px] text-faint">
+        <span className="text-12 text-faint">
           The test makes one real Search, one Fetch and one model-list call.
         </span>
       </div>
@@ -315,7 +315,7 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
           ].map((capability) => (
             <div
               key={capability.label}
-              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10.5px] font-semibold ${
+              className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-12 font-semibold ${
                 capability.ok
                   ? "border-forest/25 bg-lime/20 text-forest"
                   : "border-amber/30 bg-amber/10 text-amber"
@@ -329,7 +329,7 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
       )}
 
       {outcome && !outcome.searchOk && (
-        <p className="mt-2 text-[10.5px] leading-5 text-muted">
+        <p className="mt-2 text-12 leading-5 text-muted">
           This endpoint did not answer Search at any path we tried. Set the
           Search and Fetch paths above if this host names them differently, or
           use <code>https://api.deepseek.com</code>, which implements them
@@ -337,7 +337,7 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
         </p>
       )}
       {outcome?.searchPath && outcome.searchOk && (
-        <p className="mt-2 text-[10.5px] leading-5 text-muted">
+        <p className="mt-2 text-12 leading-5 text-muted">
           Detected on this endpoint: Search at <code>{outcome.searchPath}</code>
           {outcome.fetchPath ? (
             <>
@@ -357,7 +357,7 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
 
       <div className="mt-4 flex items-start gap-2 rounded-xl border border-line bg-paper/60 p-3">
         <ShieldCheck size={13} className="mt-0.5 shrink-0 text-forest" />
-        <p className="text-[10.5px] leading-5 text-muted">
+        <p className="text-12 leading-5 text-muted">
           Search and Fetch are billed at $0.75 per 1,000 successful requests; model
           calls are billed per token. The engine records every real operation and
           pauses safely when a job&apos;s budget is reached.

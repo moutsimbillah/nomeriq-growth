@@ -77,11 +77,11 @@ export function Modal({
       >
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-line bg-panel px-5 py-4">
           <div>
-            <h2 className="text-[16px] font-bold tracking-[-0.01em] text-ink">
+            <h2 className="text-16 font-bold tracking-[-0.01em] text-ink">
               {title}
             </h2>
             {description && (
-              <p className="mt-0.5 text-[11.5px] leading-5 text-muted">
+              <p className="mt-0.5 text-12 leading-5 text-muted">
                 {description}
               </p>
             )}
@@ -152,7 +152,7 @@ export function Spinner({ className }: { className?: string }) {
 export function InlineError({ children }: { children?: ReactNode }) {
   if (!children) return null;
   return (
-    <div className="rounded-lg border border-rust/20 bg-rust/[0.05] px-3 py-2 text-[11.5px] leading-5 text-rust">
+    <div className="rounded-lg border border-rust/20 bg-rust/[0.05] px-3 py-2 text-12 leading-5 text-rust">
       {children}
     </div>
   );

@@ -100,11 +100,11 @@ export function NewResearchButton({
                     : "border-line bg-white/50 hover:border-ink/25"
                 }`}
               >
-                <div className="flex items-center gap-2 text-[12px] font-semibold text-ink">
+                <div className="flex items-center gap-2 text-12 font-semibold text-ink">
                   <Sparkles size={13} className="text-forest" />
                   DeepSeek engine
                 </div>
-                <p className="mt-1 text-[10.5px] leading-4 text-muted">
+                <p className="mt-1 text-12 leading-4 text-muted">
                   Growth runs the search, verification and drafting itself. Start it
                   and close the tab.
                 </p>
@@ -118,11 +118,11 @@ export function NewResearchButton({
                     : "border-line bg-white/50 hover:border-ink/25"
                 }`}
               >
-                <div className="flex items-center gap-2 text-[12px] font-semibold text-ink">
+                <div className="flex items-center gap-2 text-12 font-semibold text-ink">
                   <Users size={13} className="text-muted" />
                   ChatGPT / Claude session
                 </div>
-                <p className="mt-1 text-[10.5px] leading-4 text-muted">
+                <p className="mt-1 text-12 leading-4 text-muted">
                   You run a connected assistant against the same database through MCP
                   or the REST API.
                 </p>
@@ -164,7 +164,7 @@ export function NewResearchButton({
                 key={preset}
                 type="button"
                 onClick={() => setTarget(preset)}
-                className={`rounded-full border px-3 py-1.5 text-[10.5px] font-semibold transition ${
+                className={`rounded-full border px-3 py-1.5 text-12 font-semibold transition ${
                   target === preset
                     ? "border-forest bg-forest text-lime"
                     : "border-line bg-white/60 text-muted hover:border-ink/30"
@@ -190,7 +190,7 @@ export function NewResearchButton({
                 value={budget}
                 onChange={(event) => setBudget(Number(event.target.value))}
               />
-              <p className="mt-2 text-[10px] leading-4 text-faint">
+              <p className="mt-2 text-12 leading-4 text-faint">
                 The engine pauses safely when this is reached and keeps all progress.
                 Search and Fetch bill at $0.75 per 1,000 successful requests; model
                 cost depends on tokens.
@@ -214,7 +214,7 @@ export function NewResearchButton({
                           : [...current, category.value],
                       )
                     }
-                    className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-[11.5px] font-semibold transition ${
+                    className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 text-left text-12 font-semibold transition ${
                       active
                         ? "border-forest/25 bg-lime/25 text-forest"
                         : "border-line bg-white/50 text-muted hover:border-ink/25"
@@ -344,7 +344,7 @@ export function JobStatusButton({
         )}
         {nextStatus === "paused" ? "Pause" : "Resume"}
       </button>
-      {error && <span className="text-[9.5px] text-rust">{error}</span>}
+      {error && <span className="text-12 text-rust">{error}</span>}
     </div>
   );
 }

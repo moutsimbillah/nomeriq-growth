@@ -18,7 +18,9 @@ import {
   listSentMessages,
   listUnknownInbound,
 } from "@/lib/services/conversations";
-import { listDrafts } from "@/lib/services/drafts";
+import { getDraftOriginFacets, listDrafts } from "@/lib/services/drafts";
+import { ADDED_LABELS, COUNTED_ADDED_RANGES } from "@/lib/dates/pakistan";
+import { readLeadFilters } from "@/lib/leads/leadFilters";
 import { AGENT_LABELS, AGENT_TAGS } from "@/lib/agent/agentTag";
 import {
   getFollowUpOverview,
@@ -64,9 +66,11 @@ function classificationClass(classification: string) {
 export default async function EmailPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; agent?: string }>;
+  searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
+  // the same reader the leads page uses, so ?added= and the date inputs mean the same thing here
+  const filters = readLeadFilters(params);
   const tabMap: Record<string, string> = {
     inbox: "Inbox",
     sent: "Sent",
@@ -90,7 +94,12 @@ export default async function EmailPage({
   ] = await Promise.all([
     listConversations({ onlyReplied: true, limit: 100 }),
     listSentMessages(100),
-    listDrafts(undefined, 120, params.agent),
+    listDrafts(undefined, 120, filters.agent, {
+      agent: filters.agent,
+      added: filters.added,
+      addedFrom: filters.addedFrom,
+      addedTo: filters.addedTo,
+    }),
     listCampaigns(),
     getFollowUpOverview(),
     listFollowUpCandidates(),
@@ -98,6 +107,12 @@ export default async function EmailPage({
     listEmailAccounts(),
     listUnknownInbound(20),
   ]);
+  const draftFacets = await getDraftOriginFacets(undefined, {
+    agent: filters.agent,
+    added: filters.added,
+    addedFrom: filters.addedFrom,
+    addedTo: filters.addedTo,
+  });
   const account = accounts[0] ?? null;
   const syncHealth =
     account && account.provider !== "sandbox"
@@ -151,7 +166,7 @@ export default async function EmailPage({
       />
 
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-white/45 px-3.5 py-2.5">
-        <div className="flex items-center gap-2 text-[10.5px] text-muted">
+        <div className="flex items-center gap-2 text-12 text-muted">
           <Mail size={13} className={account?.status === "connected" ? "text-forest" : "text-amber"} />
           <span className="font-semibold text-ink">{account?.emailAddress || "No mailbox"}</span>
           {account?.provider === "sandbox" ? (
@@ -171,12 +186,12 @@ export default async function EmailPage({
             <span className="text-faint">· synced {relativeTime(account.lastSyncAt)}</span>
           )}
           {syncHealth.some((state) => !state.historyComplete || state.error) && (
-            <span className="inline-flex items-center gap-1 text-[9.5px] text-amber">
+            <span className="inline-flex items-center gap-1 text-12 text-amber">
               <CircleAlert size={9} /> History incomplete
             </span>
           )}
         </div>
-        <Link href="/settings#email" className="text-[10px] font-semibold text-muted hover:text-ink">
+        <Link href="/settings#email" className="text-12 font-semibold text-muted hover:text-ink">
           Manage mailbox →
         </Link>
       </div>
@@ -216,7 +231,7 @@ export default async function EmailPage({
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-[12.5px] font-bold text-ink">
+                        <span className="text-13 font-bold text-ink">
                           {conversation.prospectName}
                         </span>
                         <span
@@ -228,15 +243,15 @@ export default async function EmailPage({
                           <span className="h-1.5 w-1.5 rounded-full bg-amber" />
                         )}
                       </div>
-                      <div className="mt-0.5 truncate text-[11px] font-medium text-ink/75">
+                      <div className="mt-0.5 truncate text-12 font-medium text-ink/75">
                         {conversation.subject}
                       </div>
-                      <div className="mt-1 line-clamp-1 text-[10.5px] text-muted">
+                      <div className="mt-1 line-clamp-1 text-12 text-muted">
                         {conversation.snippet || "Open the thread to read the reply."}
                       </div>
                     </div>
                     <div className="shrink-0 text-right">
-                      <div className="text-[9.5px] text-faint">
+                      <div className="text-12 text-faint">
                         {relativeTime(conversation.lastInboundAt)}
                       </div>
                       <span className="btn-ghost btn-xs mt-1">
@@ -262,17 +277,17 @@ export default async function EmailPage({
                     className="rounded-xl border border-line bg-paper/40 px-3 py-2.5"
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <span className="text-[11px] font-semibold text-ink">
+                      <span className="text-12 font-semibold text-ink">
                         {message.fromEmail}
                       </span>
-                      <span className="text-[9px] text-faint">
+                      <span className="text-12 text-faint">
                         {relativeTime(message.receivedAt)}
                       </span>
                     </div>
-                    <div className="mt-0.5 text-[10.5px] text-muted">
+                    <div className="mt-0.5 text-12 text-muted">
                       {message.subject}
                     </div>
-                    <div className="mt-1 line-clamp-2 text-[10px] leading-4 text-faint">
+                    <div className="mt-1 line-clamp-2 text-12 leading-4 text-faint">
                       {truncate(message.bodyText, 200)}
                     </div>
                   </div>
@@ -310,18 +325,18 @@ export default async function EmailPage({
                         <div className="font-semibold text-ink">
                           {message.prospectName || message.to}
                         </div>
-                        <div className="text-[9.5px] text-faint">{message.to}</div>
+                        <div className="text-12 text-faint">{message.to}</div>
                       </td>
                       <td>
                         {message.conversationId ? (
                           <Link
                             href={`/email/${message.conversationId}`}
-                            className="line-clamp-1 max-w-[320px] text-[11px] text-ink hover:underline"
+                            className="line-clamp-1 max-w-[320px] text-12 text-ink hover:underline"
                           >
                             {message.subject}
                           </Link>
                         ) : (
-                          <span className="line-clamp-1 max-w-[320px] text-[11px] text-ink">
+                          <span className="line-clamp-1 max-w-[320px] text-12 text-ink">
                             {message.subject}
                           </span>
                         )}
@@ -344,7 +359,7 @@ export default async function EmailPage({
                           {message.isSandbox ? "not delivered" : message.deliveryStatus}
                         </span>
                       </td>
-                      <td className="text-right text-[9.5px] text-faint">
+                      <td className="text-right text-12 text-faint">
                         {formatDateTime(message.sentAt)}
                       </td>
                     </tr>
@@ -363,11 +378,44 @@ export default async function EmailPage({
             <select name="agent" defaultValue={params.agent || ""} className="select w-auto min-w-[170px]">
               <option value="">All agents</option>
               {AGENT_TAGS.map((tag) => (
-                <option key={tag} value={tag}>
-                  {AGENT_LABELS[tag]} ({drafts.filter((draft) => draft.sourceAgent === tag).length})
+                <option key={tag} value={tag} disabled={(draftFacets.agents[tag] ?? 0) === 0 && params.agent !== tag}>
+                  {AGENT_LABELS[tag]} ({draftFacets.agents[tag] ?? 0})
                 </option>
               ))}
             </select>
+            <select
+              name="added"
+              defaultValue={params.added || ""}
+              className="select w-auto min-w-[150px]"
+              title="Saved on — days are Asia/Karachi days"
+            >
+              <option value="">Any date</option>
+              {COUNTED_ADDED_RANGES.map((range) => (
+                <option key={range} value={range} disabled={(draftFacets.added[range] ?? 0) === 0 && params.added !== range}>
+                  {ADDED_LABELS[range]} ({draftFacets.added[range] ?? 0})
+                </option>
+              ))}
+              <option value="custom" disabled={params.added !== "custom"}>
+                {ADDED_LABELS.custom}
+              </option>
+            </select>
+            <span className="flex items-center gap-1.5">
+              <input
+                type="date"
+                name="from"
+                defaultValue={params.from || ""}
+                aria-label="Saved from, Asia/Karachi"
+                className="input h-10 w-auto px-3 text-13"
+              />
+              <span className="text-12 text-muted">to</span>
+              <input
+                type="date"
+                name="to"
+                defaultValue={params.to || ""}
+                aria-label="Saved to, Asia/Karachi"
+                className="input h-10 w-auto px-3 text-13"
+              />
+            </span>
             <button type="submit" className="btn-secondary btn-sm">
               Filter
             </button>
@@ -385,16 +433,17 @@ export default async function EmailPage({
             />
           ) : (
             <div className="table-wrap">
-              <table className="table">
+              <table className="table min-w-[660px]">
                 <thead>
                   <tr>
-                    <th>Prospect</th>
-                    <th>Type</th>
-                    <th>Subject</th>
-                    <th>Saved by</th>
-                    <th>Status</th>
-                    <th>Updated</th>
-                    <th className="text-right">Review</th>
+                    {/* totals 100%, sized so the UPDATED and REVIEW labels fit at 1024 too */}
+                    <th className="w-[19%]">Prospect</th>
+                    <th className="w-[10%]">Type</th>
+                    <th className="w-[23%]">Subject</th>
+                    <th className="w-[14%]">Saved by</th>
+                    <th className="w-[12%]">Status</th>
+                    <th className="w-[12%]">Updated</th>
+                    <th className="w-[10%] text-right">Review</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -407,7 +456,7 @@ export default async function EmailPage({
                           {draft.kind === "follow_up" ? ` #${draft.sequence}` : ""}
                         </span>
                       </td>
-                      <td className="max-w-[290px] truncate text-[11px]">{draft.subject}</td>
+                      <td className="truncate text-12">{draft.subject}</td>
                       <td>
                         <AgentPill
                           agent={draft.sourceAgent ?? "unknown"}
@@ -428,7 +477,7 @@ export default async function EmailPage({
                           {draft.status}
                         </span>
                       </td>
-                      <td className="text-[9.5px] text-faint">{relativeTime(draft.updatedAt)}</td>
+                      <td className="text-12 text-faint">{relativeTime(draft.updatedAt)}</td>
                       <td className="text-right">
                         <Link href={`/leads/${draft.prospectId}`} className="btn-ghost btn-xs">
                           Open lead <ArrowRight size={10} />
@@ -497,22 +546,22 @@ export default async function EmailPage({
                       <tr key={campaign.id}>
                         <td>
                           <div className="font-semibold text-ink">{campaign.name}</div>
-                          <div className="text-[9.5px] text-faint">
+                          <div className="text-12 text-faint">
                             Created {relativeTime(campaign.createdAt)}
                           </div>
                         </td>
                         <td>
-                          <div className="text-[11px] text-ink">
+                          <div className="text-12 text-ink">
                             {campaign.sent} of {campaign.total} sent
                           </div>
-                          <div className="text-[9.5px] text-faint">
+                          <div className="text-12 text-faint">
                             {campaign.failed} failed · {campaign.queued} queued
                           </div>
                         </td>
                         <td>
                           <span className="badge capitalize">{campaign.status}</span>
                         </td>
-                        <td className="text-[10px] text-muted">{campaign.accountEmail}</td>
+                        <td className="text-12 text-muted">{campaign.accountEmail}</td>
                         <td>
                           <CampaignActions campaign={campaign} />
                         </td>
@@ -536,8 +585,8 @@ export default async function EmailPage({
               ["Cancelled by reply", followOverview.cancelled],
             ].map(([label, value]) => (
               <Card key={label} className="p-4">
-                <div className="font-display text-[28px] leading-none">{value}</div>
-                <div className="mt-1 text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+                <div className="text-28 leading-none">{value}</div>
+                <div className="mt-1 text-12 font-bold uppercase tracking-[0.12em] text-faint">
                   {label}
                 </div>
               </Card>
@@ -566,13 +615,13 @@ export default async function EmailPage({
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="text-[11.5px] font-semibold text-ink">
+                        <span className="text-12 font-semibold text-ink">
                           {draft.prospectName}
                         </span>
                         <span className="badge">#{draft.sequence}</span>
                         <span className="badge capitalize">{draft.status}</span>
                       </div>
-                      <div className="mt-0.5 truncate text-[10px] text-muted">
+                      <div className="mt-0.5 truncate text-12 text-muted">
                         {draft.subject} · {truncate(draft.body.replace(/\n+/g, " "), 130)}
                       </div>
                     </div>
@@ -593,7 +642,7 @@ export default async function EmailPage({
               description={`${followOverview.due} due now. Preparing creates drafts only; sending still needs founder review.`}
             />
             {dueFollowUps.length === 0 ? (
-              <p className="mt-3 text-[11px] text-faint">Nothing is due.</p>
+              <p className="mt-3 text-12 text-faint">Nothing is due.</p>
             ) : (
               <div className="mt-3 grid gap-2 sm:grid-cols-2">
                 {dueFollowUps.map((candidate) => (
@@ -602,10 +651,10 @@ export default async function EmailPage({
                     className="flex items-center justify-between rounded-lg border border-line bg-paper/40 px-3 py-2.5"
                   >
                     <div>
-                      <div className="text-[11px] font-semibold text-ink">
+                      <div className="text-12 font-semibold text-ink">
                         {candidate.businessName}
                       </div>
-                      <div className="text-[9.5px] text-faint">
+                      <div className="text-12 text-faint">
                         {candidate.daysSinceLastOutbound} days since contact · next #
                         {candidate.nextSequence}
                       </div>

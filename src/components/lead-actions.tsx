@@ -150,8 +150,8 @@ export function AddLeadButton({
               One business keeps one prospect record.
             </Notice>
             <div className="rounded-xl border border-line bg-white/60 p-4">
-              <div className="text-[13px] font-semibold text-ink">{duplicate.name}</div>
-              <p className="mt-1 text-[11px] leading-5 text-muted">
+              <div className="text-13 font-semibold text-ink">{duplicate.name}</div>
+              <p className="mt-1 text-12 leading-5 text-muted">
                 Return to the existing research rather than overwriting it.
               </p>
             </div>
@@ -235,7 +235,7 @@ export function AddLeadButton({
                         )
                       }
                       className={cn(
-                        "rounded-xl border px-2.5 py-2 text-[10.5px] font-semibold transition",
+                        "rounded-xl border px-2.5 py-2 text-12 font-semibold transition",
                         active
                           ? "border-forest/25 bg-lime/25 text-forest"
                           : "border-line bg-white/50 text-muted",
@@ -308,7 +308,7 @@ export function AddLeadButton({
             </div>
 
             <div className="rounded-xl border border-line bg-paper/40 p-3.5">
-              <div className="mb-3 text-[10px] font-bold uppercase tracking-[0.12em] text-faint">
+              <div className="mb-3 text-12 font-bold uppercase tracking-[0.12em] text-faint">
                 Public evidence source
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -419,7 +419,7 @@ export function PipelineCard({
 
   return (
     <form onSubmit={save} className="card p-5">
-      <div className="text-[9.5px] font-bold uppercase tracking-[0.14em] text-faint">
+      <div className="text-12 font-bold uppercase tracking-[0.14em] text-faint">
         Sales stage
       </div>
       <select
@@ -453,7 +453,7 @@ export function PipelineCard({
       </div>
       <InlineError>{error}</InlineError>
       <div className="mt-3 flex items-center justify-between gap-2">
-        <span className="text-[9.5px] text-faint">
+        <span className="text-12 text-faint">
           {saved ? "Saved." : "Updates immediately."}
         </span>
         <button type="submit" className="btn-secondary btn-sm" disabled={pending}>
@@ -753,8 +753,8 @@ export function DraftEditor({
             <Sparkles size={16} />
           </div>
           <div>
-            <h2 className="text-[14px] font-bold text-ink">First-contact draft</h2>
-            <p className="mt-1 text-[11px] leading-5 text-muted">
+            <h2 className="text-14 font-bold text-ink">First-contact draft</h2>
+            <p className="mt-1 text-12 leading-5 text-muted">
               No draft exists yet. Generate one personalized note grounded in
               the research above. Nothing is sent.
             </p>
@@ -784,7 +784,7 @@ export function DraftEditor({
         <div>
           <div className="flex items-center gap-2">
             <Mail size={14} className="text-muted" />
-            <h2 className="text-[13px] font-bold text-ink">
+            <h2 className="text-13 font-bold text-ink">
               {draft.kind === "first_contact" ? "First-contact draft" : "Follow-up draft"}
             </h2>
             <span
@@ -797,7 +797,7 @@ export function DraftEditor({
               {draft.status.replace("_", " ")}
             </span>
           </div>
-          <p className="mt-1 text-[10.5px] text-muted">
+          <p className="mt-1 text-12 text-muted">
             {draft.sourceAgent
               ? `Drafted by ${agentPillLabel(draft.sourceAgent, draft.sourceClient)}`
               : draft.aiGenerated
@@ -831,7 +831,7 @@ export function DraftEditor({
             ))}
           </datalist>
           {!verifiedEmails.includes(recipient) && (
-            <p className="mt-1 text-[10px] font-medium text-rust">
+            <p className="mt-1 text-12 font-medium text-rust">
               This address is not a source-confirmed contact email. Sending will be blocked.
             </p>
           )}
@@ -853,7 +853,7 @@ export function DraftEditor({
             onChange={(event) => setBody(event.target.value)}
             disabled={sent}
           />
-          <div className="mt-1 flex items-center justify-between text-[9.5px] text-faint">
+          <div className="mt-1 flex items-center justify-between text-12 text-faint">
             <span>Signature and lawful unsubscribe footer are added at send.</span>
             <span className={words < 40 || words > 100 ? "text-amber" : "text-faint"}>
               {words} words
@@ -867,7 +867,7 @@ export function DraftEditor({
               <div
                 key={warning.code}
                 className={cn(
-                  "rounded-lg border px-2.5 py-2 text-[10.5px] leading-4",
+                  "rounded-lg border px-2.5 py-2 text-12 leading-4",
                   warningTone(warning.code),
                 )}
               >
@@ -878,7 +878,7 @@ export function DraftEditor({
         )}
 
         {!sandboxMode && (
-          <div className="rounded-lg border border-line bg-paper/60 px-2.5 py-2 text-[10px] leading-4 text-muted">
+          <div className="rounded-lg border border-line bg-paper/60 px-2.5 py-2 text-12 leading-4 text-muted">
             Live sending is enabled. SMTP acceptance does not guarantee inbox
             delivery. The app will append the opt-out footer and sender identity.
           </div>
@@ -886,12 +886,12 @@ export function DraftEditor({
 
         {error && <InlineError>{error}</InlineError>}
         {notice && (
-          <div className="rounded-lg border border-forest/20 bg-lime/15 px-2.5 py-2 text-[10.5px] text-forest">
+          <div className="rounded-lg border border-forest/20 bg-lime/15 px-2.5 py-2 text-12 text-forest">
             {notice}
           </div>
         )}
         {sendBlockedReason && !sent && (
-          <div className="rounded-lg border border-amber/20 bg-amber/[0.05] px-2.5 py-2 text-[10px] leading-4 text-[#76501a]">
+          <div className="rounded-lg border border-amber/20 bg-amber/[0.05] px-2.5 py-2 text-12 leading-4 text-[#76501a]">
             {sendBlockedReason}
           </div>
         )}
@@ -978,11 +978,11 @@ export function DraftEditor({
         width="sm"
       >
         <div className="rounded-xl border border-line bg-paper/50 p-3">
-          <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-faint">
+          <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
             {sandboxMode ? "Sandbox preview" : "Live send"}
           </div>
-          <div className="mt-1 text-[12px] font-semibold text-ink">{subject}</div>
-          <div className="mt-1 line-clamp-3 whitespace-pre-wrap text-[10.5px] leading-5 text-muted">
+          <div className="mt-1 text-12 font-semibold text-ink">{subject}</div>
+          <div className="mt-1 line-clamp-3 whitespace-pre-wrap text-12 leading-5 text-muted">
             {body}
           </div>
         </div>

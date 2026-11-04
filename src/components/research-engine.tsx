@@ -162,22 +162,22 @@ export function ResearchEnginePanel({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-forest/20 bg-forest/[0.05] px-2.5 py-1 text-[9.5px] font-bold uppercase tracking-[0.12em] text-forest">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-forest/20 bg-forest/[0.05] px-2.5 py-1 text-12 font-bold uppercase tracking-[0.12em] text-forest">
               <Sparkles size={10} /> DeepSeek engine
             </span>
             <span
-              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[9.5px] font-bold uppercase tracking-[0.12em] ${statusTone(current.status)}`}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-12 font-bold uppercase tracking-[0.12em] ${statusTone(current.status)}`}
             >
               {current.status.replace(/_/g, " ")}
             </span>
             {live && (
-              <span className="inline-flex items-center gap-1.5 text-[9.5px] font-semibold uppercase tracking-[0.12em] text-muted">
+              <span className="inline-flex items-center gap-1.5 text-12 font-semibold uppercase tracking-[0.12em] text-muted">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#a8d846]" />
                 live
               </span>
             )}
             {isActive && pump.running && !pump.paused && (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-forest/20 bg-forest/[0.05] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-forest">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-forest/20 bg-forest/[0.05] px-2 py-0.5 text-12 font-bold uppercase tracking-[0.1em] text-forest">
                 <LoaderCircle size={9} className="spin" />
                 driving from this tab
               </span>
@@ -186,17 +186,17 @@ export function ResearchEnginePanel({
               <button
                 type="button"
                 onClick={() => pump.setPaused(false)}
-                className="inline-flex items-center gap-1.5 rounded-full border border-amber/30 bg-amber/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.1em] text-amber"
+                className="inline-flex items-center gap-1.5 rounded-full border border-amber/30 bg-amber/10 px-2 py-0.5 text-12 font-bold uppercase tracking-[0.1em] text-amber"
               >
                 <Play size={9} />
                 this tab is not driving — resume
               </button>
             )}
           </div>
-          <h3 className="mt-2.5 text-[16px] font-bold tracking-[-0.015em] text-ink">
+          <h3 className="mt-2.5 text-16 font-bold tracking-[-0.015em] text-ink">
             Autonomous discovery
           </h3>
-          <p className="mt-1 max-w-xl text-[11.5px] leading-5 text-muted">
+          <p className="mt-1 max-w-xl text-12 leading-5 text-muted">
             Runs on the server without an open browser or chat session. Every step
             is persisted, so a restart resumes instead of starting over.
           </p>
@@ -283,11 +283,11 @@ export function ResearchEnginePanel({
           <div key={item.label}>
             <div className="flex items-center gap-1.5">
               <item.icon size={11} className="text-faint" />
-              <span className="text-[8.5px] font-bold uppercase tracking-[0.12em] text-faint">
+              <span className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
                 {item.label}
               </span>
             </div>
-            <div className="mt-1.5 text-[19px] font-bold leading-none text-ink">
+            <div className="mt-1.5 text-20 font-bold leading-none text-ink">
               {item.value}
             </div>
           </div>
@@ -296,7 +296,7 @@ export function ResearchEnginePanel({
 
       <div className="mt-5">
         <ProgressBar value={current.verifiedCount} max={current.targetCount} />
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[9.5px] text-faint">
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-12 text-faint">
           <span>
             {current.verifiedCount} of {current.targetCount} verified ·{" "}
             {current.candidatesPending} pending · {current.candidatesQualified} qualified
@@ -313,14 +313,14 @@ export function ResearchEnginePanel({
 
       <div className="mt-5 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-line bg-paper/60 p-3">
-          <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+          <div className="flex items-center gap-1.5 text-12 font-bold uppercase tracking-[0.12em] text-faint">
             <CircleDollarSign size={11} /> DeepSeek spend
           </div>
           <div className="mt-2 flex items-baseline gap-2">
-            <span className="font-display text-[21px] leading-none text-ink">
+            <span className="text-20 leading-none text-ink">
               {money(budget.spentUsd)}
             </span>
-            <span className="text-[10px] text-faint">
+            <span className="text-12 text-faint">
               of ${budget.budgetUsd.toFixed(2)} budget
             </span>
           </div>
@@ -331,7 +331,7 @@ export function ResearchEnginePanel({
               tone={budget.exhausted ? "amber" : "lime"}
             />
           </div>
-          <p className="mt-2 text-[10px] leading-4 text-faint">
+          <p className="mt-2 text-12 leading-4 text-faint">
             {budget.exhausted
               ? "Budget exhausted. Progress is preserved; raise the budget to continue."
               : `${money(budget.remainingUsd)} remaining. Cost is recorded per real API operation.`}
@@ -339,7 +339,7 @@ export function ResearchEnginePanel({
         </div>
 
         <div className="rounded-xl border border-line bg-paper/60 p-3">
-          <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+          <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
             Recorded operations
           </div>
           <div className="mt-2 grid grid-cols-3 gap-2">
@@ -349,16 +349,16 @@ export function ResearchEnginePanel({
               ["Model calls", snapshot?.usage?.modelCalls ?? 0],
             ].map(([label, value]) => (
               <div key={String(label)}>
-                <div className="text-[15px] font-bold leading-none text-ink">
+                <div className="text-16 font-bold leading-none text-ink">
                   {value as number}
                 </div>
-                <div className="mt-1 text-[8.5px] font-bold uppercase tracking-[0.1em] text-faint">
+                <div className="mt-1 text-12 font-bold uppercase tracking-[0.1em] text-faint">
                   {label}
                 </div>
               </div>
             ))}
           </div>
-          <p className="mt-2 text-[10px] leading-4 text-faint">
+          <p className="mt-2 text-12 leading-4 text-faint">
             Search and Fetch bill per successful request. Model cost is token-based.
           </p>
         </div>
@@ -366,19 +366,19 @@ export function ResearchEnginePanel({
 
       {current.stopReason && (
         <div className="mt-4 rounded-xl border border-line bg-white/50 p-3">
-          <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+          <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
             Why it stopped
           </div>
-          <p className="mt-1.5 text-[11px] leading-5 text-muted">{current.stopReason}</p>
+          <p className="mt-1.5 text-12 leading-5 text-muted">{current.stopReason}</p>
         </div>
       )}
 
       {notes.length > 0 && (
         <details className="mt-3 rounded-xl border border-line bg-white/50 p-3">
-          <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-[0.12em] text-faint">
+          <summary className="cursor-pointer text-12 font-bold uppercase tracking-[0.12em] text-faint">
             Last step ({notes.length} note{notes.length === 1 ? "" : "s"})
           </summary>
-          <ul className="mt-2 space-y-1 text-[10.5px] leading-5 text-muted">
+          <ul className="mt-2 space-y-1 text-12 leading-5 text-muted">
             {notes.map((note, index) => (
               <li key={index} className="flex gap-2">
                 <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-line-strong" />
@@ -392,7 +392,7 @@ export function ResearchEnginePanel({
       <InlineError>{error}</InlineError>
 
       {isActive && (
-        <p className="mt-3 rounded-xl border border-line bg-white/50 p-3 text-[10px] leading-4 text-muted">
+        <p className="mt-3 rounded-xl border border-line bg-white/50 p-3 text-12 leading-4 text-muted">
           {pump.paused ? (
             <>
               This tab has stopped driving the job. Nothing will advance until the
@@ -416,7 +416,7 @@ export function ResearchEnginePanel({
         </p>
       )}
 
-      <p className="mt-4 text-[10px] leading-4 text-faint">
+      <p className="mt-4 text-12 leading-4 text-faint">
         Research jobs only save leads and drafts for founder review. They never send
         email, and no lead is counted without a published contact email and evidence.
       </p>

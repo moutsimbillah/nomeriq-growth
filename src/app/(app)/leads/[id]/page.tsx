@@ -115,7 +115,7 @@ export default async function LeadDetailPage({
 
   return (
     <div className="animate-fade-up">
-      <div className="mb-5 flex items-center gap-2 text-[10.5px] text-faint">
+      <div className="mb-5 flex items-center gap-2 text-12 text-faint">
         <Link href="/leads" className="inline-flex items-center gap-1 hover:text-ink">
           <ArrowLeft size={11} /> All leads
         </Link>
@@ -125,27 +125,25 @@ export default async function LeadDetailPage({
 
       <PageHeader
         eyebrow={`${prospect.country || "Country unknown"} · discovered ${formatDate(prospect.createdAt)}`}
-        title={
-          <span className="flex flex-wrap items-center gap-3">
-            {prospect.businessName}
+        title={prospect.businessName}
+        titleAside={
+          <span className="flex flex-wrap items-center gap-x-2.5 gap-y-2">
             {prospect.qualificationStatus === "verified" && (
-              <span className="inline-flex translate-y-1 items-center gap-1 rounded-full border border-forest/15 bg-lime/35 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.1em] text-forest">
+              <span className="inline-flex items-center gap-1 rounded-full border border-forest/15 bg-lime/35 px-2.5 py-1 text-12 font-bold uppercase tracking-[0.1em] text-forest">
                 <BadgeCheck size={11} /> Verified business
               </span>
             )}
-            <span className="flex translate-y-1 items-center gap-2">
-              <AgentPill
-                agent={prospect.sourceAgent ?? "unknown"}
-                channel={prospect.sourceChannel}
-                note={prospect.sourceAgent === "other" ? prospect.sourceClient : undefined}
-                size="lg"
-              />
-              {prospect.sourceChannel ? (
-                <span className="text-[11px] font-medium text-muted">
-                  via {CHANNEL_LABELS[prospect.sourceChannel]}
-                </span>
-              ) : null}
-            </span>
+            <AgentPill
+              agent={prospect.sourceAgent ?? "unknown"}
+              channel={prospect.sourceChannel}
+              note={prospect.sourceAgent === "other" ? prospect.sourceClient : undefined}
+              size="lg"
+            />
+            {prospect.sourceChannel ? (
+              <span className="text-13 font-medium text-muted">
+                via {CHANNEL_LABELS[prospect.sourceChannel]}
+              </span>
+            ) : null}
           </span>
         }
         description={
@@ -158,7 +156,7 @@ export default async function LeadDetailPage({
                 href={prospect.websiteUrl}
                 target="_blank"
                 rel="noreferrer noopener"
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-muted hover:text-ink"
+                className="inline-flex items-center gap-1 text-12 font-semibold text-muted hover:text-ink"
               >
                 {prospect.domainKey} <ExternalLink size={10} />
               </a>
@@ -195,10 +193,10 @@ export default async function LeadDetailPage({
                         <Mail size={14} />
                       </span>
                       <div>
-                        <div className="wrap-anywhere text-[14px] font-semibold text-ink">
+                        <div className="wrap-anywhere text-14 font-semibold text-ink">
                           {prospect.contactEmail}
                         </div>
-                        <div className="mt-0.5 text-[9.5px] uppercase tracking-[0.1em] text-faint">
+                        <div className="mt-0.5 text-12 uppercase tracking-[0.1em] text-faint">
                           Public business contact
                         </div>
                       </div>
@@ -210,7 +208,7 @@ export default async function LeadDetailPage({
                       <Mail size={11} /> Compose externally
                     </a>
                   </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-muted">
+                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-12 text-muted">
                     <span className="inline-flex items-center gap-1">
                       <ShieldCheck size={10} className="text-forest" />
                       Verified {prospect.verifiedAt ? formatDate(prospect.verifiedAt) : "date unknown"}
@@ -235,7 +233,7 @@ export default async function LeadDetailPage({
                   </div>
                 </>
               ) : (
-                <div className="text-[12px] text-muted">
+                <div className="text-12 text-muted">
                   No source-confirmed contact email. This lead is not counted.
                 </div>
               )}
@@ -276,14 +274,14 @@ export default async function LeadDetailPage({
 
             <div className="mt-5 border-t border-line pt-4">
               <div className="mb-2 flex items-center justify-between">
-                <div className="text-[9.5px] font-bold uppercase tracking-[0.13em] text-faint">
+                <div className="text-12 font-bold uppercase tracking-[0.13em] text-faint">
                   Sources on file
                 </div>
                 <AddSourceButton prospectId={prospect.id} />
               </div>
               <div className="space-y-2">
                 {prospect.sources.length === 0 ? (
-                  <p className="text-[11px] text-faint">No sources recorded.</p>
+                  <p className="text-12 text-faint">No sources recorded.</p>
                 ) : (
                   prospect.sources.map((source) => (
                     <a
@@ -294,14 +292,14 @@ export default async function LeadDetailPage({
                       className="group flex min-w-0 items-start justify-between gap-3 rounded-lg border border-line bg-white/50 px-3 py-2.5 transition hover:border-line-strong hover:bg-white"
                     >
                       <div className="min-w-0">
-                        <div className="text-[11.5px] font-semibold text-ink group-hover:underline group-hover:underline-offset-4">
+                        <div className="text-12 font-semibold text-ink group-hover:underline group-hover:underline-offset-4">
                           {source.label}
                         </div>
-                        <div className="wrap-anywhere mt-0.5 text-[9.5px] text-faint" title={source.url}>
+                        <div className="wrap-anywhere mt-0.5 text-12 text-faint" title={source.url}>
                           {source.url}
                         </div>
                         {source.notes && (
-                          <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-muted">
+                          <p className="mt-1 line-clamp-2 text-12 leading-4 text-muted">
                             {source.notes}
                           </p>
                         )}
@@ -311,7 +309,7 @@ export default async function LeadDetailPage({
                           size={11}
                           className="text-faint group-hover:text-ink"
                         />
-                        <div className="mt-1 text-[8.5px] text-faint">
+                        <div className="mt-1 text-12 text-faint">
                           {formatDate(source.observedAt)}
                         </div>
                       </div>
@@ -329,38 +327,38 @@ export default async function LeadDetailPage({
             />
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <div className="sm:col-span-2">
-                <div className="text-[9.5px] font-bold uppercase tracking-[0.12em] text-faint">
+                <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
                   Service
                 </div>
-                <p className="mt-1 text-[12.5px] leading-6 text-ink">
+                <p className="mt-1 text-13 leading-6 text-ink">
                   {prospect.signalDescription || (
                     <span className="text-faint">Unknown</span>
                   )}
                 </p>
               </div>
               <div className="sm:col-span-2">
-                <div className="text-[9.5px] font-bold uppercase tracking-[0.12em] text-faint">
+                <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
                   Published pricing / subscription
                 </div>
-                <p className="mt-1 text-[11.5px] leading-5 text-muted">
+                <p className="mt-1 text-12 leading-5 text-muted">
                   {prospect.pricingDetails || (
                     <span className="text-faint">Unknown</span>
                   )}
                 </p>
               </div>
               <div>
-                <div className="text-[9.5px] font-bold uppercase tracking-[0.12em] text-faint">
+                <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
                   Followers
                 </div>
-                <div className="mt-1 text-[11.5px] text-ink">
+                <div className="mt-1 text-12 text-ink">
                   {prospect.followerCount || "Unknown"}
                 </div>
               </div>
               <div>
-                <div className="text-[9.5px] font-bold uppercase tracking-[0.12em] text-faint">
+                <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
                   Subscribers
                 </div>
-                <div className="mt-1 text-[11.5px] text-ink">
+                <div className="mt-1 text-12 text-ink">
                   {prospect.subscriberCount || "Unknown"}
                 </div>
               </div>
@@ -382,10 +380,10 @@ export default async function LeadDetailPage({
               </div>
             )}
             <div className="mt-4 rounded-xl border border-line bg-paper/50 p-3">
-              <div className="text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+              <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
                 Research notes
               </div>
-              <p className="mt-1 whitespace-pre-wrap text-[11px] leading-5 text-muted">
+              <p className="mt-1 whitespace-pre-wrap text-12 leading-5 text-muted">
                 {prospect.researchNotes || "No research notes recorded."}
               </p>
             </div>
@@ -407,10 +405,10 @@ export default async function LeadDetailPage({
               <div className="mt-4 flex items-start gap-3 rounded-xl border border-dashed-line border-line px-4 py-5">
                 <CircleDashed size={16} className="mt-0.5 text-faint" />
                 <div>
-                  <div className="text-[11.5px] font-semibold text-ink">
+                  <div className="text-12 font-semibold text-ink">
                     No conversation yet
                   </div>
-                  <p className="mt-0.5 text-[10.5px] leading-5 text-muted">
+                  <p className="mt-0.5 text-12 leading-5 text-muted">
                     When the first draft is sent, its thread appears here. Replies
                     are associated automatically by email and message headers.
                   </p>
@@ -428,7 +426,7 @@ export default async function LeadDetailPage({
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 text-[9.5px] font-semibold uppercase tracking-[0.08em] text-faint">
+                      <div className="flex items-center gap-1.5 text-12 font-semibold uppercase tracking-[0.08em] text-faint">
                         {message.direction === "inbound" ? (
                           <Mail size={9} />
                         ) : (
@@ -437,14 +435,14 @@ export default async function LeadDetailPage({
                         {message.direction === "inbound" ? "Received" : "Sent"}
                         {message.isSandbox && " · sandbox"}
                       </div>
-                      <span className="text-[9px] text-faint">
+                      <span className="text-12 text-faint">
                         {relativeTime(message.receivedAt || message.sentAt)}
                       </span>
                     </div>
-                    <div className="mt-1 text-[11px] font-semibold text-ink">
+                    <div className="mt-1 text-12 font-semibold text-ink">
                       {message.subject}
                     </div>
-                    <p className="mt-1 line-clamp-2 text-[10.5px] leading-4 text-muted">
+                    <p className="mt-1 line-clamp-2 text-12 leading-4 text-muted">
                       {message.bodyText}
                     </p>
                   </div>
@@ -481,10 +479,10 @@ export default async function LeadDetailPage({
                     className="flex items-center justify-between rounded-lg border border-line bg-white/50 px-3 py-2"
                   >
                     <div>
-                      <div className="text-[11px] font-semibold text-ink">
+                      <div className="text-12 font-semibold text-ink">
                         Follow-up #{followUp.sequence}
                       </div>
-                      <div className="mt-0.5 text-[9.5px] text-faint">
+                      <div className="mt-0.5 text-12 text-faint">
                         {followUp.subject}
                       </div>
                     </div>
@@ -503,7 +501,7 @@ export default async function LeadDetailPage({
             <div className="mt-3 space-y-2.5">
               <div className="flex items-start gap-2.5">
                 <CalendarDays size={13} className="mt-0.5 text-faint" />
-                <div className="text-[10.5px] leading-5 text-muted">
+                <div className="text-12 leading-5 text-muted">
                   <span className="font-semibold text-ink">Observed</span>
                   <br />
                   {prospect.verifiedAt
@@ -513,7 +511,7 @@ export default async function LeadDetailPage({
               </div>
               <div className="flex items-start gap-2.5">
                 <BadgeCheck size={13} className="mt-0.5 text-faint" />
-                <div className="text-[10.5px] leading-5 text-muted">
+                <div className="text-12 leading-5 text-muted">
                   <span className="font-semibold text-ink">Method</span>
                   <br />
                   Public website, pricing and contact-source review. No guessed
@@ -522,7 +520,7 @@ export default async function LeadDetailPage({
               </div>
               <div className="flex items-start gap-2.5">
                 <Clock3 size={13} className="mt-0.5 text-faint" />
-                <div className="text-[10.5px] leading-5 text-muted">
+                <div className="text-12 leading-5 text-muted">
                   <span className="font-semibold text-ink">Last updated</span>
                   <br />
                   {formatDateTime(prospect.updatedAt)}

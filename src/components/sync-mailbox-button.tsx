@@ -55,7 +55,7 @@ export function SyncMailboxButton({
         {pending ? "Syncing…" : label}
       </button>
       {message && (
-        <span className="max-w-[300px] text-right text-[10px] leading-4 text-faint">
+        <span className="max-w-[300px] text-right text-12 leading-4 text-faint">
           {message}
         </span>
       )}

@@ -59,8 +59,8 @@ export function TeamManager({ users }: { users: UserRow[] }) {
     <div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-[12px] font-bold text-ink">Workspace users</div>
-          <p className="text-[10px] text-muted">
+          <div className="text-12 font-bold text-ink">Workspace users</div>
+          <p className="text-12 text-muted">
             Founder and admin can send and change settings. Members are read-only.
           </p>
         </div>
@@ -75,17 +75,17 @@ export function TeamManager({ users }: { users: UserRow[] }) {
             className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-white/50 px-3.5 py-2.5"
           >
             <div className="flex items-center gap-2.5">
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-forest text-[9px] font-bold text-lime">
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-forest text-12 font-bold text-lime">
                 {user.name.slice(0, 2).toUpperCase()}
               </span>
               <div>
-                <div className="text-[11px] font-semibold text-ink">{user.name}</div>
-                <div className="text-[9.5px] text-faint">{user.email}</div>
+                <div className="text-12 font-semibold text-ink">{user.name}</div>
+                <div className="text-12 text-faint">{user.email}</div>
               </div>
             </div>
             <div className="flex items-center gap-2">
               <span className="badge capitalize">{user.role}</span>
-              <span className="text-[9px] text-faint">
+              <span className="text-12 text-faint">
                 {user.lastLoginAt
                   ? `last in ${new Date(user.lastLoginAt).toLocaleDateString("en-GB")}`
                   : "never signed in"}
@@ -221,8 +221,8 @@ function ChangePasswordCard() {
 
   return (
     <div className="mt-4 rounded-xl border border-line bg-white/50 px-3.5 py-3">
-      <div className="text-[12px] font-bold text-ink">Change your password</div>
-      <p className="text-[10px] text-muted">
+      <div className="text-12 font-bold text-ink">Change your password</div>
+      <p className="text-12 text-muted">
         This changes the password for the account you are signed in with. Every
         other signed-in device will be signed out.
       </p>
@@ -252,7 +252,7 @@ function ChangePasswordCard() {
             value={newPassword}
             onChange={(event) => setNewPassword(event.target.value)}
           />
-          <p className="mt-1 text-[9.5px] text-faint">8 to 16 characters.</p>
+          <p className="mt-1 text-12 text-faint">8 to 16 characters.</p>
         </div>
         <div>
           <label className="label" htmlFor="change-password-confirm">
@@ -332,8 +332,8 @@ export function SuppressionManager({
     <div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-[12px] font-bold text-ink">Suppression list</div>
-          <p className="text-[10px] text-muted">
+          <div className="text-12 font-bold text-ink">Suppression list</div>
+          <p className="text-12 text-muted">
             Checked server-side before every send. Opt-outs stop promotional email
             immediately.
           </p>
@@ -344,7 +344,7 @@ export function SuppressionManager({
       </div>
       <div className="mt-3 max-h-[280px] space-y-1.5 overflow-y-auto scrollbar-thin">
         {suppressions.length === 0 ? (
-          <div className="rounded-xl border border-dashed-line border-line px-4 py-5 text-center text-[10.5px] text-muted">
+          <div className="rounded-xl border border-dashed-line border-line px-4 py-5 text-center text-12 text-muted">
             No suppressed addresses.
           </div>
         ) : (
@@ -354,8 +354,8 @@ export function SuppressionManager({
               className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-white/50 px-3 py-2"
             >
               <div>
-                <div className="text-[10.5px] font-semibold text-ink">{item.email}</div>
-                <div className="text-[9px] text-faint">
+                <div className="text-12 font-semibold text-ink">{item.email}</div>
+                <div className="text-12 text-faint">
                   {item.source} · {item.note || "no note"}
                 </div>
               </div>
@@ -440,8 +440,8 @@ export function BackupPanel() {
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="text-[12px] font-bold text-ink">Data export and retention</div>
-          <p className="max-w-xl text-[10px] leading-5 text-muted">
+          <div className="text-12 font-bold text-ink">Data export and retention</div>
+          <p className="max-w-xl text-12 leading-5 text-muted">
             Download a JSON backup of leads, sources, drafts, revisions,
             conversations, campaigns and suppression records. Credentials, session
             tokens, password hashes and API-key hashes are excluded. PostgreSQL /
@@ -459,10 +459,10 @@ export function BackupPanel() {
           ["Credential storage", "AES-256-GCM encrypted"],
         ].map(([label, value]) => (
           <div key={label} className="rounded-lg border border-line bg-white/50 px-3 py-2.5">
-            <div className="text-[9px] font-bold uppercase tracking-[0.1em] text-faint">
+            <div className="text-12 font-bold uppercase tracking-[0.1em] text-faint">
               {label}
             </div>
-            <div className="mt-0.5 text-[10.5px] text-ink">{value}</div>
+            <div className="mt-0.5 text-12 text-ink">{value}</div>
           </div>
         ))}
       </div>

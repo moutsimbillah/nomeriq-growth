@@ -61,14 +61,14 @@ function SettingsSection({
               <Icon size={15} />
             </div>
             <div>
-              <div className="text-[9px] font-bold uppercase tracking-[0.14em] text-faint">
+              <div className="text-12 font-bold uppercase tracking-[0.14em] text-faint">
                 {eyebrow}
               </div>
-              <h2 className="mt-0.5 text-[15px] font-bold tracking-[-0.01em] text-ink">
+              <h2 className="mt-0.5 text-16 font-bold tracking-[-0.01em] text-ink">
                 {title}
               </h2>
               {description && (
-                <p className="mt-1 max-w-2xl text-[10.5px] leading-5 text-muted">
+                <p className="mt-1 max-w-2xl text-12 leading-5 text-muted">
                   {description}
                 </p>
               )}
@@ -146,7 +146,7 @@ export default async function SettingsPage() {
                 <a
                   key={href as string}
                   href={`#${href}`}
-                  className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[11px] font-medium text-muted transition hover:bg-ink/[0.03] hover:text-ink"
+                  className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-12 font-medium text-muted transition hover:bg-ink/[0.03] hover:text-ink"
                 >
                   <NavIcon size={13} />
                   {label as string}
@@ -156,7 +156,7 @@ export default async function SettingsPage() {
             <div className="mt-4 border-t border-line pt-3">
               <a
                 href="/api/assistant-skill"
-                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[11px] font-medium text-muted transition hover:bg-ink/[0.03] hover:text-ink"
+                className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-12 font-medium text-muted transition hover:bg-ink/[0.03] hover:text-ink"
               >
                 <BookOpenCheck size={13} />
                 Assistant skill
@@ -297,27 +297,27 @@ export default async function SettingsPage() {
                   key={item.label}
                   className="rounded-xl border border-line bg-white/50 p-3.5"
                 >
-                  <div className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-faint">
+                  <div className="flex items-center gap-1.5 text-12 font-bold uppercase tracking-[0.1em] text-faint">
                     <item.icon size={10} />
                     {item.label}
                   </div>
-                  <div className="mt-1 break-all text-[10.5px] leading-5 text-ink">
+                  <div className="mt-1 break-all text-12 leading-5 text-ink">
                     {item.value}
                   </div>
                 </div>
               ))}
             </div>
-            <div className="mt-4 rounded-xl border border-forest/15 bg-lime/10 px-3.5 py-3 text-[10px] leading-5 text-forest">
+            <div className="mt-4 rounded-xl border border-forest/15 bg-lime/10 px-3.5 py-3 text-12 leading-5 text-forest">
               <strong>Independence:</strong> Growth has its own database,
               authentication, encrypted mailbox credentials and deployment. It
               does not read or write the main Nomeriq production database, AWS
               workers or auth system, and it keeps operating if Nomeriq is offline.
             </div>
             <div className="mt-4 flex items-center justify-between border-t border-line pt-3">
-              <span className="text-[9px] text-faint">
+              <span className="text-12 text-faint">
                 Nomeriq Growth · internal build v0.1
               </span>
-              <a href="/api/health" target="_blank" className="text-[9.5px] font-semibold text-muted hover:text-ink">
+              <a href="/api/health" target="_blank" className="text-12 font-semibold text-muted hover:text-ink">
                 Health check →
               </a>
             </div>

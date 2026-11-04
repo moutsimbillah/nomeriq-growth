@@ -61,7 +61,7 @@ export default async function DashboardPage() {
         title={
           <span>
             {greeting()}, founder.
-            <span className="ml-3 inline-block align-middle font-sans text-[12px] font-semibold uppercase tracking-[0.14em] text-muted">
+            <span className="ml-3 inline-block align-middle font-sans text-12 font-semibold uppercase tracking-[0.14em] text-muted">
               {metrics.newWeek} new this week
             </span>
           </span>
@@ -71,7 +71,7 @@ export default async function DashboardPage() {
           <>
             <Link href="/email?tab=drafts" className="btn-secondary">
               Review drafts
-              <span className="rounded-full bg-forest px-1.5 py-0.5 text-[9px] font-bold text-lime">
+              <span className="rounded-full bg-forest px-1.5 py-0.5 text-12 font-bold text-lime">
                 {metrics.draftsOpen}
               </span>
             </Link>
@@ -94,7 +94,7 @@ export default async function DashboardPage() {
           }
         >
           Sends are composed and recorded, but no message leaves Growth. Switch{" "}
-          <code className="rounded bg-forest/10 px-1 py-0.5 text-[10px]">
+          <code className="rounded bg-forest/10 px-1 py-0.5 text-12">
             EMAIL_DELIVERY_MODE=live
           </code>{" "}
           only when the founder is ready to contact real prospects.
@@ -156,14 +156,14 @@ export default async function DashboardPage() {
           <div className="relative">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="flex items-center gap-2 text-[9.5px] font-bold uppercase tracking-[0.18em] text-lime">
+                <div className="flex items-center gap-2 text-12 font-bold uppercase tracking-[0.18em] text-lime">
                   <span className="h-1.5 w-1.5 rounded-full bg-lime" />
                   Live research target
                 </div>
-                <h2 className="display-title mt-3 text-[34px] leading-none text-white">
+                <h2 className="display-title mt-3 text-display-sm leading-none text-white">
                   {activeJob ? activeJob.name : "No active research target"}
                 </h2>
-                <p className="mt-2 max-w-lg text-[11.5px] leading-5 text-white/45">
+                <p className="mt-2 max-w-lg text-12 leading-5 text-white/45">
                   {activeJob
                     ? activeJob.requirements
                     : "Create a target, then let ChatGPT or Claude research through the shared Growth database."}
@@ -188,17 +188,17 @@ export default async function DashboardPage() {
                     ["Remaining", activeJob.remaining],
                   ].map(([label, value]) => (
                     <div key={label}>
-                      <div className="font-display text-[29px] leading-none text-white">
+                      <div className="text-28 leading-none text-white">
                         {value}
                       </div>
-                      <div className="mt-1 text-[9px] font-semibold uppercase tracking-[0.14em] text-white/35">
+                      <div className="mt-1 text-12 font-semibold uppercase tracking-[0.14em] text-white/35">
                         {label}
                       </div>
                     </div>
                   ))}
                 </div>
                 <div className="mt-5">
-                  <div className="mb-2 flex items-center justify-between text-[10px] text-white/38">
+                  <div className="mb-2 flex items-center justify-between text-12 text-white/38">
                     <span>{activeJob.regions}</span>
                     <span>
                       {activeJob.verifiedCount}/{activeJob.targetCount} verified
@@ -216,7 +216,7 @@ export default async function DashboardPage() {
                     />
                   </div>
                 </div>
-                <div className="mt-4 flex flex-wrap items-center gap-4 text-[10px] text-white/35">
+                <div className="mt-4 flex flex-wrap items-center gap-4 text-12 text-white/35">
                   <span className="inline-flex items-center gap-1.5">
                     <Send size={11} /> {data.followUps.sent} follow-ups sent
                   </span>
@@ -296,7 +296,7 @@ export default async function DashboardPage() {
               );
               return (
                 <div key={stage.label}>
-                  <div className="flex items-center justify-between text-[11px]">
+                  <div className="flex items-center justify-between text-12">
                     <span className="font-medium text-muted">{stage.label}</span>
                     <span className="font-bold text-ink">{stage.value}</span>
                   </div>
@@ -346,17 +346,17 @@ export default async function DashboardPage() {
                   <Avatar name={conversation.prospectName} size="sm" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-3">
-                      <span className="truncate text-[12px] font-semibold text-ink">
+                      <span className="truncate text-12 font-semibold text-ink">
                         {conversation.prospectName}
                       </span>
-                      <span className="shrink-0 text-[9.5px] text-faint">
+                      <span className="shrink-0 text-12 text-faint">
                         {relativeTime(conversation.lastInboundAt)}
                       </span>
                     </div>
-                    <div className="mt-0.5 truncate text-[11px] text-muted">
+                    <div className="mt-0.5 truncate text-12 text-muted">
                       {conversation.snippet || conversation.subject}
                     </div>
-                    <span className="mt-1.5 inline-flex rounded-full border border-line bg-white px-2 py-0.5 text-[9px] font-semibold text-muted">
+                    <span className="mt-1.5 inline-flex rounded-full border border-line bg-white px-2 py-0.5 text-12 font-semibold text-muted">
                       {CLASSIFICATION_LABELS[conversation.classification]}
                     </span>
                   </div>
@@ -409,7 +409,7 @@ export default async function DashboardPage() {
                           <div className="font-semibold text-ink">
                             {prospect.businessName}
                           </div>
-                          <div className="mt-0.5 text-[10.5px] text-faint">
+                          <div className="mt-0.5 text-12 text-faint">
                             {prospect.country || "Country unknown"} ·{" "}
                             {prospect.contactEmail || "No email"}
                           </div>
@@ -421,7 +421,7 @@ export default async function DashboardPage() {
                       <td>
                         <StatusBadge status={prospect.status} />
                       </td>
-                      <td className="text-right text-[10.5px] text-faint">
+                      <td className="text-right text-12 text-faint">
                         {relativeTime(prospect.createdAt)}
                       </td>
                     </tr>
@@ -452,12 +452,12 @@ export default async function DashboardPage() {
               </span>
             )}
           </div>
-          <div className="mt-4 text-[12px] font-semibold text-ink">Mailbox</div>
-          <div className="mt-0.5 truncate text-[11px] text-muted">
+          <div className="mt-4 text-12 font-semibold text-ink">Mailbox</div>
+          <div className="mt-0.5 truncate text-12 text-muted">
             {account?.emailAddress || "No account connected"}
           </div>
           <div className="mt-3 flex items-center justify-between gap-3">
-            <div className="text-[10px] text-faint">
+            <div className="text-12 text-faint">
               {account?.provider === "sandbox"
                 ? "Sandbox — no IMAP/SMTP"
                 : data.lastSync
@@ -473,7 +473,7 @@ export default async function DashboardPage() {
             )}
           </div>
           {data.hasIncompleteHistory && (
-            <div className="mt-3 rounded-lg bg-amber/[0.07] px-2.5 py-2 text-[9.5px] leading-4 text-[#76501a]">
+            <div className="mt-3 rounded-lg bg-amber/[0.07] px-2.5 py-2 text-12 leading-4 text-[#76501a]">
               Mailbox history is incomplete. Some older email may not be threaded.
             </div>
           )}
@@ -488,13 +488,13 @@ export default async function DashboardPage() {
               {data.followUps.dueCandidates} due
             </span>
           </div>
-          <div className="mt-4 text-[12px] font-semibold text-ink">Follow-ups</div>
-          <div className="mt-0.5 text-[11px] text-muted">
+          <div className="mt-4 text-12 font-semibold text-ink">Follow-ups</div>
+          <div className="mt-0.5 text-12 text-muted">
             {data.followUps.waiting} conversations waiting ·{" "}
             {data.followUps.readyDrafts} drafts ready
           </div>
           <div className="mt-3 flex items-center justify-between">
-            <div className="text-[10px] text-faint">
+            <div className="text-12 text-faint">
               Replies and opt-outs stop this automatically.
             </div>
             <Link href="/email?tab=followups" className="btn-ghost btn-xs">
@@ -518,14 +518,14 @@ export default async function DashboardPage() {
               {truth.status === "approved" ? "Approved" : "Needs review"}
             </span>
           </div>
-          <div className="mt-4 text-[12px] font-semibold text-ink">
+          <div className="mt-4 text-12 font-semibold text-ink">
             Product Truth v{truth.version}
           </div>
-          <div className="mt-0.5 line-clamp-2 text-[11px] leading-5 text-muted">
+          <div className="mt-0.5 line-clamp-2 text-12 leading-5 text-muted">
             {truth.oneLiner}
           </div>
           <div className="mt-3 flex items-center justify-between">
-            <div className="text-[10px] text-faint">
+            <div className="text-12 text-faint">
               {truth.approvedClaims.length} approved claims
             </div>
             <Link href="/product-truth" className="btn-ghost btn-xs">

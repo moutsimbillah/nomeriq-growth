@@ -2,6 +2,12 @@ import { getDb, type DbClient } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
 import { tagsFromActorType } from "@/lib/agent/agentTag";
 import {
+  addedWindow,
+  COUNTED_ADDED_RANGES,
+  parsePktDate,
+  type AddedRange,
+} from "@/lib/dates/pakistan";
+import {
   AppError,
   asStringArray,
   domainFromUrl,
@@ -560,8 +566,27 @@ export interface ProspectFilters {
   agent?: string;
   /** How it arrived: mcp_oauth, api_key, engine or founder. */
   channel?: string;
+  /** Which Asia/Karachi day window the row was added in. */
+  added?: AddedRange;
+  addedFrom?: string;
+  addedTo?: string;
+  /** Injectable clock, so the day boundaries can be tested without waiting for midnight. */
+  now?: Date;
   limit?: number;
   offset?: number;
+}
+
+/** The SQL for an Asia/Karachi day window on a timestamp column, pushing its two instants as params. */
+function addedCondition(
+  filters: ProspectFilters,
+  column: string,
+  params: unknown[],
+): string | null {
+  if (!filters.added) return null;
+  const window = addedWindow(filters.added, filters.now ?? new Date(), filters.addedFrom, filters.addedTo);
+  if (!window) return null;
+  params.push(window.from.toISOString(), window.to.toISOString());
+  return `${column} >= $${params.length - 1} AND ${column} < $${params.length}`;
 }
 
 /**
@@ -570,7 +595,11 @@ export interface ProspectFilters {
  */
 export async function getProspectOriginFacets(
   filters: ProspectFilters = {},
-): Promise<{ agents: Record<string, number>; channels: Record<string, number> }> {
+): Promise<{
+  agents: Record<string, number>;
+  channels: Record<string, number>;
+  added: Record<string, number>;
+}> {
   const db = await getDb();
   const conditions = ["p.archived_at IS NULL"];
   const params: unknown[] = [];
@@ -610,7 +639,8 @@ export async function getProspectOriginFacets(
   // it would return right now — and the other axis' narrowing does move the numbers.
   const where = conditions.join(" AND ");
 
-  // The agent counts carry the channel filter, and the channel counts carry the agent filter.
+  // The agent counts carry the channel filter, and the channel counts carry the agent filter. Both
+  // carry the added-date window, because a day range narrows them.
   const agentParams = [...params];
   let agentWhere = where;
   if (filters.channel && filters.channel !== "unknown") {
@@ -619,6 +649,8 @@ export async function getProspectOriginFacets(
   } else if (filters.channel === "unknown") {
     agentWhere = `${where} AND p.source_channel IS NULL`;
   }
+  const agentAdded = addedCondition(filters, "p.created_at", agentParams);
+  if (agentAdded) agentWhere = `${agentWhere} AND ${agentAdded}`;
 
   const channelParams = [...params];
   let channelWhere = where;
@@ -627,6 +659,21 @@ export async function getProspectOriginFacets(
     channelWhere = `${where} AND p.source_agent = $${channelParams.length}`;
   } else if (filters.agent === "unknown") {
     channelWhere = `${where} AND (p.source_agent IS NULL OR p.source_agent = 'unknown')`;
+  }
+  const channelAdded = addedCondition(filters, "p.created_at", channelParams);
+  if (channelAdded) channelWhere = `${channelWhere} AND ${channelAdded}`;
+
+  // One count per preset, each with every other filter applied and the added axis left open, so the
+  // numbers say what choosing that range would return.
+  const added: Record<string, number> = {};
+  for (const range of COUNTED_ADDED_RANGES) {
+    const rangeParams = [...params];
+    const rangeCondition = addedCondition({ ...filters, added: range }, "p.created_at", rangeParams);
+    const rows = await db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM prospects p WHERE ${rangeCondition ? `${where} AND ${rangeCondition}` : where}`,
+      rangeParams,
+    );
+    added[range] = Number(rows.rows[0]?.n ?? 0);
   }
 
   const agents = await db.query<{ source_agent: string | null; n: number }>(
@@ -644,6 +691,7 @@ export async function getProspectOriginFacets(
   return {
     agents: toMap(agents.rows, "source_agent"),
     channels: toMap(channels.rows, "source_channel"),
+    added,
   };
 }
 
@@ -702,6 +750,8 @@ export async function listProspects(
       `NOT EXISTS (SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id)`,
     );
   }
+  const added = addedCondition(filters, "p.created_at", params);
+  if (added) conditions.push(added);
   const limit = Math.min(Math.max(filters.limit ?? 100, 1), 200);
   const offset = Math.max(filters.offset ?? 0, 0);
   params.push(limit, offset);

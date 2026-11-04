@@ -70,7 +70,7 @@ export default async function ConversationPage({
   return (
     <div className="animate-fade-up">
       <MarkConversationRead conversationId={conversation.id} />
-      <div className="mb-5 flex items-center gap-2 text-[10.5px] text-faint">
+      <div className="mb-5 flex items-center gap-2 text-12 text-faint">
         <Link href="/email" className="inline-flex items-center gap-1 hover:text-ink">
           <ArrowLeft size={11} /> Email
         </Link>
@@ -112,7 +112,7 @@ export default async function ConversationPage({
       />
 
       {sandbox && (
-        <div className="mb-4 rounded-xl border border-amber/20 bg-amber/[0.05] px-3.5 py-2 text-[10.5px] text-[#76501a]">
+        <div className="mb-4 rounded-xl border border-amber/20 bg-amber/[0.05] px-3.5 py-2 text-12 text-[#76501a]">
           Sandbox thread. Test messages are clearly flagged and no email leaves
           Growth. Use “Simulate a test reply” to exercise the full loop safely.
         </div>
@@ -143,26 +143,26 @@ export default async function ConversationPage({
                       {inbound ? <Reply size={12} /> : <Mail size={12} />}
                     </span>
                     <div>
-                      <div className="flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-[0.1em] text-faint">
+                      <div className="flex flex-wrap items-center gap-2 text-12 font-bold uppercase tracking-[0.1em] text-faint">
                         {inbound ? "Received" : "Sent"}
                         {message.isSandbox && (
-                          <span className="rounded-full bg-amber/10 px-1.5 py-0.5 text-[8px] text-amber">
+                          <span className="rounded-full bg-amber/10 px-1.5 py-0.5 text-12 text-amber">
                             sandbox
                           </span>
                         )}
                         {message.external && (
-                          <span className="rounded-full bg-ink/[0.05] px-1.5 py-0.5 text-[8px]">
+                          <span className="rounded-full bg-ink/[0.05] px-1.5 py-0.5 text-12">
                             synced from IONOS
                           </span>
                         )}
                       </div>
-                      <div className="mt-0.5 text-[11px] text-ink">
+                      <div className="mt-0.5 text-12 text-ink">
                         {message.fromName ? `${message.fromName} · ` : ""}
                         {message.fromEmail}
                       </div>
                     </div>
                   </div>
-                  <div className="text-right text-[9px] text-faint">
+                  <div className="text-right text-12 text-faint">
                     {formatDateTime(message.receivedAt || message.sentAt)}
                     {!inbound && (
                       <div className="mt-0.5">
@@ -175,7 +175,7 @@ export default async function ConversationPage({
                 </div>
 
                 <div className="mt-4 border-t border-line/60 pt-3">
-                  <div className="mb-2 text-[11px] font-semibold text-ink">
+                  <div className="mb-2 text-12 font-semibold text-ink">
                     {message.subject}
                   </div>
                   <div className="email-body">{message.bodyText}</div>
@@ -201,7 +201,7 @@ export default async function ConversationPage({
                 </div>
 
                 {index === conversation.messages.length - 1 && inbound && (
-                  <div className="absolute -bottom-2.5 left-5 rounded-full border border-amber/20 bg-[#fffaf0] px-2 py-0.5 text-[8px] font-semibold uppercase tracking-[0.1em] text-amber">
+                  <div className="absolute -bottom-2.5 left-5 rounded-full border border-amber/20 bg-[#fffaf0] px-2 py-0.5 text-12 font-semibold uppercase tracking-[0.1em] text-amber">
                     Latest
                   </div>
                 )}
@@ -227,8 +227,8 @@ export default async function ConversationPage({
                   <Clock3 size={15} />
                 </div>
                 <div>
-                  <h2 className="text-[13px] font-bold text-ink">Waiting for a reply</h2>
-                  <p className="mt-1 text-[11px] leading-5 text-muted">
+                  <h2 className="text-13 font-bold text-ink">Waiting for a reply</h2>
+                  <p className="mt-1 text-12 leading-5 text-muted">
                     This thread has outbound messages but no inbound reply yet.
                     Follow-ups stay reviewable and are never sent automatically.
                   </p>
@@ -257,16 +257,16 @@ export default async function ConversationPage({
               />
             </div>
             <div className="mt-4 rounded-xl border border-line bg-paper/50 p-3">
-              <div className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.12em] text-faint">
+              <div className="flex items-center gap-2 text-12 font-bold uppercase tracking-[0.12em] text-faint">
                 <Sparkles size={10} /> Suggested next action
               </div>
-              <p className="mt-1 text-[10.5px] leading-5 text-muted">
+              <p className="mt-1 text-12 leading-5 text-muted">
                 {NEXT_ACTION[conversation.classification] ||
                   "Read the message and respond to the actual question."}
               </p>
             </div>
             {conversation.suppressed && (
-              <div className="mt-3 rounded-lg border border-rust/20 bg-rust/[0.05] px-2.5 py-2 text-[9.5px] leading-4 text-rust">
+              <div className="mt-3 rounded-lg border border-rust/20 bg-rust/[0.05] px-2.5 py-2 text-12 leading-4 text-rust">
                 Suppression is active. No promotional email can be sent to this
                 contact, including replies.
               </div>
@@ -286,13 +286,13 @@ export default async function ConversationPage({
             <div className="mt-3 space-y-2.5">
               <div className="flex items-start gap-2.5">
                 <Globe2 size={13} className="mt-0.5 text-faint" />
-                <div className="min-w-0 text-[10.5px] leading-5 text-muted">
+                <div className="min-w-0 text-12 leading-5 text-muted">
                   <span className="font-semibold text-ink">Website</span>
                   <br />
                   {conversation.prospect.websiteUrl ? (
                     <ExternalLink
                       href={conversation.prospect.websiteUrl}
-                      className="text-[10.5px]"
+                      className="text-12"
                     >
                       {conversation.prospect.domainKey}
                     </ExternalLink>
@@ -303,7 +303,7 @@ export default async function ConversationPage({
               </div>
               <div className="flex items-start gap-2.5">
                 <MessageSquare size={13} className="mt-0.5 text-faint" />
-                <div className="text-[10.5px] leading-5 text-muted">
+                <div className="text-12 leading-5 text-muted">
                   <span className="font-semibold text-ink">Signal service</span>
                   <br />
                   {conversation.prospect.signalDescription || "Unknown"}
@@ -311,7 +311,7 @@ export default async function ConversationPage({
               </div>
               <div className="flex items-start gap-2.5">
                 <ShieldCheck size={13} className="mt-0.5 text-faint" />
-                <div className="text-[10.5px] leading-5 text-muted">
+                <div className="text-12 leading-5 text-muted">
                   <span className="font-semibold text-ink">Thread integrity</span>
                   <br />
                   Reply threads are preserved with In-Reply-To and References.

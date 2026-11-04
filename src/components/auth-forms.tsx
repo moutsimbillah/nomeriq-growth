@@ -33,7 +33,7 @@ export function LoginForm({ hasUsers, next }: { hasUsers: boolean; next?: string
   if (!hasUsers) {
     return (
       <div className="space-y-4">
-        <p className="text-[13px] leading-6 text-muted">
+        <p className="text-13 leading-6 text-muted">
           This Growth workspace has not been initialized yet.
         </p>
         <a href="/setup" className="btn-primary w-full">
@@ -87,7 +87,7 @@ export function LoginForm({ hasUsers, next }: { hasUsers: boolean; next?: string
         </div>
       </div>
       {error && (
-        <div className="rounded-xl border border-rust/20 bg-rust/[0.05] px-3 py-2.5 text-[12px] text-rust">
+        <div className="rounded-xl border border-rust/20 bg-rust/[0.05] px-3 py-2.5 text-12 text-rust">
           {error}
         </div>
       )}
@@ -205,7 +205,7 @@ export function SetupForm() {
         />
       </div>
       {error && (
-        <div className="rounded-xl border border-rust/20 bg-rust/[0.05] px-3 py-2.5 text-[12px] text-rust">
+        <div className="rounded-xl border border-rust/20 bg-rust/[0.05] px-3 py-2.5 text-12 text-rust">
           {error}
         </div>
       )}
@@ -213,7 +213,7 @@ export function SetupForm() {
         {pending ? "Creating workspace…" : "Create founder account"}
         {!pending && <ArrowRight size={15} />}
       </button>
-      <p className="text-center text-[10.5px] leading-5 text-faint">
+      <p className="text-center text-12 leading-5 text-faint">
         This creates an independent Growth account. It is not connected to the
         main Nomeriq login.
       </p>
