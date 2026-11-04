@@ -545,6 +545,10 @@ export function EmailAccountsManager({
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="label">Email address</label>
+              <p className="field-hint">
+                An address that already has a profile is connected by adding its password here — not by
+                creating a second account. Imported messages belong to the existing profile.
+              </p>
               <input
                 className="input"
                 type="email"

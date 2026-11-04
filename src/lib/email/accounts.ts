@@ -234,7 +234,22 @@ export async function createEmailAccount(
     }
   } catch (error) {
     if (String((error as { code?: string }).code) === "23505") {
-      throw new AppError("That email account is already connected.", 409);
+      // The import creates a profile's row before any password exists, and the founder connects THAT
+      // row later. A second account for the same address would split the imported messages from the
+      // mailbox that syncs them — the sync matches on (account_id, message_id) — so this is refused
+      // outright, and the message says where to go instead.
+      const existing = await db.query<{ name: string }>(
+        `SELECT name FROM email_accounts WHERE normalized_email = $1`,
+        [normalizeEmail(input.emailAddress)],
+      );
+      const name = existing.rows[0]?.name;
+      throw new AppError(
+        name
+          ? `That address is already set up as "${name}". Add its password to that profile instead of creating a second account — its messages and replies belong to it.`
+          : "That email address is already set up. Add its password to the existing profile instead of creating a second account.",
+        409,
+        "email_account_exists",
+      );
     }
     throw error;
   }
