@@ -209,6 +209,21 @@ export function requireScope(key: ApiKeyIdentity, scope: ApiScope): void {
   }
 }
 
+const CLIENT_NAME_MAX = 80;
+
+/**
+ * Client names are self-declared, so they are untrusted text: strip control characters (including
+ * line breaks, which would forge an extra line in any log or report that renders the entry) and cap
+ * the length so one client cannot bloat the audit table.
+ */
+export function auditClientName(raw: string): string {
+  return raw
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, CLIENT_NAME_MAX);
+}
+
 export async function logAgentAction(input: {
   key: ApiKeyIdentity;
   action: string;
@@ -228,7 +243,11 @@ export async function logAgentAction(input: {
       input.action,
       input.entityType ?? null,
       input.entityId ?? null,
-      JSON.stringify(input.metadata ?? {}),
+      // The client's own name travels with every entry. OAuth-connected clients (claude.ai,
+      // ChatGPT, Gemini) present no API key, so without it they are all `api_key:custom` and can
+      // only be separated by joining actor_id back to oauth_clients. The name is self-declared by
+      // the client: reporting only, never read for permissions, scopes or trust.
+      JSON.stringify({ ...(input.metadata ?? {}), client: auditClientName(input.key.name) }),
     ],
   );
 }

@@ -218,19 +218,29 @@ usually lacks `research:write` / `drafts:write` on its key — check scopes befo
 
 ## Checking attribution afterwards
 
-Read-only, grouped by the label each key carries, selecting no key value:
+Read-only, grouped so each connected platform shows separately, selecting no key value:
 
 ```sql
-SELECT COALESCE(k.assistant, a.actor_type) AS assistant,
+SELECT COALESCE(k.assistant, a.metadata->>'client', a.actor_type) AS platform,
+       a.metadata->>'client' AS client_name,
        a.action,
        count(*) AS events,
        max(a.created_at) AS last_seen
 FROM audit_log a
 LEFT JOIN api_keys k ON k.id::text = a.actor_id
 WHERE a.created_at >= now() - interval '24 hours'
-GROUP BY 1, 2
+GROUP BY 1, 2, 3
 ORDER BY events DESC;
 ```
+
+Every agent tool call already writes one audit entry named after the tool, and each entry now also
+carries the client's own name in `metadata.client`. That matters because OAuth-connected clients
+present no API key: without it claude.ai, ChatGPT and Gemini all arrive as `api_key:custom` and can
+only be separated by joining `actor_id` back to `oauth_clients`. An API key is still reported by its
+assistant label; an OAuth client by the name it declared at registration.
+
+**Client names are self-declared and unverified.** Use them for reporting and nothing else: they are
+never read for permissions, scopes or trust, so a client can call itself anything.
 
 ## Recording results
 
