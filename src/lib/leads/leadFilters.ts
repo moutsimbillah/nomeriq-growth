@@ -17,6 +17,8 @@ export interface LeadFilters {
   jobId?: string;
   agent?: AgentTag;
   channel?: ChannelTag;
+  /** Which sending profile the lead is tied to, as a profile id, or "default" for none yet. */
+  sender?: string;
   /** Asia/Karachi day window the row was added in. */
   added?: AddedRange;
   /** Only meaningful with `added: "custom"`, as YYYY-MM-DD in Asia/Karachi. */
@@ -30,6 +32,9 @@ const AGENT_SET = new Set<string>(AGENT_TAGS);
 const CHANNEL_SET = new Set<string>(CHANNEL_TAGS);
 const ADDED_SET = new Set<string>(ADDED_RANGES);
 
+/** A profile id, or the word "default" for a lead that is not tied to one yet. */
+const SENDER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function readLeadFilters(params: LeadFilterParams): LeadFilters {
   const agent = params.agent && AGENT_SET.has(params.agent) ? (params.agent as AgentTag) : undefined;
   const channel =
@@ -42,7 +47,13 @@ export function readLeadFilters(params: LeadFilterParams): LeadFilters {
   const addedTo = parsePktDate(params.to) ? params.to : undefined;
   if (added === "custom" && (!addedFrom || !addedTo)) added = undefined;
 
+  const sender =
+    params.sender && (params.sender === "default" || SENDER_UUID.test(params.sender))
+      ? params.sender
+      : undefined;
+
   return {
+    sender,
     query: params.q?.trim() || undefined,
     status: params.status || undefined,
     category: params.category || undefined,
@@ -67,6 +78,7 @@ export function leadFilterQuery(filters: LeadFilters): string {
   if (filters.agent) search.set("agent", filters.agent);
   if (filters.channel) search.set("channel", filters.channel);
   if (filters.added) search.set("added", filters.added);
+  if (filters.sender) search.set("sender", filters.sender);
   if (filters.added === "custom") {
     if (filters.addedFrom) search.set("from", filters.addedFrom);
     if (filters.addedTo) search.set("to", filters.addedTo);
@@ -85,5 +97,6 @@ export function countActiveFilters(filters: LeadFilters): number {
     filters.agent,
     filters.channel,
     filters.added,
+    filters.sender,
   ].filter(Boolean).length;
 }

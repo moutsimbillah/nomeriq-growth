@@ -566,6 +566,8 @@ export interface ProspectFilters {
   agent?: string;
   /** How it arrived: mcp_oauth, api_key, engine or founder. */
   channel?: string;
+  /** A sending profile id, or "default" for leads not tied to one yet. */
+  sender?: string;
   /** Which Asia/Karachi day window the row was added in. */
   added?: AddedRange;
   addedFrom?: string;
@@ -598,6 +600,7 @@ export async function getProspectOriginFacets(
 ): Promise<{
   agents: Record<string, number>;
   channels: Record<string, number>;
+  senders: Record<string, number>;
   added: Record<string, number>;
 }> {
   const db = await getDb();
@@ -676,6 +679,29 @@ export async function getProspectOriginFacets(
     added[range] = Number(rows.rows[0]?.n ?? 0);
   }
 
+  // The sender counts carry the agent, channel and date filters, and leave the sender axis open.
+  const senderParams = [...params];
+  let senderWhere = where;
+  if (filters.agent && filters.agent !== "unknown") {
+    senderParams.push(filters.agent);
+    senderWhere = `${senderWhere} AND p.source_agent = $${senderParams.length}`;
+  } else if (filters.agent === "unknown") {
+    senderWhere = `${senderWhere} AND (p.source_agent IS NULL OR p.source_agent = 'unknown')`;
+  }
+  if (filters.channel && filters.channel !== "unknown") {
+    senderParams.push(filters.channel);
+    senderWhere = `${senderWhere} AND p.source_channel = $${senderParams.length}`;
+  } else if (filters.channel === "unknown") {
+    senderWhere = `${senderWhere} AND p.source_channel IS NULL`;
+  }
+  const senderAdded = addedCondition(filters, "p.created_at", senderParams);
+  if (senderAdded) senderWhere = `${senderWhere} AND ${senderAdded}`;
+  const senders = await db.query<{ sender: string; n: number }>(
+    `SELECT coalesce(p.sending_profile_id::text, 'default') AS sender, count(*)::int AS n
+       FROM prospects p WHERE ${senderWhere} GROUP BY 1`,
+    senderParams,
+  );
+
   const agents = await db.query<{ source_agent: string | null; n: number }>(
     `SELECT coalesce(p.source_agent, 'unknown') AS source_agent, count(*)::int AS n
        FROM prospects p WHERE ${agentWhere} GROUP BY 1`,
@@ -691,6 +717,7 @@ export async function getProspectOriginFacets(
   return {
     agents: toMap(agents.rows, "source_agent"),
     channels: toMap(channels.rows, "source_channel"),
+    senders: toMap(senders.rows, "sender"),
     added,
   };
 }
@@ -733,6 +760,12 @@ export async function listProspects(
   } else if (filters.agent) {
     params.push(filters.agent);
     conditions.push(`p.source_agent = $${params.length}`);
+  }
+  if (filters.sender === "default") {
+    conditions.push("p.sending_profile_id IS NULL");
+  } else if (filters.sender) {
+    params.push(filters.sender);
+    conditions.push(`p.sending_profile_id = $${params.length}`);
   }
   if (filters.channel === "unknown") {
     conditions.push(`(p.source_channel IS NULL OR p.source_channel = 'unknown')`);

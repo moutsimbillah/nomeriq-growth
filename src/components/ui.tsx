@@ -13,6 +13,12 @@ import {
   agentPillLabel,
   type AgentPillVariant,
 } from "@/lib/agent/agentPill";
+import {
+  SENDER_PILL_CLASS,
+  SENDER_PILL_SIZE,
+  senderDotClass,
+  senderPillLabel,
+} from "@/lib/email/senderPill";
 import type { AgentTag, ChannelTag } from "@/lib/types";
 import {
   ArrowUpRight,
@@ -368,6 +374,47 @@ export function Avatar({
  * Where a lead or draft came from. The tooltip says how trustworthy the value is: an API key's label
  * is set by the founder, a connector's name is only what the connector called itself.
  */
+/**
+ * The quietest pill family: which mailbox a lead is emailed from. An outline with a small coloured dot,
+ * not a filled badge — the sender is context, not a claim about who did the work — and it always spells
+ * the profile's name, so it never relies on colour.
+ *
+ * A lead with no profile yet has no sender of its own, and says "default" rather than naming a mailbox
+ * it has never used.
+ */
+export function SenderPill({
+  profile,
+  size = "md",
+  className,
+  title,
+}: {
+  profile: { id: string | null; label: string | null } | null;
+  size?: "md" | "lg";
+  className?: string;
+  /** The full address and the profile's own name, for the tooltip. */
+  title?: string;
+}) {
+  const label = senderPillLabel(profile);
+  const tooltip =
+    title ??
+    (profile?.id
+      ? `Sending profile: ${label}`
+      : "No sending profile yet — the default profile will be used");
+  return (
+    <span
+      title={tooltip}
+      data-sender={profile?.id ?? "default"}
+      className={cn(SENDER_PILL_CLASS, SENDER_PILL_SIZE[size], className)}
+    >
+      <span aria-hidden className={cn("h-1.5 w-1.5 shrink-0 rounded-full", senderDotClass(profile?.id ?? null))} />
+      {/* Wraps rather than ellipsises: at a narrow width a domain must not become "nomeri…", so the
+          label keeps as many lines as it needs. The agent pill keeps its ellipsis — a 290-character
+          connector name is a different problem. */}
+      <span className="min-w-0 whitespace-normal break-words text-left">{label}</span>
+    </span>
+  );
+}
+
 export function AgentPill({
   agent,
   channel,

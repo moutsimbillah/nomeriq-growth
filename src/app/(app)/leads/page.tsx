@@ -8,6 +8,8 @@ import {
   SlidersHorizontal,
   UsersRound,
 } from "lucide-react";
+import { listEmailAccounts } from "@/lib/email/accounts";
+import { defaultSenderLabel, senderLabels, senderShortName } from "@/lib/email/senderPill";
 import { getProspectOriginFacets, listProspects } from "@/lib/services/prospects";
 import { AGENT_LABELS, AGENT_TAGS, CHANNEL_LABELS, CHANNEL_TAGS } from "@/lib/agent/agentTag";
 import { countActiveFilters, readLeadFilters } from "@/lib/leads/leadFilters";
@@ -19,6 +21,7 @@ import {
   CategoryList,
   EmptyState,
   PageHeader,
+  SenderPill,
   StatusBadge,
 } from "@/components/ui";
 import { AddLeadButton } from "@/components/lead-actions";
@@ -34,11 +37,30 @@ export default async function LeadsPage({
 }) {
   const params = await searchParams;
   const filters = readLeadFilters(params as Record<string, string | undefined>);
-  const [prospects, jobs, facets] = await Promise.all([
+  const [prospects, jobs, facets, senderProfiles] = await Promise.all([
     listProspects({ ...filters, limit: 150 }),
     listResearchJobs(),
     getProspectOriginFacets(filters),
+    listEmailAccounts(),
   ]);
+  const senderById = new Map(senderProfiles.map((account) => [account.id, account]));
+  const senderLabelById = senderLabels(senderProfiles);
+  const defaultProfile = senderProfiles.find((account) => account.isDefault) ?? senderProfiles[0] ?? null;
+  const defaultLabel = defaultSenderLabel(defaultProfile);
+  const senderPill = (profileId: string | null | undefined) =>
+    profileId
+      ? { id: profileId, label: senderLabelById.get(profileId) ?? senderShortName(senderById.get(profileId) ?? {}) }
+      : { id: null, label: defaultLabel };
+  // The pill says the domain; the tooltip carries the full address and the profile's own name.
+  const senderTitle = (profileId: string | null | undefined) => {
+    if (!profileId) {
+      return defaultProfile
+        ? `No sending profile yet — ${defaultProfile.emailAddress} (${defaultProfile.name}) is the default and will send`
+        : "No sending profile yet, and no default mailbox is connected";
+    }
+    const account = senderById.get(profileId);
+    return account ? `${account.emailAddress} — ${account.name}` : "Sending profile";
+  };
   const jobsById = new Map(jobs.map((job) => [job.id, job]));
   const activeFilterCount = countActiveFilters(filters);
 
@@ -134,6 +156,32 @@ export default async function LeadsPage({
                 </option>
               );
             })}
+          </select>
+          <select
+            name="sender"
+            defaultValue={params.sender || ""}
+            className="select w-auto min-w-[150px]"
+            title="Which sending profile the lead is tied to"
+          >
+            <option value="">All senders</option>
+            {senderProfiles.map((account) => {
+              const count = facets.senders?.[account.id] ?? 0;
+              return (
+                <option
+                  key={account.id}
+                  value={account.id}
+                  disabled={count === 0 && params.sender !== account.id}
+                >
+                  {senderLabelById.get(account.id) ?? senderShortName(account)} ({count})
+                </option>
+              );
+            })}
+            <option
+              value="default"
+              disabled={(facets.senders?.default ?? 0) === 0 && params.sender !== "default"}
+            >
+              {defaultLabel} ({facets.senders?.default ?? 0})
+            </option>
           </select>
           <select
             name="added"
@@ -242,11 +290,11 @@ export default async function LeadsPage({
                   {/* Widths total 100%, sized so no cell and no header label has to clip at 1024: the
                       stage pill and the UPDATED header are the two that set the floor. */}
                   <th className="w-[16%]">Business</th>
-                  <th className="w-[13%]">Agent</th>
+                  <th className="w-[18%]">Agent</th>
                   <th className="w-[12%]">Markets</th>
                   <th className="w-[14%]">Contact</th>
-                  <th className="w-[20%]">Stage</th>
-                  <th className="w-[12%]">Next action</th>
+                  <th className="w-[16%]">Stage</th>
+                  <th className="w-[11%]">Next action</th>
                   <th className="w-[13%] text-right">Updated</th>
                 </tr>
               </thead>
@@ -282,12 +330,18 @@ export default async function LeadsPage({
                         </span>
                       </Link>
                     </td>
-                    <td className="w-[152px] max-w-[152px] align-top">
-                      <AgentPill
-                        agent={prospect.sourceAgent ?? "unknown"}
-                        channel={prospect.sourceChannel}
-                        note={prospect.sourceAgent === "other" ? prospect.sourceClient : undefined}
-                      />
+                    <td className="align-top">
+                      <div className="flex flex-col items-start gap-1">
+                        <AgentPill
+                          agent={prospect.sourceAgent ?? "unknown"}
+                          channel={prospect.sourceChannel}
+                          note={prospect.sourceAgent === "other" ? prospect.sourceClient : undefined}
+                        />
+                        <SenderPill
+                          profile={senderPill(prospect.sendingProfileId)}
+                          title={senderTitle(prospect.sendingProfileId)}
+                        />
+                      </div>
                       {prospect.firstDraftAgent &&
                         prospect.sourceAgent &&
                         prospect.firstDraftAgent !== prospect.sourceAgent && (

@@ -11,6 +11,7 @@ import {
   getDefaultEmailAccount,
   getEmailAccountRecord,
 } from "@/lib/email/accounts";
+import { pinSendingProfile, resolvePinnedProfile } from "@/lib/email/profiles";
 import {
   deliverEmail,
   EmailDeliveryError,
@@ -387,10 +388,17 @@ export async function sendReply(input: SendReplyInput) {
     }
   }
 
+  // A reply must come from the address the prospect is already talking to: the lead's profile first,
+  // then the thread's, and only then an explicit pick or the default.
+  const pinnedProfile = await resolvePinnedProfile({
+    prospectId: conversation.prospect.id,
+    conversationId: conversation.id,
+  });
   const account =
-    (input.accountId
+    pinnedProfile ??
+    ((input.accountId
       ? await getEmailAccountRecord(input.accountId)
-      : await getDefaultEmailAccount(true)) ?? null;
+      : await getDefaultEmailAccount(true)) ?? null);
   if (!account) {
     throw new AppError("Connect an email account before replying.", 409);
   }
@@ -528,6 +536,15 @@ export async function sendReply(input: SendReplyInput) {
   }));
   try {
     await db.transaction(async (tx) => {
+      // Pinned with the message row, so the thread and the lead keep replying from this profile.
+      await pinSendingProfile(
+        {
+          prospectId: conversation.prospect.id,
+          conversationId: conversation.id,
+          accountId: account.id,
+        },
+        tx,
+      );
       await tx.query(
         `INSERT INTO messages (
           id, conversation_id, prospect_id, account_id, direction, source,

@@ -5,6 +5,7 @@ import type {
 } from "@/lib/types";
 import type { WorkspaceSettings } from "@/lib/services/settings";
 import { truncate } from "@/lib/utils";
+import { profileSignature, resolveSendingProfile } from "@/lib/email/profiles";
 
 export interface ReplySuggestion {
   subject: string;
@@ -39,13 +40,16 @@ export function deterministicReply(input: {
   classification: Classification;
   lastInbound: ConversationTurn | null;
   settings: WorkspaceSettings;
+  /** The lead's own signature, when its profile has one. */
+  signature?: string;
 }): ReplySuggestion {
   const { classification, lastInbound, settings } = input;
   const greetingLine = greeting(
     lastInbound?.fromEmail ? null : null,
     input.prospect.contactEmail ?? "there",
   );
-  const signature = settings.senderSignature || "Founder\nNomeriq";
+  const signature =
+    input.signature?.trim() || settings.senderSignature || "Founder\nNomeriq";
   let core =
     "Thanks for getting back to me. Could you point me to the part you would like me to address first? I would rather answer specifically than send a generic overview.";
   let needsFounderInput = false;
@@ -227,11 +231,19 @@ export async function suggestReply(input: {
   settings: WorkspaceSettings;
 }): Promise<ReplySuggestion> {
   const lastInbound = [...input.turns].reverse().find((turn) => turn.direction === "inbound") ?? null;
+  // The lead's own sending profile, when it has one: a reply goes out from the address the prospect is
+  // already talking to, so it must be signed the same way. Falls back to the workspace signature.
+  const profile = await resolveSendingProfile({ prospectId: input.prospect.id }).catch(() => null);
+  const signature = profileSignature(
+    profile?.signature ?? "",
+    input.settings.senderSignature || "Founder\nNomeriq",
+  );
   const fallback = deterministicReply({
     prospect: input.prospect,
     classification: input.classification,
     lastInbound,
     settings: input.settings,
+    signature,
   });
   const provider = (process.env.AI_PROVIDER || "none").toLowerCase();
   if (provider === "none") return fallback;
@@ -251,7 +263,7 @@ export async function suggestReply(input: {
         result.parsed.body,
         "",
         "Best,",
-        input.settings.senderSignature || "Founder\nNomeriq",
+        signature,
       ].join("\n"),
       needsFounderInput: result.parsed.needsFounderInput,
       usedAi: true,

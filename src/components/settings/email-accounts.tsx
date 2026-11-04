@@ -52,6 +52,10 @@ type FormState = {
   dailySendLimit: number;
   minIntervalSeconds: number;
   isDefault: boolean;
+  /** The profile's own sign-off; empty falls back to the workspace signature. */
+  signature: string;
+  /** YYYY-MM-DD, or empty for no warm-up ramp. */
+  warmupStartedAt: string;
 };
 
 const EMPTY_FORM: FormState = {
@@ -71,6 +75,8 @@ const EMPTY_FORM: FormState = {
   dailySendLimit: 25,
   minIntervalSeconds: 60,
   isDefault: false,
+  signature: "",
+  warmupStartedAt: "",
 };
 
 function formFromAccount(account: PublicEmailAccount): FormState {
@@ -91,6 +97,8 @@ function formFromAccount(account: PublicEmailAccount): FormState {
     dailySendLimit: account.dailySendLimit,
     minIntervalSeconds: account.minIntervalSeconds,
     isDefault: account.isDefault,
+    signature: account.signature ?? "",
+    warmupStartedAt: account.warmupStartedAt ? account.warmupStartedAt.slice(0, 10) : "",
   };
 }
 
@@ -185,6 +193,11 @@ export function EmailAccountsManager({
         dailySendLimit: Number(form.dailySendLimit),
         minIntervalSeconds: Number(form.minIntervalSeconds),
         isDefault: form.isDefault,
+        signature: form.signature,
+        // an empty field means no ramp at all, which is what an already-warm mailbox wants
+        warmupStartedAt: form.warmupStartedAt
+          ? new Date(`${form.warmupStartedAt}T00:00:00.000Z`).toISOString()
+          : null,
       };
       if (form.password) payload.password = form.password;
       if (!editing) {
@@ -683,6 +696,34 @@ export function EmailAccountsManager({
                   update("minIntervalSeconds", Number(event.target.value))
                 }
               />
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="label">Warm-up start (optional)</label>
+              <input
+                className="input"
+                type="date"
+                value={form.warmupStartedAt}
+                onChange={(event) => update("warmupStartedAt", event.target.value)}
+              />
+              <p className="field-hint">
+                Empty means no ramp: this profile may send its full daily limit straight away. Set a
+                date and the limit starts at 5 a day and rises daily until it reaches the cap above.
+              </p>
+            </div>
+            <div>
+              <label className="label">Signature</label>
+              <textarea
+                className="input min-h-[84px]"
+                value={form.signature}
+                placeholder="Leave empty to use the workspace signature"
+                onChange={(event) => update("signature", event.target.value)}
+              />
+              <p className="field-hint">
+                Added at send, after the body. Leave empty to use the workspace signature.
+              </p>
             </div>
           </div>
 

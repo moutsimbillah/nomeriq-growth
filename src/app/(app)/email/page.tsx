@@ -18,6 +18,7 @@ import {
   listSentMessages,
   listUnknownInbound,
 } from "@/lib/services/conversations";
+import { defaultSenderLabel, senderLabels, senderShortName } from "@/lib/email/senderPill";
 import { getDraftOriginFacets, listDrafts } from "@/lib/services/drafts";
 import { ADDED_LABELS, COUNTED_ADDED_RANGES } from "@/lib/dates/pakistan";
 import { readLeadFilters } from "@/lib/leads/leadFilters";
@@ -32,6 +33,7 @@ import { listEmailAccounts } from "@/lib/email/accounts";
 import { getSyncHealth } from "@/lib/email/sync";
 import {
   AgentPill,
+  SenderPill,
   Card,
   EmptyState,
   Notice,
@@ -96,6 +98,7 @@ export default async function EmailPage({
     listSentMessages(100),
     listDrafts(undefined, 120, filters.agent, {
       agent: filters.agent,
+      sender: filters.sender,
       added: filters.added,
       addedFrom: filters.addedFrom,
       addedTo: filters.addedTo,
@@ -107,8 +110,22 @@ export default async function EmailPage({
     listEmailAccounts(),
     listUnknownInbound(20),
   ]);
+  const senderLabelById = senderLabels(accounts);
+  const defaultProfile = accounts.find((account) => account.isDefault) ?? accounts[0] ?? null;
+  const defaultLabel = defaultSenderLabel(defaultProfile);
+  const draftSenderTitle = (profileId: string | null | undefined) => {
+    if (!profileId) {
+      return defaultProfile
+        ? `No sending profile yet — ${defaultProfile.emailAddress} (${defaultProfile.name}) is the default and will send`
+        : "No sending profile yet, and no default mailbox is connected";
+    }
+    const account = accounts.find((row) => row.id === profileId);
+    return account ? `${account.emailAddress} — ${account.name}` : "Sending profile";
+  };
+
   const draftFacets = await getDraftOriginFacets(undefined, {
     agent: filters.agent,
+    sender: filters.sender,
     added: filters.added,
     addedFrom: filters.addedFrom,
     addedTo: filters.addedTo,
@@ -384,6 +401,29 @@ export default async function EmailPage({
               ))}
             </select>
             <select
+              name="sender"
+              defaultValue={params.sender || ""}
+              className="select w-auto min-w-[150px]"
+              title="Which sending profile the lead is tied to"
+            >
+              <option value="">All senders</option>
+              {accounts.map((account) => (
+                <option
+                  key={account.id}
+                  value={account.id}
+                  disabled={(draftFacets.senders[account.id] ?? 0) === 0 && params.sender !== account.id}
+                >
+                  {senderLabelById.get(account.id) ?? senderShortName(account)} ({draftFacets.senders[account.id] ?? 0})
+                </option>
+              ))}
+              <option
+                value="default"
+                disabled={(draftFacets.senders.default ?? 0) === 0 && params.sender !== "default"}
+              >
+                {defaultLabel} ({draftFacets.senders.default ?? 0})
+              </option>
+            </select>
+            <select
               name="added"
               defaultValue={params.added || ""}
               className="select w-auto min-w-[150px]"
@@ -458,11 +498,28 @@ export default async function EmailPage({
                       </td>
                       <td className="truncate text-12">{draft.subject}</td>
                       <td>
-                        <AgentPill
-                          agent={draft.sourceAgent ?? "unknown"}
-                          channel={draft.sourceChannel}
-                          note={draft.sourceAgent === "other" ? draft.sourceClient : undefined}
-                        />
+                        <div className="flex flex-col items-start gap-1">
+                          <AgentPill
+                            agent={draft.sourceAgent ?? "unknown"}
+                            channel={draft.sourceChannel}
+                            note={draft.sourceAgent === "other" ? draft.sourceClient : undefined}
+                          />
+                          <SenderPill
+                            profile={
+                              draft.sendingProfileId
+                                ? {
+                                    id: draft.sendingProfileId,
+                                    label:
+                                      senderLabelById.get(draft.sendingProfileId) ??
+                                      senderShortName(
+                                        accounts.find((row) => row.id === draft.sendingProfileId) ?? {},
+                                      ),
+                                  }
+                                : { id: null, label: defaultLabel }
+                            }
+                            title={draftSenderTitle(draft.sendingProfileId)}
+                          />
+                        </div>
                       </td>
                       <td>
                         <span

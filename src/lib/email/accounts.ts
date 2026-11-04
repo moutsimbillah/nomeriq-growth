@@ -31,6 +31,10 @@ export interface EmailAccountRecord {
   dailySendLimit: number;
   minIntervalSeconds: number;
   isDefault: boolean;
+  /** The profile's own sign-off; empty means fall back to the workspace signature. */
+  signature: string;
+  /** When this profile's warm-up began, or null for no ramp. */
+  warmupStartedAt: string | null;
   createdAt: string;
 }
 
@@ -62,6 +66,8 @@ function mapAccount(row: any): EmailAccountRecord {
     dailySendLimit: Number(row.daily_send_limit),
     minIntervalSeconds: Number(row.min_interval_seconds),
     isDefault: Boolean(row.is_default),
+    signature: row.signature ?? "",
+    warmupStartedAt: iso(row.warmup_started_at),
     createdAt: iso(row.created_at) ?? "",
   };
 }
@@ -124,6 +130,10 @@ export interface EmailAccountInput {
   dailySendLimit?: number;
   minIntervalSeconds?: number;
   isDefault?: boolean;
+  /** The profile's own sign-off. Empty means fall back to the workspace signature. */
+  signature?: string;
+  /** When this profile's warm-up began, as an ISO date, or null for no ramp. */
+  warmupStartedAt?: string | null;
 }
 
 function assertAccountInput(input: EmailAccountInput, requirePassword: boolean) {
@@ -137,6 +147,14 @@ function assertAccountInput(input: EmailAccountInput, requirePassword: boolean) 
   }
   if (input.minIntervalSeconds !== undefined && (input.minIntervalSeconds < 5 || input.minIntervalSeconds > 3600)) {
     throw new AppError("Minimum interval must be between 5 and 3,600 seconds.");
+  }
+  if (input.warmupStartedAt) {
+    if (Number.isNaN(Date.parse(input.warmupStartedAt))) {
+      throw new AppError("Warm-up start must be a real date.");
+    }
+  }
+  if (input.signature !== undefined && input.signature.length > 2000) {
+    throw new AppError("A signature can be at most 2,000 characters.");
   }
   if (input.provider !== "sandbox") {
     if (!input.smtpHost?.trim() || !input.imapHost?.trim() || !input.username?.trim()) {
@@ -180,9 +198,9 @@ export async function createEmailAccount(
         id, name, provider, email_address, normalized_email, from_name, reply_to,
         smtp_host, smtp_port, smtp_secure, imap_host, imap_port, imap_secure,
         username, password_encrypted, status, daily_send_limit, min_interval_seconds,
-        is_default, created_by
+        is_default, signature, warmup_started_at, created_by
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19, $20)`,
+        $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
       [
         id,
         input.name?.trim() || (provider === "sandbox" ? "Sandbox test mailbox" : "IONOS mailbox"),
@@ -203,6 +221,8 @@ export async function createEmailAccount(
         input.dailySendLimit ?? 25,
         input.minIntervalSeconds ?? 60,
         isDefault,
+        input.signature ?? "",
+        input.warmupStartedAt ?? null,
         userId,
       ],
     );
@@ -246,6 +266,9 @@ export async function updateEmailAccount(
     dailySendLimit: input.dailySendLimit ?? current.dailySendLimit,
     minIntervalSeconds: input.minIntervalSeconds ?? current.minIntervalSeconds,
     isDefault: input.isDefault ?? current.isDefault,
+    signature: input.signature === undefined ? current.signature : input.signature,
+    warmupStartedAt:
+      input.warmupStartedAt === undefined ? current.warmupStartedAt : input.warmupStartedAt,
   };
   assertAccountInput(merged, false);
   const db = await getDb();
@@ -260,6 +283,7 @@ export async function updateEmailAccount(
         smtp_secure = $9, imap_host = $10, imap_port = $11, imap_secure = $12,
         username = $13, password_encrypted = $14, daily_send_limit = $15,
         min_interval_seconds = $16, is_default = $17, status = $18,
+        signature = $20, warmup_started_at = $21,
         last_error = null, updated_at = now()
        WHERE id = $19`,
       [
@@ -282,6 +306,8 @@ export async function updateEmailAccount(
         merged.isDefault,
         merged.provider === "sandbox" ? "connected" : "unverified",
         id,
+        merged.signature ?? "",
+        merged.warmupStartedAt ?? null,
       ],
     );
     if (merged.isDefault) {

@@ -46,6 +46,8 @@ export function mapProspect(row: any): ProspectSummary {
     sourceClient: row.source_client ?? null,
     sourceAgent: (row.source_agent ?? null) as AgentTag | null,
     sourceChannel: (row.source_channel ?? null) as ChannelTag | null,
+    sendingProfileId: (row.sending_profile_id ?? null) as string | null,
+    sendingProfilePinnedAt: (row.sending_profile_pinned_at ?? null) as string | null,
     firstDraftAgent: (row.first_draft_agent ?? null) as AgentTag | null,
     nextAction: row.next_action,
     nextActionAt: iso(row.next_action_at),
@@ -118,6 +120,7 @@ export function mapDraft(row: any): Draft {
     sourceClient: row.source_client ?? null,
     sourceAgent: (row.source_agent ?? null) as AgentTag | null,
     sourceChannel: (row.source_channel ?? null) as ChannelTag | null,
+    sendingProfileId: (row.sending_profile_id ?? null) as string | null,
     productTruthVersion: row.product_truth_version
       ? number(row.product_truth_version)
       : null,

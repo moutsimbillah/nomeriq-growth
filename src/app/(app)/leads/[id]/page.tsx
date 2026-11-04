@@ -28,16 +28,23 @@ import {
   listDraftsForProspect,
 } from "@/lib/services/drafts";
 import { getConversationForProspect } from "@/lib/services/conversations";
-import { getDefaultEmailAccount } from "@/lib/email/accounts";
+import { SendingProfileControl } from "@/components/sending-profile-control";
+import {
+  getDefaultEmailAccount,
+  getEmailAccountRecord,
+  listEmailAccounts,
+} from "@/lib/email/accounts";
 import { getWorkspaceSettings } from "@/lib/services/settings";
 import {
   AgentPill,
+  SenderPill,
   Card,
   CategoryPill,
   DataRow,
   PageHeader,
   SectionHeading,
 } from "@/components/ui";
+import { defaultSenderLabel, senderLabels, senderShortName } from "@/lib/email/senderPill";
 import {
   AddSourceButton,
   ArchiveLeadButton,
@@ -64,6 +71,22 @@ export default async function LeadDetailPage({
     getDefaultEmailAccount().catch(() => null),
     getWorkspaceSettings(),
   ]);
+  const profileAccounts = await listEmailAccounts();
+  const profileLabelById = senderLabels(profileAccounts);
+  const defaultProfile = profileAccounts.find((row) => row.isDefault) ?? profileAccounts[0] ?? null;
+  const defaultLabel = defaultSenderLabel(defaultProfile);
+  const profileOptions = profileAccounts.map((row) => ({
+    id: row.id,
+    label: profileLabelById.get(row.id) ?? senderShortName(row),
+  }));
+
+  // The lead's own profile when it has one; the mailbox that would send otherwise.
+  const sendingProfile = prospect.sendingProfileId
+    ? await getEmailAccountRecord(prospect.sendingProfileId).catch(() => null)
+    : account;
+  const pinnedLabel = sendingProfile
+    ? (profileLabelById.get(sendingProfile.id) ?? senderShortName(sendingProfile))
+    : defaultLabel;
   const envSandbox = (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() !== "live";
   const sandboxMode = envSandbox || account?.provider === "sandbox";
   const followUps = drafts.filter((item) => item.kind === "follow_up");
@@ -139,6 +162,33 @@ export default async function LeadDetailPage({
               note={prospect.sourceAgent === "other" ? prospect.sourceClient : undefined}
               size="lg"
             />
+            <SenderPill
+              profile={
+                prospect.sendingProfileId
+                  ? { id: prospect.sendingProfileId, label: pinnedLabel }
+                  : { id: null, label: defaultLabel }
+              }
+              title={
+                sendingProfile
+                  ? `${sendingProfile.emailAddress} — ${sendingProfile.name}`
+                  : "No sending profile yet, and no default mailbox is connected"
+              }
+              size="lg"
+            />
+            {prospect.sendingProfilePinnedAt ? (
+              <span
+                className="text-13 font-medium text-muted"
+                title="This lead has already been emailed from its profile, so it stays there — its replies are in that thread."
+              >
+                Locked to {pinnedLabel} — already emailed from it
+              </span>
+            ) : (
+              <SendingProfileControl
+                prospectId={prospect.id}
+                currentId={prospect.sendingProfileId ?? ""}
+                profiles={profileOptions}
+              />
+            )}
             {prospect.sourceChannel ? (
               <span className="text-13 font-medium text-muted">
                 via {CHANNEL_LABELS[prospect.sourceChannel]}

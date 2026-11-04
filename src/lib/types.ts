@@ -115,6 +115,10 @@ export interface ProspectSummary {
   sourceClient: string | null;
   sourceAgent: AgentTag | null;
   sourceChannel: ChannelTag | null;
+  /** The sending profile this lead is tied to, or null until its first email pins one. */
+  sendingProfileId?: string | null;
+  /** Set once the lead has been emailed from that profile: the profile can no longer be changed. */
+  sendingProfilePinnedAt?: string | null;
   /** The agent that wrote the first-contact draft, when one exists. Shown as a difference marker. */
   firstDraftAgent?: AgentTag | null;
   nextAction: string | null;
@@ -175,6 +179,8 @@ export interface Draft {
   sourceClient: string | null;
   sourceAgent: AgentTag | null;
   sourceChannel: ChannelTag | null;
+  /** The lead's sending profile, or null until its first email pins one. */
+  sendingProfileId?: string | null;
   productTruthVersion: number | null;
   warnings: DraftWarning[];
   founderEdited: boolean;

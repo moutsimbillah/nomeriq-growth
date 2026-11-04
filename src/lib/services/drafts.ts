@@ -24,7 +24,7 @@ import { mapDraft } from "./mappers";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const DRAFT_SELECT = `
-  SELECT d.*, p.business_name AS prospect_name,
+  SELECT d.*, p.business_name AS prospect_name, p.sending_profile_id AS sending_profile_id,
     (SELECT email FROM prospect_emails pe WHERE pe.prospect_id = p.id
       ORDER BY is_primary DESC LIMIT 1) AS prospect_email
   FROM drafts d
@@ -63,6 +63,8 @@ export async function listDraftsForProspect(
 export interface DraftFilters {
   /** Which agent saved the draft, normalised. Reporting only. */
   agent?: string;
+  /** The lead's sending profile: a profile id, or "default" for a lead not tied to one yet. */
+  sender?: string;
   /** Which Asia/Karachi day window it was saved in. */
   added?: AddedRange;
   addedFrom?: string;
@@ -96,6 +98,12 @@ export async function listDrafts(
   if (agent) {
     params.push(agent);
     conditions.push(`d.source_agent = $${params.length}`);
+  }
+  if (filters.sender === "default") {
+    conditions.push("p.sending_profile_id IS NULL");
+  } else if (filters.sender) {
+    params.push(filters.sender);
+    conditions.push(`p.sending_profile_id = $${params.length}`);
   }
   const added = addedCondition(filters, params);
   if (added) conditions.push(added);
@@ -576,7 +584,11 @@ export function latestWarning(draft: Draft): DraftWarning | null {
 export async function getDraftOriginFacets(
   status?: string,
   filters: DraftFilters = {},
-): Promise<{ agents: Record<string, number>; added: Record<string, number> }> {
+): Promise<{
+  agents: Record<string, number>;
+  senders: Record<string, number>;
+  added: Record<string, number>;
+}> {
   const db = await getDb();
   const base: string[] = [];
   const baseParams: unknown[] = [];
@@ -586,16 +598,47 @@ export async function getDraftOriginFacets(
   }
   const where = base.length ? `WHERE ${base.join(" AND ")}` : "";
 
+  // Each axis is counted with every other filter applied but not its own.
+  const senderClause = (params: unknown[]) =>
+    filters.sender === "default"
+      ? "p.sending_profile_id IS NULL"
+      : filters.sender
+        ? (params.push(filters.sender), `p.sending_profile_id = $${params.length}`)
+        : null;
+  const senderJoin = "JOIN prospects p ON p.id = d.prospect_id";
+
   const agents: Record<string, number> = {};
   {
     const params = [...baseParams];
+    const clause = senderClause(params);
     const condition = addedCondition(filters, params);
+    const clauses = [clause, condition].filter(Boolean) as string[];
     const rows = await db.query<{ source_agent: string | null; n: number }>(
-      `SELECT coalesce(d.source_agent, 'unknown') AS source_agent, count(*)::int AS n FROM drafts d
-        ${where}${condition ? `${where ? " AND" : "WHERE"} ${condition}` : ""} GROUP BY 1`,
+      `SELECT coalesce(d.source_agent, 'unknown') AS source_agent, count(*)::int AS n
+         FROM drafts d ${senderJoin} ${where}${
+           clauses.length ? `${where ? " AND" : "WHERE"} ${clauses.join(" AND ")}` : ""
+         } GROUP BY 1`,
       params,
     );
     for (const row of rows.rows) agents[String(row.source_agent ?? "unknown")] = Number(row.n);
+  }
+
+  const senders: Record<string, number> = {};
+  {
+    const params = [...baseParams];
+    const agentClause = filters.agent
+      ? (params.push(filters.agent), `d.source_agent = $${params.length}`)
+      : null;
+    const condition = addedCondition(filters, params);
+    const clauses = [agentClause, condition].filter(Boolean) as string[];
+    const rows = await db.query<{ sender: string; n: number }>(
+      `SELECT coalesce(p.sending_profile_id::text, 'default') AS sender, count(*)::int AS n
+         FROM drafts d ${senderJoin} ${where}${
+           clauses.length ? `${where ? " AND" : "WHERE"} ${clauses.join(" AND ")}` : ""
+         } GROUP BY 1`,
+      params,
+    );
+    for (const row of rows.rows) senders[String(row.sender ?? "default")] = Number(row.n);
   }
 
   const added: Record<string, number> = {};
@@ -604,10 +647,11 @@ export async function getDraftOriginFacets(
     const agentClause = filters.agent
       ? (params.push(filters.agent), `d.source_agent = $${params.length}`)
       : null;
+    const senderOnly = senderClause(params);
     const condition = addedCondition({ ...filters, added: range }, params);
-    const clauses = [agentClause, condition].filter(Boolean) as string[];
+    const clauses = [agentClause, senderOnly, condition].filter(Boolean) as string[];
     const rows = await db.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM drafts d ${where}${
+      `SELECT count(*)::int AS n FROM drafts d ${senderJoin} ${where}${
         clauses.length ? `${where ? " AND" : "WHERE"} ${clauses.join(" AND ")}` : ""
       }`,
       params,
@@ -615,7 +659,7 @@ export async function getDraftOriginFacets(
     added[range] = Number(rows.rows[0]?.n ?? 0);
   }
 
-  return { agents, added };
+  return { agents, senders, added };
 }
 
 export async function getDraftRevisions(id: string) {

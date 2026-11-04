@@ -27,6 +27,10 @@ const updateSchema = z.object({
   dailySendLimit: z.number().int().min(1).max(500).optional(),
   minIntervalSeconds: z.number().int().min(5).max(3600).optional(),
   isDefault: z.boolean().optional(),
+  /** The profile's own sign-off, or "" to fall back to the workspace signature. */
+  signature: z.string().max(2000).optional(),
+  /** When this profile's warm-up began, or null for no ramp at all. */
+  warmupStartedAt: z.string().datetime().nullable().optional(),
 });
 
 export async function PATCH(

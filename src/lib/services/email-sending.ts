@@ -5,6 +5,12 @@ import {
   getEmailAccountRecord,
 } from "@/lib/email/accounts";
 import {
+  pinSendingProfile,
+  profileSignature,
+  resolvePinnedProfile,
+  warmupDailyLimit,
+} from "@/lib/email/profiles";
+import {
   deliverEmail,
   EmailDeliveryError,
   type DeliveryResult,
@@ -138,9 +144,12 @@ export async function assertAccountCanSend(accountId: string): Promise<void> {
     [accountId],
   );
   const count = Number(counts.rows[0]?.count ?? 0);
-  if (count >= account.dailySendLimit) {
+  const warmupStartedAt = account.warmupStartedAt ? new Date(account.warmupStartedAt) : null;
+  const allowedToday = warmupDailyLimit(account.dailySendLimit, warmupStartedAt, new Date());
+  if (count >= allowedToday) {
+    const rampNote = warmupStartedAt ? " This profile is warming up, so the figure rises daily." : "";
     throw new AppError(
-      `The configured safety limit of ${account.dailySendLimit} sends per rolling 24 hours has been reached. This is your app-configured limit, not a claim about your provider's limit.`,
+      `The configured safety limit of ${allowedToday} sends per rolling 24 hours has been reached. This is your app-configured limit, not a claim about your provider's limit.${rampNote}`,
       429,
       "daily_limit_reached",
     );
@@ -366,10 +375,16 @@ export async function sendDraft(
     }
   }
 
+  // The lead's pinned profile wins outright. Until it is pinned, an explicit choice stands, and only
+  // then the default — so a founder's pick is never quietly overridden by the workspace default. A
+  // draft's thread may not exist yet, so only the lead's own pin is consulted here; replies read the
+  // thread's pin as well (see sendReply).
+  const pinnedProfile = await resolvePinnedProfile({ prospectId: draft.prospectId });
   const account =
-    (options.accountId
+    pinnedProfile ??
+    ((options.accountId
       ? await getEmailAccountRecord(options.accountId)
-      : await getDefaultEmailAccount(true)) ?? null;
+      : await getDefaultEmailAccount(true)) ?? null);
   if (!account) {
     await db.query(`DELETE FROM outbound_sends WHERE draft_id = $1`, [draft.id]);
     throw new AppError(
@@ -510,8 +525,16 @@ export async function sendDraft(
         ? draft.subject
         : `Re: ${previous?.subject || draft.subject}`
       : draft.subject;
-  const text = `${draft.body.trim()}\n${footer.text}`;
-  const html = `${textToHtmlParagraphs(draft.body.trim())}<hr style="border:none;border-top:1px solid #ddd;margin:24px 0" /><div style="font-size:12px;color:#666">${textToHtmlParagraphs(footer.text.replace(/^\n+/, ""))}</div>`;
+  // The profile's own sign-off, added here at send (a draft body ends at "Best,"). Never added twice:
+  // if the founder has already written these exact lines into the draft, they stay as written.
+  const signature = profileSignature(
+    account.signature,
+    (await getWorkspaceSettings()).senderSignature,
+  );
+  const body = draft.body.trim();
+  const signedBody = signature && !body.endsWith(signature) ? `${body}\n\n${signature}` : body;
+  const text = `${signedBody}\n${footer.text}`;
+  const html = `${textToHtmlParagraphs(signedBody)}<hr style="border:none;border-top:1px solid #ddd;margin:24px 0" /><div style="font-size:12px;color:#666">${textToHtmlParagraphs(footer.text.replace(/^\n+/, ""))}</div>`;
 
   let delivery: DeliveryResult;
   // Set when the transport could not confirm delivery: the send counts as sent with this note.
@@ -592,6 +615,13 @@ export async function sendDraft(
           [sentAt, conversationId],
         );
       }
+
+      // The lead and its thread are tied to the profile that just emailed them, in the same
+      // transaction as the message row: no message may exist without a record of which mailbox sent it.
+      await pinSendingProfile(
+        { prospectId: draft.prospectId, conversationId, accountId: account.id },
+        tx,
+      );
 
       const messageDbId = crypto.randomUUID();
       const attachmentRecords = (options.attachments ?? []).map((attachment) => ({
