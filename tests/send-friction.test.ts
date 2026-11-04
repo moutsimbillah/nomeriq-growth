@@ -31,7 +31,7 @@ import { createEmailAccount } from "@/lib/email/accounts";
 import { EmailDeliveryError } from "@/lib/email/send-provider";
 import { saveProspect } from "@/lib/services/prospects";
 import { approveDraft, generateDraftForProspect, getDraft, saveDraft } from "@/lib/services/drafts";
-import { sendDraft } from "@/lib/services/email-sending";
+import { processQueuedSends, sendDraft } from "@/lib/services/email-sending";
 import type { Category } from "@/lib/types";
 
 const state = {
@@ -408,12 +408,112 @@ describe("5. a too-soon send is held back, not refused", () => {
     expect(queued.retryAfterSeconds).toBeGreaterThan(0);
     expect(queued.note).toMatch(/held back/i);
 
-    // nothing was sent, so nothing is recorded: the draft is still approved and can go again
+    // nothing was sent; the draft is still approved, and the attempt is marked queued for the scheduler
     const draft = await getDraft(second);
     expect(draft?.status).toBe("approved");
     const db = await getDb();
-    const rows = await db.query(`SELECT 1 FROM outbound_sends WHERE draft_id = $1`, [second]);
-    expect(rows.rows).toHaveLength(0);
+    const rows = await db.query<{ status: string; queued_at: string | null }>(
+      `SELECT status, queued_at FROM outbound_sends WHERE draft_id = $1`,
+      [second],
+    );
+    expect(rows.rows[0].status).toBe("queued");
+    expect(rows.rows[0].queued_at).not.toBeNull();
+  });
+
+  it("is sent by the scheduler once the gap has passed", async () => {
+    const accountId = await newMailbox(3600);
+    // one real send first, so the mailbox's own interval is running
+    const filler = await freshDraft("Scheduler Filler Co", "scheduler-filler.example", "hello@scheduler-filler.example");
+    const fillerSent = await sendDraft({ draftId: filler, actorUserId: state.userId, accountId });
+    if ("queued" in fillerSent) throw new Error("the filler send should not have been held back");
+
+    const draftId = await freshDraft("Scheduler Co", "scheduler.example", "hello@scheduler.example");
+    const queued = await sendDraft({ draftId, actorUserId: state.userId, accountId });
+    if (!("queued" in queued)) throw new Error("expected a queued hold");
+
+    const db = await getDb();
+    const held = await db.query<{ future: boolean }>(
+      `SELECT (queued_at > now()) AS future FROM outbound_sends WHERE draft_id = $1`,
+      [draftId],
+    );
+    expect(held.rows[0].future).toBe(true);
+
+    // not yet due: the scheduler must leave it alone
+    const early = await processQueuedSends({ max: 20 });
+    expect(early.results.some((r) => r.draftId === draftId)).toBe(false);
+
+    // its moment has come: the queue stamp is due, and the mailbox's own gap has genuinely elapsed —
+    // readiness is measured from the previous send, so that is what moves, not just the queue stamp
+    await db.query(`UPDATE outbound_sends SET queued_at = now() - interval '1 second' WHERE draft_id = $1`, [draftId]);
+    await db.query(
+      `UPDATE outbound_sends SET completed_at = now() - interval '2 hours'
+       WHERE draft_id = $1 AND status IN ('accepted', 'sandbox', 'uncertain')`,
+      [filler],
+    );
+    const drained = await processQueuedSends({ max: 20 });
+    const mine = drained.results.find((r) => r.draftId === draftId);
+    expect(mine?.sent).toBe(true);
+
+    const after = await db.query<{ status: string }>(`SELECT status FROM outbound_sends WHERE draft_id = $1`, [draftId]);
+    expect(["accepted", "sandbox"]).toContain(after.rows[0].status);
+    const draft = await getDraft(draftId);
+    expect(draft?.status).toBe("sent");
+    const messages = await db.query(`SELECT 1 FROM messages WHERE draft_id = $1`, [draftId]);
+    expect(messages.rows).toHaveLength(1);
+    expect(draftId).toBeTruthy();
+  });
+
+  it("blocks a queued send for good when a stop now refuses it", async () => {
+    const accountId = await newMailbox(3600);
+    const filler = await freshDraft("Opted Out Filler Co", "opted-out-filler.example", "hello@opted-out-filler.example");
+    const fillerSent = await sendDraft({ draftId: filler, actorUserId: state.userId, accountId });
+    if ("queued" in fillerSent) throw new Error("the filler send should not have been held back");
+
+    const draftId = await freshDraft("Queued Then Opted Out Co", "queued-opted-out.example", "hello@queued-opted-out.example");
+    const queued = await sendDraft({ draftId, actorUserId: state.userId, accountId });
+    if (!("queued" in queued)) throw new Error("expected a queued hold");
+
+    const db = await getDb();
+    await db.query(
+      `INSERT INTO suppressions (id, normalized_email, email, reason, source)
+       VALUES (gen_random_uuid(), $1, $1, 'opt_out', 'founder')
+       ON CONFLICT (normalized_email) DO UPDATE SET active = true`,
+      ["hello@queued-opted-out.example"],
+    );
+    await db.query(`UPDATE outbound_sends SET queued_at = now() - interval '1 second' WHERE draft_id = $1`, [draftId]);
+
+    const drained = await processQueuedSends({ max: 20 });
+    const mine = drained.results.find((r) => r.draftId === draftId);
+    expect(mine?.sent).toBe(false);
+    expect(mine?.blockedBy).toBe("suppressed");
+
+    // and it is not left queued to be retried forever
+    const after = await db.query<{ status: string }>(`SELECT status FROM outbound_sends WHERE draft_id = $1`, [draftId]);
+    expect(after.rows[0].status).toBe("blocked");
+
+    await db.query(`DELETE FROM suppressions WHERE normalized_email = $1`, ["hello@queued-opted-out.example"]);
+  });
+
+  it("keeps it queued while the mailbox is over its daily limit", async () => {
+    const accountId = await newMailbox(3600);
+    const first = await freshDraft("Queued Limit One Co", "queued-limit-one.example", "hello@queued-limit-one.example");
+    const sent = await sendDraft({ draftId: first, actorUserId: state.userId, accountId });
+    if ("queued" in sent) throw new Error("the first send should not have been held back");
+
+    const second = await freshDraft("Queued Limit Two Co", "queued-limit-two.example", "hello@queued-limit-two.example");
+    const queued = await sendDraft({ draftId: second, actorUserId: state.userId, accountId });
+    if (!("queued" in queued)) throw new Error("expected a queued hold");
+
+    const db = await getDb();
+    await db.query(`UPDATE email_accounts SET daily_send_limit = 1 WHERE id = $1`, [accountId]);
+    await db.query(`UPDATE outbound_sends SET queued_at = now() - interval '1 second' WHERE draft_id = $1`, [second]);
+
+    const drained = await processQueuedSends({ max: 20 });
+    const mine = drained.results.find((r) => r.draftId === second);
+    expect(mine?.sent).toBe(false);
+    // the limit resets tomorrow, so the row waits rather than being written off
+    const after = await db.query<{ status: string }>(`SELECT status FROM outbound_sends WHERE draft_id = $1`, [second]);
+    expect(after.rows[0].status).toBe("queued");
   });
 
   it("refuses a lead marked do not contact, before anything else is even considered", async () => {

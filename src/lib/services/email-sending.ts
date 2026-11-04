@@ -316,7 +316,14 @@ export async function sendDraft(
         "send_in_progress",
       );
     }
-    if (row.status === "failed") {
+    if (row.status === "queued") {
+      // The scheduler is taking this one up (or the founder pressed Send again): the hold is over.
+      await db.query(
+        `UPDATE outbound_sends SET status = 'sending', queued_at = null, error = null,
+          started_at = now(), completed_at = null WHERE id = $1`,
+        [row.id],
+      );
+    } else if (row.status === "failed") {
       // A definitive SMTP rejection is safe to retry with the same ledger row.
       await db.query(
         `UPDATE outbound_sends SET status = 'sending', error = null,
@@ -451,14 +458,19 @@ export async function sendDraft(
   await assertAccountCanSend(account.id);
   const readiness = await getSendReadiness(account.id);
   if (!readiness.ready) {
-    // Nothing was sent, so nothing is recorded as sent: the attempt row goes, the draft stays
-    // approved, and the caller is told when it may go instead of being handed an error.
-    await db.query(`DELETE FROM outbound_sends WHERE draft_id = $1 AND status = 'sending'`, [draft.id]);
+    // Nothing was sent. The attempt row is kept and marked 'queued' with the moment it may go, so
+    // processQueuedSends() finds it and sends it once the gap has passed — no second click needed.
+    await db.query(
+      `UPDATE outbound_sends SET status = 'queued', queued_at = now() + ($2 || ' seconds')::interval,
+        error = null, started_at = now(), completed_at = null
+       WHERE draft_id = $1 AND status = 'sending'`,
+      [draft.id, String(readiness.retryAfterSeconds)],
+    );
     return {
       queued: true,
       retryAfterSeconds: readiness.retryAfterSeconds,
       draftId: draft.id,
-      note: `Held back by your own minimum interval between sends. Nothing was sent — it can go in ${readiness.retryAfterSeconds}s.`,
+      note: `Held back by your own minimum interval between sends. Nothing was sent — it goes automatically in ${readiness.retryAfterSeconds}s.`,
     };
   }
 
@@ -703,6 +715,96 @@ export async function sendDraft(
       ? "Recorded as sent. The sending server did not confirm delivery — check the mailbox if you need certainty."
       : undefined,
   };
+}
+
+/**
+ * The refusals that will never succeed on a retry. Everything else is a condition that changes on its
+ * own — a full daily limit, a mailbox not connected yet, a send already in flight — and stays queued.
+ */
+/** How long a transiently refused queued send waits before the scheduler tries it again. */
+const QUEUED_RETRY_BACKOFF_SECONDS = 60;
+
+const PERMANENT_STOP_CODES = new Set([
+  "suppressed",
+  "do_not_contact",
+  "already_contacted",
+  "prospect_replied",
+  "unverified_recipient",
+  "smtp_rejected",
+]);
+
+export interface QueuedSendOutcome {
+  draftId: string;
+  sent: boolean;
+  /** Set when a stop refused it: the row is marked blocked with this reason. */
+  blockedBy?: string;
+  retryAfterSeconds?: number;
+}
+
+/**
+ * Sends the queued drafts whose moment has come. Called by the scheduled route, once per tick.
+ *
+ * Each candidate goes through sendDraft, so every stop still applies and nothing is bypassed: a queued
+ * draft whose prospect has since opted out is refused here exactly as it would be from the interface.
+ *
+ * A refusal from a stop is final for that row (marked blocked with the reason) so a stop can never be
+ * retried in a loop. Conditions that will change on their own are NOT final: a full daily limit, a
+ * mailbox that is not connected yet, another send already in flight, or a mail server that is briefly
+ * down all leave the row queued for the next tick.
+ *
+ * One bounded batch per call, oldest first, so a large queue cannot turn one tick into an unbounded run.
+ */
+export async function processQueuedSends(
+  options: { max?: number } = {},
+): Promise<{ due: number; sent: number; results: QueuedSendOutcome[] }> {
+  const db = await getDb();
+  const limit = Math.min(Math.max(options.max ?? 5, 1), 20);
+  const due = await db.query<{ draft_id: string; account_id: string | null }>(
+    `SELECT draft_id, account_id FROM outbound_sends
+      WHERE status = 'queued' AND queued_at IS NOT NULL AND queued_at <= now()
+      ORDER BY queued_at ASC
+      LIMIT $1`,
+    [limit],
+  );
+
+  const results: QueuedSendOutcome[] = [];
+  for (const row of due.rows) {
+    try {
+      const outcome = await sendDraft({
+        draftId: row.draft_id,
+        accountId: row.account_id,
+        actorUserId: "scheduler",
+      });
+      if ("queued" in outcome) {
+        results.push({ draftId: row.draft_id, sent: false, retryAfterSeconds: outcome.retryAfterSeconds });
+        continue;
+      }
+      results.push({ draftId: row.draft_id, sent: true });
+    } catch (error) {
+      const appError = error instanceof AppError ? error : null;
+      if (appError && PERMANENT_STOP_CODES.has(appError.code)) {
+        await db.query(
+          `UPDATE outbound_sends SET status = 'blocked', error = $2, completed_at = now()
+           WHERE draft_id = $1 AND status = 'queued'`,
+          [row.draft_id, appError.message],
+        ).catch(() => undefined);
+        results.push({ draftId: row.draft_id, sent: false, blockedBy: appError.code });
+        continue;
+      }
+      // A condition that will change on its own. The row was reset to 'sending' on the way in, so it
+      // must go back to the queue: leaving it there would strand the draft — and 'sending' is exactly
+      // what blocks a later attempt. A short backoff keeps a full mailbox from being hammered.
+      await db.query(
+        `UPDATE outbound_sends SET status = 'queued', error = $2,
+          queued_at = now() + ($3 || ' seconds')::interval
+         WHERE draft_id = $1 AND status = 'sending'`,
+        [row.draft_id, appError?.message ?? null, String(QUEUED_RETRY_BACKOFF_SECONDS)],
+      ).catch(() => undefined);
+      results.push({ draftId: row.draft_id, sent: false, retryAfterSeconds: QUEUED_RETRY_BACKOFF_SECONDS });
+    }
+  }
+
+  return { due: due.rows.length, sent: results.filter((r) => r.sent).length, results };
 }
 
 export async function getSendUsage(accountId: string): Promise<{
