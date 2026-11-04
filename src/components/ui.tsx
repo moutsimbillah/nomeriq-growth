@@ -1,5 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { AGENT_LABELS, agentProvenance } from "@/lib/agent/agentTag";
+import type { AgentTag, ChannelTag } from "@/lib/types";
 import {
   ArrowUpRight,
   CircleAlert,
@@ -339,6 +341,33 @@ export function Avatar({
       )}
     >
       {initials || "N"}
+    </span>
+  );
+}
+
+/**
+ * Where a lead or draft came from. The tooltip says how trustworthy the value is: an API key's label
+ * is set by the founder, a connector's name is only what the connector called itself.
+ */
+export function AgentPill({
+  agent,
+  channel,
+  note,
+  className,
+}: {
+  agent: AgentTag | null;
+  channel: ChannelTag | null;
+  note?: string;
+  className?: string;
+}) {
+  if (!agent && !channel) return null;
+  return (
+    <span
+      title={agentProvenance(agent ?? null, channel ?? null)}
+      className={cn("badge border-line bg-paper font-semibold text-muted", className)}
+    >
+      {agent ? AGENT_LABELS[agent] : "Unknown"}
+      {note ? <span className="font-normal opacity-70"> · {note}</span> : null}
     </span>
   );
 }

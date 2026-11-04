@@ -19,6 +19,7 @@ import {
   listUnknownInbound,
 } from "@/lib/services/conversations";
 import { listDrafts } from "@/lib/services/drafts";
+import { AGENT_LABELS, AGENT_TAGS } from "@/lib/agent/agentTag";
 import {
   getFollowUpOverview,
   listFollowUpCandidates,
@@ -28,6 +29,7 @@ import { listCampaigns } from "@/lib/services/campaigns";
 import { listEmailAccounts } from "@/lib/email/accounts";
 import { getSyncHealth } from "@/lib/email/sync";
 import {
+  AgentPill,
   Card,
   EmptyState,
   Notice,
@@ -62,7 +64,7 @@ function classificationClass(classification: string) {
 export default async function EmailPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; agent?: string }>;
 }) {
   const params = await searchParams;
   const tabMap: Record<string, string> = {
@@ -88,7 +90,7 @@ export default async function EmailPage({
   ] = await Promise.all([
     listConversations({ onlyReplied: true, limit: 100 }),
     listSentMessages(100),
-    listDrafts(undefined, 120),
+    listDrafts(undefined, 120, params.agent),
     listCampaigns(),
     getFollowUpOverview(),
     listFollowUpCandidates(),
@@ -356,6 +358,20 @@ export default async function EmailPage({
 
       {active === "Drafts" && (
         <Card className="mt-4 overflow-hidden">
+          <form className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3" method="GET">
+            <input type="hidden" name="tab" value="drafts" />
+            <select name="agent" defaultValue={params.agent || ""} className="select w-auto min-w-[170px]">
+              <option value="">All agents</option>
+              {AGENT_TAGS.map((tag) => (
+                <option key={tag} value={tag}>
+                  {AGENT_LABELS[tag]} ({drafts.filter((draft) => draft.sourceAgent === tag).length})
+                </option>
+              ))}
+            </select>
+            <button type="submit" className="btn-secondary btn-sm">
+              Filter
+            </button>
+          </form>
           {drafts.length === 0 ? (
             <EmptyState
               icon="sparkles"
@@ -375,6 +391,7 @@ export default async function EmailPage({
                     <th>Prospect</th>
                     <th>Type</th>
                     <th>Subject</th>
+                    <th>Saved by</th>
                     <th>Status</th>
                     <th>Updated</th>
                     <th className="text-right">Review</th>
@@ -391,6 +408,13 @@ export default async function EmailPage({
                         </span>
                       </td>
                       <td className="max-w-[290px] truncate text-[11px]">{draft.subject}</td>
+                      <td>
+                        <AgentPill
+                          agent={draft.sourceAgent ?? "unknown"}
+                          channel={draft.sourceChannel}
+                          note={draft.sourceAgent === "other" && draft.sourceClient ? draft.sourceClient : undefined}
+                        />
+                      </td>
                       <td>
                         <span
                           className={`badge capitalize ${

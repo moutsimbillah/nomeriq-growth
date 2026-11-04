@@ -8,9 +8,12 @@ import {
   SlidersHorizontal,
   UsersRound,
 } from "lucide-react";
-import { listProspects } from "@/lib/services/prospects";
+import { getProspectOriginFacets, listProspects } from "@/lib/services/prospects";
+import { AGENT_LABELS, AGENT_TAGS, CHANNEL_LABELS, CHANNEL_TAGS } from "@/lib/agent/agentTag";
+import { countActiveFilters, readLeadFilters } from "@/lib/leads/leadFilters";
 import { listResearchJobs } from "@/lib/services/research";
 import {
+  AgentPill,
   Card,
   CategoryList,
   EmptyState,
@@ -32,28 +35,19 @@ export default async function LeadsPage({
     category?: string;
     qualification?: string;
     job?: string;
+    agent?: string;
+    channel?: string;
   }>;
 }) {
   const params = await searchParams;
-  const [prospects, jobs] = await Promise.all([
-    listProspects({
-      query: params.q,
-      status: params.status,
-      category: params.category,
-      qualification: params.qualification,
-      jobId: params.job,
-      limit: 150,
-    }),
+  const filters = readLeadFilters(params as Record<string, string | undefined>);
+  const [prospects, jobs, facets] = await Promise.all([
+    listProspects({ ...filters, limit: 150 }),
     listResearchJobs(),
+    getProspectOriginFacets(filters),
   ]);
   const jobsById = new Map(jobs.map((job) => [job.id, job]));
-  const activeFilterCount = [
-    params.q,
-    params.status,
-    params.category,
-    params.qualification,
-    params.job,
-  ].filter(Boolean).length;
+  const activeFilterCount = countActiveFilters(filters);
 
   return (
     <div className="animate-fade-up">
@@ -132,6 +126,38 @@ export default async function LeadsPage({
               </option>
             ))}
           </select>
+          <select
+            name="agent"
+            defaultValue={params.agent || ""}
+            className="select w-auto min-w-[160px]"
+            title="Which agent saved the lead"
+          >
+            <option value="">All agents</option>
+            {AGENT_TAGS.map((tag) => {
+              const count = facets.agents[tag] ?? 0;
+              return (
+                <option key={tag} value={tag} disabled={count === 0 && params.agent !== tag}>
+                  {AGENT_LABELS[tag]} ({count})
+                </option>
+              );
+            })}
+          </select>
+          <select
+            name="channel"
+            defaultValue={params.channel || ""}
+            className="select w-auto min-w-[170px]"
+            title="How the lead arrived"
+          >
+            <option value="">All channels</option>
+            {CHANNEL_TAGS.map((tag) => {
+              const count = facets.channels[tag] ?? 0;
+              return (
+                <option key={tag} value={tag} disabled={count === 0 && params.channel !== tag}>
+                  {CHANNEL_LABELS[tag]} ({count})
+                </option>
+              );
+            })}
+          </select>
           <button type="submit" className="btn-secondary">
             <Filter size={13} />
             Apply
@@ -201,8 +227,25 @@ export default async function LeadsPage({
                           {prospect.businessName.slice(0, 1).toUpperCase()}
                         </span>
                         <span className="min-w-0">
-                          <span className="block truncate font-semibold text-ink group-hover:underline group-hover:decoration-line-strong group-hover:underline-offset-4">
-                            {prospect.businessName}
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <span className="truncate font-semibold text-ink group-hover:underline group-hover:decoration-line-strong group-hover:underline-offset-4">
+                              {prospect.businessName}
+                            </span>
+                            <AgentPill
+                              agent={prospect.sourceAgent ?? "unknown"}
+                              channel={prospect.sourceChannel}
+                              note={prospect.sourceAgent === "other" && prospect.sourceClient ? prospect.sourceClient : undefined}
+                            />
+                            {prospect.firstDraftAgent &&
+                              prospect.sourceAgent &&
+                              prospect.firstDraftAgent !== prospect.sourceAgent && (
+                                <span
+                                  title={`The draft was written by ${AGENT_LABELS[prospect.firstDraftAgent]}`}
+                                  className="text-[10px] text-amber"
+                                >
+                                  ✎ draft by {AGENT_LABELS[prospect.firstDraftAgent]}
+                                </span>
+                              )}
                           </span>
                           <span className="mt-0.5 flex items-center gap-1 text-[10px] text-faint">
                             <Globe2 size={9} />

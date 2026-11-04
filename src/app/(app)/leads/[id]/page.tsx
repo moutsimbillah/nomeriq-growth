@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { AGENT_LABELS, CHANNEL_LABELS } from "@/lib/agent/agentTag";
 import {
   ArrowLeft,
   ArrowRight,
@@ -199,7 +200,13 @@ export default async function LeadDetailPage({
                     <span className="inline-flex items-center gap-1">
                       <ShieldCheck size={10} className="text-forest" />
                       Verified {prospect.verifiedAt ? formatDate(prospect.verifiedAt) : "date unknown"}
-                        {prospect.sourceClient ? ` · saved by ${prospect.sourceClient}` : ""}
+                        {prospect.sourceAgent
+                          ? ` · Found by ${AGENT_LABELS[prospect.sourceAgent]}${
+                              prospect.sourceChannel ? ` via ${CHANNEL_LABELS[prospect.sourceChannel]}` : ""
+                            }`
+                          : prospect.sourceClient
+                            ? ` · saved by ${prospect.sourceClient}`
+                            : ""}
                     </span>
                     {prospect.contactEmailSource && (
                       <a

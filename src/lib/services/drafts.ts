@@ -1,5 +1,7 @@
 import { getDb } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
+import { tagsFromActorType } from "@/lib/agent/agentTag";
+import type { AgentTag, ChannelTag } from "@/lib/types";
 import { generateFirstContact } from "@/lib/ai/writer";
 import { validateDraft } from "@/lib/ai/claims";
 import {
@@ -59,6 +61,7 @@ export async function listDraftsForProspect(
 export async function listDrafts(
   status?: string,
   limit = 100,
+  agent?: string,
 ): Promise<Draft[]> {
   const db = await getDb();
   const params: unknown[] = [];
@@ -66,6 +69,10 @@ export async function listDrafts(
   if (status) {
     params.push(status);
     conditions.push(`d.status = $${params.length}`);
+  }
+  if (agent) {
+    params.push(agent);
+    conditions.push(`d.source_agent = $${params.length}`);
   }
   params.push(Math.min(limit, 200));
   const result = await db.query<any>(
@@ -93,7 +100,7 @@ export async function generateDraftForProspect(input: {
   provider?: "openai" | "anthropic" | "deepseek";
 }): Promise<Draft> {
   const prospect = await getProspect(input.prospectId);
-  if (!prospect) throw new AppError("Prospect not found.", 404);
+  if (!prospect) throw new AppError("Prospect not found.", 404, "prospect_not_found");
   if (prospect.qualificationStatus !== "verified") {
     throw new AppError(
       "A draft can only be prepared for a verified prospect.",
@@ -248,10 +255,16 @@ export async function generateDraftForProspect(input: {
 async function stampSourceClient(
   draftId: string,
   sourceClient: string | null | undefined,
+  agent?: AgentTag | null,
+  channel?: ChannelTag | null,
 ): Promise<void> {
   if (!sourceClient) return;
   const db = await getDb();
-  await db.query(`UPDATE drafts SET source_client = $1 WHERE id = $2`, [sourceClient, draftId]);
+  await db.query(
+    `UPDATE drafts SET source_client = $1, source_agent = coalesce($3, source_agent),
+            source_channel = coalesce($4, source_channel) WHERE id = $2`,
+    [sourceClient, draftId, agent ?? null, channel ?? null],
+  );
 }
 
 export async function savePreparedFirstContactDraft(input: {
@@ -262,9 +275,11 @@ export async function savePreparedFirstContactDraft(input: {
   actorUserId?: string | null;
   /** The connector that produced this draft, already sanitised. Reporting only. */
   sourceClient?: string | null;
+  sourceAgent?: AgentTag | null;
+  sourceChannel?: ChannelTag | null;
 }): Promise<{ draft: Draft; preserved: boolean }> {
   const prospect = await getProspect(input.prospectId);
-  if (!prospect) throw new AppError("Prospect not found.", 404);
+  if (!prospect) throw new AppError("Prospect not found.", 404, "prospect_not_found");
   if (prospect.qualificationStatus !== "verified" || !prospect.contactEmail) {
     throw new AppError(
       "A draft needs a verified prospect with a source-confirmed email.",
@@ -289,7 +304,7 @@ export async function savePreparedFirstContactDraft(input: {
       actorType: input.actorType,
       actorUserId: input.actorUserId,
     });
-    await stampSourceClient(existing.id, input.sourceClient);
+    await stampSourceClient(existing.id, input.sourceClient, input.sourceAgent, input.sourceChannel);
     return { draft, preserved: false };
   }
   const subject = input.subject.trim();
@@ -305,6 +320,9 @@ export async function savePreparedFirstContactDraft(input: {
     truth,
     aiGenerated: true,
   });
+  // Where this draft came from. An explicit tag wins; otherwise the actor type decides.
+  const draftTags = { agent: input.sourceAgent ?? tagsFromActorType(input.actorType).agent,
+                      channel: input.sourceChannel ?? tagsFromActorType(input.actorType).channel };
   const db = await getDb();
   const id = crypto.randomUUID();
   try {
@@ -312,9 +330,10 @@ export async function savePreparedFirstContactDraft(input: {
       `INSERT INTO drafts (
         id, prospect_id, research_job_id, kind, sequence, status, subject, body,
         recipient_email, ai_generated, ai_model, product_truth_version, warnings,
-        created_by_type, created_by_user_id, source_client, created_at, updated_at
+        created_by_type, created_by_user_id, source_client, source_agent, source_channel,
+        created_at, updated_at
       ) VALUES ($1, $2, $3, 'first_contact', 0, 'draft', $4, $5, $6, true,
-        $7, $8, $9::jsonb, $10, $11, $12, now(), now())`,
+        $7, $8, $9::jsonb, $10, $11, $12, $13, $14, now(), now())`,
       [
         id,
         prospect.id,
@@ -328,6 +347,8 @@ export async function savePreparedFirstContactDraft(input: {
         input.actorType,
         input.actorUserId ?? null,
         input.sourceClient ?? null,
+        input.sourceAgent ?? draftTags.agent,
+        input.sourceChannel ?? draftTags.channel,
       ],
     );
   } catch (error) {

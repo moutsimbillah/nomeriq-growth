@@ -5,7 +5,9 @@ import {
   number,
 } from "@/lib/utils";
 import type {
+  AgentTag,
   Category,
+  ChannelTag,
   Classification,
   Draft,
   DraftWarning,
@@ -42,6 +44,9 @@ export function mapProspect(row: any): ProspectSummary {
     subscriberCount: row.subscriber_count,
     researchJobId: row.research_job_id,
     sourceClient: row.source_client ?? null,
+    sourceAgent: (row.source_agent ?? null) as AgentTag | null,
+    sourceChannel: (row.source_channel ?? null) as ChannelTag | null,
+    firstDraftAgent: (row.first_draft_agent ?? null) as AgentTag | null,
     nextAction: row.next_action,
     nextActionAt: iso(row.next_action_at),
     lastContactedAt: iso(row.last_contacted_at),
@@ -111,6 +116,8 @@ export function mapDraft(row: any): Draft {
     aiGenerated: Boolean(row.ai_generated),
     aiModel: row.ai_model,
     sourceClient: row.source_client ?? null,
+    sourceAgent: (row.source_agent ?? null) as AgentTag | null,
+    sourceChannel: (row.source_channel ?? null) as ChannelTag | null,
     productTruthVersion: row.product_truth_version
       ? number(row.product_truth_version)
       : null,

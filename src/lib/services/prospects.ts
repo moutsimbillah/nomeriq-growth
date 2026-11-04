@@ -1,5 +1,6 @@
 import { getDb, type DbClient } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
+import { tagsFromActorType } from "@/lib/agent/agentTag";
 import {
   AppError,
   asStringArray,
@@ -14,7 +15,9 @@ import {
   number,
 } from "@/lib/utils";
 import type {
+  AgentTag,
   Category,
+  ChannelTag,
   PipelineStatus,
   ProspectDetail,
   ProspectSummary,
@@ -31,7 +34,9 @@ const PROSPECT_SELECT = `
       ORDER BY pe.is_primary DESC, pe.verified_at ASC LIMIT 1) AS contact_email,
     (SELECT pe.source_url FROM prospect_emails pe
       WHERE pe.prospect_id = p.id
-      ORDER BY pe.is_primary DESC, pe.verified_at ASC LIMIT 1) AS contact_email_source
+      ORDER BY pe.is_primary DESC, pe.verified_at ASC LIMIT 1) AS contact_email_source,
+    (SELECT d.source_agent FROM drafts d
+      WHERE d.prospect_id = p.id AND d.kind = 'first_contact' LIMIT 1) AS first_draft_agent
   FROM prospects p
 `;
 
@@ -193,6 +198,8 @@ export interface SaveProspectInput {
   actorUserId?: string | null;
   actorKeyId?: string | null;
   sourceClient?: string | null;
+  sourceAgent?: AgentTag | null;
+  sourceChannel?: ChannelTag | null;
 }
 
 export interface SaveProspectResult {
@@ -237,6 +244,8 @@ export async function saveProspect(
   }
 
   const qualification = input.qualificationStatus ?? "verified";
+  // Every row records where it came from. An explicit tag wins; otherwise the actor type decides.
+  const tags = tagsFromActorType(input.actorType);
   const websiteUrl = input.websiteUrl
     ? normalizeWebsiteUrl(input.websiteUrl)
     : null;
@@ -318,11 +327,11 @@ export async function saveProspect(
           research_notes, instagram_key, instagram_url, youtube_key, youtube_url,
           x_key, x_url, telegram_key, telegram_url, linkedin_url, other_socials,
           follower_count, subscriber_count, verified_at, status, research_job_id,
-          created_by_type, created_by_user_id, created_by_key_id, source_client, metadata
+          created_by_type, created_by_user_id, created_by_key_id, source_client, source_agent, source_channel, metadata
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14,
           $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24,
-          $25, $26, $27, $28, $29, $30, $31, $32::jsonb
+          $25, $26, $27, $28, $29, $30, $31, $32, $33, $34::jsonb
         )`,
         [
           id,
@@ -356,6 +365,8 @@ export async function saveProspect(
           input.actorUserId ?? null,
           input.actorKeyId ?? null,
           input.sourceClient ?? null,
+          input.sourceAgent ?? tags.agent,
+          input.sourceChannel ?? tags.channel,
           JSON.stringify({ verificationMethod: "public source review" }),
         ],
       );
@@ -545,8 +556,95 @@ export interface ProspectFilters {
   category?: string;
   jobId?: string;
   hasEmail?: boolean;
+  /** Which agent produced the lead, normalised. Reporting only. */
+  agent?: string;
+  /** How it arrived: mcp_oauth, api_key, engine or founder. */
+  channel?: string;
   limit?: number;
   offset?: number;
+}
+
+/**
+ * How many leads each agent and each channel has, under the filters currently applied — the agent and
+ * channel narrowing is excluded from its own count so every option shows what choosing it would give.
+ */
+export async function getProspectOriginFacets(
+  filters: ProspectFilters = {},
+): Promise<{ agents: Record<string, number>; channels: Record<string, number> }> {
+  const db = await getDb();
+  const conditions = ["p.archived_at IS NULL"];
+  const params: unknown[] = [];
+  if (filters.query?.trim()) {
+    params.push(`%${filters.query.trim()}%`);
+    const idx = params.length;
+    conditions.push(
+      `(p.business_name ILIKE $${idx} OR p.website_url ILIKE $${idx} OR p.country ILIKE $${idx} OR EXISTS (
+        SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id AND pe.email ILIKE $${idx}
+      ))`,
+    );
+  }
+  if (filters.status) {
+    params.push(filters.status);
+    conditions.push(`p.status = $${params.length}`);
+  }
+  if (filters.qualification) {
+    params.push(filters.qualification);
+    conditions.push(`p.qualification_status = $${params.length}`);
+  }
+  if (filters.category) {
+    params.push(JSON.stringify([filters.category]));
+    conditions.push(`p.categories @> $${params.length}::jsonb`);
+  }
+  if (filters.jobId) {
+    params.push(filters.jobId);
+    conditions.push(`p.research_job_id = $${params.length}`);
+  }
+  if (filters.hasEmail === true) {
+    conditions.push(`EXISTS (SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id)`);
+  }
+  if (filters.hasEmail === false) {
+    conditions.push(`NOT EXISTS (SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id)`);
+  }
+
+  // Each axis is counted with every filter applied except its own, so an option shows what choosing
+  // it would return right now — and the other axis' narrowing does move the numbers.
+  const where = conditions.join(" AND ");
+
+  // The agent counts carry the channel filter, and the channel counts carry the agent filter.
+  const agentParams = [...params];
+  let agentWhere = where;
+  if (filters.channel && filters.channel !== "unknown") {
+    agentParams.push(filters.channel);
+    agentWhere = `${where} AND p.source_channel = $${agentParams.length}`;
+  } else if (filters.channel === "unknown") {
+    agentWhere = `${where} AND p.source_channel IS NULL`;
+  }
+
+  const channelParams = [...params];
+  let channelWhere = where;
+  if (filters.agent && filters.agent !== "unknown") {
+    channelParams.push(filters.agent);
+    channelWhere = `${where} AND p.source_agent = $${channelParams.length}`;
+  } else if (filters.agent === "unknown") {
+    channelWhere = `${where} AND (p.source_agent IS NULL OR p.source_agent = 'unknown')`;
+  }
+
+  const agents = await db.query<{ source_agent: string | null; n: number }>(
+    `SELECT coalesce(p.source_agent, 'unknown') AS source_agent, count(*)::int AS n
+       FROM prospects p WHERE ${agentWhere} GROUP BY 1`,
+    agentParams,
+  );
+  const channels = await db.query<{ source_channel: string | null; n: number }>(
+    `SELECT coalesce(p.source_channel, 'unknown') AS source_channel, count(*)::int AS n
+       FROM prospects p WHERE ${channelWhere} GROUP BY 1`,
+    channelParams,
+  );
+  const toMap = (rows: Record<string, unknown>[], field: string) =>
+    Object.fromEntries(rows.map((row) => [String(row[field] ?? "unknown"), Number(row.n)]));
+  return {
+    agents: toMap(agents.rows, "source_agent"),
+    channels: toMap(channels.rows, "source_channel"),
+  };
 }
 
 export async function listProspects(
@@ -579,6 +677,20 @@ export async function listProspects(
   if (filters.jobId) {
     params.push(filters.jobId);
     conditions.push(`p.research_job_id = $${params.length}`);
+  }
+  if (filters.agent === "unknown") {
+    // Rows saved before the tags existed have no agent at all; the facet counts them as unknown, so
+    // the filter has to match them too or choosing "Unknown" would return nothing.
+    conditions.push(`(p.source_agent IS NULL OR p.source_agent = 'unknown')`);
+  } else if (filters.agent) {
+    params.push(filters.agent);
+    conditions.push(`p.source_agent = $${params.length}`);
+  }
+  if (filters.channel === "unknown") {
+    conditions.push(`(p.source_channel IS NULL OR p.source_channel = 'unknown')`);
+  } else if (filters.channel) {
+    params.push(filters.channel);
+    conditions.push(`p.source_channel = $${params.length}`);
   }
   if (filters.hasEmail === true) {
     conditions.push(

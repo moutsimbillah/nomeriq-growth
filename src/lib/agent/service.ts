@@ -31,6 +31,7 @@ import {
 import { buildFollowUp } from "@/lib/ai/writer";
 import { getDb } from "@/lib/db/client";
 import { reportToolError } from "./toolErrors";
+import { tagsForAgentCall } from "./agentTag";
 import {
   logAgentAction,
   actorKeyUuid,
@@ -292,7 +293,7 @@ async function executeAgentAction(
       const prospectId = String(args.prospectId || "");
       if (!prospectId) throw new AppError("prospectId is required.");
       const prospect = await getProspect(prospectId);
-      if (!prospect) throw new AppError("Prospect not found.", 404);
+      if (!prospect) throw new AppError("Prospect not found.", 404, "prospect_not_found");
       result = { prospect };
       break;
     }
@@ -337,6 +338,8 @@ async function executeAgentAction(
         actorType: actorTypeFor(key),
         actorKeyId: actorKeyUuid(key),
         sourceClient: sanitizeClientName(key.name),
+        sourceAgent: tagsForAgentCall(key).agent,
+        sourceChannel: tagsForAgentCall(key).channel,
         sources: data.sources,
       });
       result = {
@@ -360,6 +363,8 @@ async function executeAgentAction(
         body: parsed.data.body,
         actorType: actorTypeFor(key),
         sourceClient: sanitizeClientName(key.name),
+        sourceAgent: tagsForAgentCall(key).agent,
+        sourceChannel: tagsForAgentCall(key).channel,
       });
       result = {
         saved: true,

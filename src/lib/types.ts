@@ -85,6 +85,13 @@ export interface ProductTruth {
   updatedAt: string;
 }
 
+/** Which agent produced a row, normalised. Reporting only — never read for permissions or trust. */
+export type AgentTag =
+  | "claude" | "chatgpt" | "gemini" | "hermes" | "deepseek" | "founder" | "other" | "unknown";
+
+/** How it arrived: an OAuth connector, an API key, the research engine, or the portal itself. */
+export type ChannelTag = "mcp_oauth" | "api_key" | "engine" | "founder";
+
 export interface ProspectSummary {
   id: string;
   businessName: string;
@@ -106,6 +113,10 @@ export interface ProspectSummary {
   researchJobId: string | null;
   /** The connector that saved this lead, as it named itself. Reporting only. */
   sourceClient: string | null;
+  sourceAgent: AgentTag | null;
+  sourceChannel: ChannelTag | null;
+  /** The agent that wrote the first-contact draft, when one exists. Shown as a difference marker. */
+  firstDraftAgent?: AgentTag | null;
   nextAction: string | null;
   nextActionAt: string | null;
   lastContactedAt: string | null;
@@ -162,6 +173,8 @@ export interface Draft {
   aiModel: string | null;
   /** The connector that saved this draft, as it named itself. Reporting only. */
   sourceClient: string | null;
+  sourceAgent: AgentTag | null;
+  sourceChannel: ChannelTag | null;
   productTruthVersion: number | null;
   warnings: DraftWarning[];
   founderEdited: boolean;
