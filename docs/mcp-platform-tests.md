@@ -224,14 +224,44 @@ Read-only, grouped so each connected platform shows separately, selecting no key
 SELECT COALESCE(k.assistant, a.metadata->>'client', a.actor_type) AS platform,
        a.metadata->>'client' AS client_name,
        a.action,
-       count(*) AS events,
+       coalesce(a.metadata->>'outcome', 'ok') AS outcome,
+       coalesce(a.metadata->>'code', '-') AS code,
+       count(*) FILTER (WHERE a.metadata->>'created' = 'true') AS created,
+       count(*) FILTER (WHERE a.metadata->>'duplicate' = 'true') AS duplicates,
+       count(*) FILTER (WHERE a.metadata->>'preserved' = 'true') AS preserved,
+       count(*) AS calls,
        max(a.created_at) AS last_seen
 FROM audit_log a
 LEFT JOIN api_keys k ON k.id::text = a.actor_id
 WHERE a.created_at >= now() - interval '24 hours'
-GROUP BY 1, 2, 3
-ORDER BY events DESC;
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY calls DESC;
 ```
+
+`outcome` is `ok`, `denied` (a permission problem), `invalid` (bad arguments) or `internal` (a fault of
+ours); `code` names the reason a call did not succeed. Entries written before outcomes were recorded
+carry no `outcome` and read as `ok` — back then only a successful call was written at all.
+
+The flags say what a write actually did: `created` for a prospect or draft that was saved, `duplicates`
+for a save or a duplicate check that matched an existing record, `preserved` for a draft that was left
+alone because the founder owned it. A second view, for grading a run — everything that did not succeed:
+
+```sql
+SELECT a.created_at, a.action, a.metadata->>'client' AS client,
+       a.metadata->>'outcome' AS outcome, a.metadata->>'code' AS code,
+       a.metadata->>'reference' AS reference
+FROM audit_log a
+WHERE a.created_at >= now() - interval '24 hours'
+  AND a.metadata->>'outcome' IN ('denied', 'invalid', 'internal')
+ORDER BY a.created_at DESC;
+```
+
+`reference` is quoted from the caller's error message and matches the server log line for the same
+failure. Argument **names** are the only request detail any entry holds — never a value, never a body.
+
+Writes are capped per client per minute, and again across all clients together; past a cap a call is
+counted rather than written, and the first entry of the following minute reports how many were
+swallowed, as `suppressedSince` and `suppressedGlobalSince`.
 
 Every agent tool call already writes one audit entry named after the tool, and each entry now also
 carries the client's own name in `metadata.client`. That matters because OAuth-connected clients
