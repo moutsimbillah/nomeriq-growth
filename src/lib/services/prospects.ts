@@ -200,7 +200,7 @@ export interface SaveProspectInput {
   aliases?: string[];
   researchJobId?: string | null;
   qualificationStatus?: "candidate" | "verified";
-  actorType?: "founder" | "chatgpt" | "claude" | "deepseek" | "api" | "seed";
+  actorType?: "founder" | "chatgpt" | "claude" | "deepseek" | "api" | "seed" | "legacy";
   actorUserId?: string | null;
   actorKeyId?: string | null;
   sourceClient?: string | null;

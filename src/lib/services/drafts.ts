@@ -127,7 +127,7 @@ async function recipientIsVerified(
 
 export async function generateDraftForProspect(input: {
   prospectId: string;
-  actorType: "founder" | "chatgpt" | "claude" | "deepseek" | "api" | "seed";
+  actorType: "founder" | "chatgpt" | "claude" | "deepseek" | "api" | "seed" | "legacy";
   actorUserId?: string | null;
   force?: boolean;
   provider?: "openai" | "anthropic" | "deepseek";
@@ -425,7 +425,7 @@ export async function saveDraft(input: {
   subject: string;
   body: string;
   recipientEmail: string;
-  actorType: "founder" | "chatgpt" | "claude" | "deepseek" | "api" | "seed";
+  actorType: "founder" | "chatgpt" | "claude" | "deepseek" | "api" | "seed" | "legacy";
   actorUserId?: string | null;
 }): Promise<Draft> {
   const draft = await getDraft(input.id);

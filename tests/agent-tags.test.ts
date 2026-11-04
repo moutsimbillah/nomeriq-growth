@@ -4,6 +4,9 @@ import { describe, expect, it } from "vitest";
 import {
   agentFromAssistantLabel,
   agentFromClientName,
+  agentProvenance,
+  CHANNEL_LABELS,
+  CHANNEL_TAGS,
   tagsForAgentCall,
   tagsFromActorType,
 } from "@/lib/agent/agentTag";
@@ -109,5 +112,24 @@ describe("a forged connector name buys nothing", () => {
       expect(source).not.toContain("sourceChannel");
       expect(source).not.toContain("agentFrom");
     }
+  });
+});
+
+describe("an imported row's origin", () => {
+  it("has its own channel value, labelled for a human", () => {
+    expect(CHANNEL_TAGS).toContain("legacy_import");
+    // every value the database accepts has a label, so a filter can never render a raw value
+    for (const tag of CHANNEL_TAGS) expect(CHANNEL_LABELS[tag]).toBeTruthy();
+    expect(CHANNEL_LABELS.legacy_import).toBe("Old portal import");
+  });
+
+  it("falls back to the channel, and claims no agent", () => {
+    // The import sets the agent from the old portal's research client; this fallback runs only when
+    // nothing did, and it must not invent one.
+    expect(tagsFromActorType("legacy")).toEqual({ agent: "unknown", channel: "legacy_import" });
+  });
+
+  it("explains itself in the pill's tooltip", () => {
+    expect(agentProvenance("claude", "legacy_import")).toContain("old portal");
   });
 });

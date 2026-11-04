@@ -90,7 +90,7 @@ export type AgentTag =
   | "claude" | "chatgpt" | "gemini" | "hermes" | "deepseek" | "founder" | "other" | "unknown";
 
 /** How it arrived: an OAuth connector, an API key, the research engine, or the portal itself. */
-export type ChannelTag = "mcp_oauth" | "api_key" | "engine" | "founder";
+export type ChannelTag = "mcp_oauth" | "api_key" | "engine" | "founder" | "legacy_import";
 
 export interface ProspectSummary {
   id: string;

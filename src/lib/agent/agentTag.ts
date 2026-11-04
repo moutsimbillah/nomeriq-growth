@@ -20,7 +20,7 @@ export const AGENT_TAGS: AgentTag[] = [
   "unknown",
 ];
 
-export const CHANNEL_TAGS: ChannelTag[] = ["mcp_oauth", "api_key", "engine", "founder"];
+export const CHANNEL_TAGS: ChannelTag[] = ["mcp_oauth", "api_key", "engine", "founder", "legacy_import"];
 
 export const AGENT_LABELS: Record<AgentTag, string> = {
   claude: "Claude",
@@ -38,6 +38,7 @@ export const CHANNEL_LABELS: Record<ChannelTag, string> = {
   api_key: "API key",
   engine: "Research engine",
   founder: "Portal",
+  legacy_import: "Old portal import",
 };
 
 /** Exact, case-insensitive match on a connector's self-declared name. Anything else is `other`. */
@@ -80,6 +81,10 @@ export function tagsFromActorType(actorType: string | null | undefined): {
       return { agent: "claude", channel: "api_key" };
     case "chatgpt":
       return { agent: "chatgpt", channel: "api_key" };
+    case "legacy":
+      // An imported row: the channel says where it came from, and the agent says nothing, because the
+      // import sets it from the old portal's research client rather than from this fallback.
+      return { agent: "unknown", channel: "legacy_import" };
     default:
       return { agent: "unknown", channel: "founder" };
   }
@@ -107,5 +112,6 @@ export function agentProvenance(tag: AgentTag | null, channel: ChannelTag | null
   if (channel === "api_key") return "Set by the API key you created";
   if (channel === "engine") return "Recorded by the research engine";
   if (channel === "founder") return "Added in the portal";
+  if (channel === "legacy_import") return "Imported from the old portal — not researched here";
   return tag ? "Origin not recorded" : "Origin unknown";
 }
