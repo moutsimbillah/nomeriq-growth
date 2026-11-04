@@ -6,7 +6,7 @@ import {
 } from "@/lib/agent/service";
 import { ASSISTANT_SKILL } from "@/lib/agent/instructions";
 import { corsHeaders, preflight } from "@/lib/api/cors";
-import { publicOrigin } from "@/lib/oauth/origin";
+import { publicOrigin } from "@/lib/app-url";
 import { AppError } from "@/lib/utils";
 
 export const runtime = "nodejs";

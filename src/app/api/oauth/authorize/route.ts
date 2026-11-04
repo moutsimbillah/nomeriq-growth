@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getSessionUser } from "@/lib/auth/session";
-import { publicOrigin } from "@/lib/oauth/origin";
+import { loginRedirectUrl, publicOrigin } from "@/lib/app-url";
 import {
   clientAllowsRedirect,
   createAuthorizationCode,
@@ -64,8 +64,8 @@ export async function GET(request: Request) {
 
   const user = await getSessionUser();
   if (!user) {
-    const next = encodeURIComponent(url.pathname + url.search);
-    return NextResponse.redirect(new URL(`/login?next=${next}`, publicOrigin(request)));
+    // Built from APP_URL so the founder is asked to sign in on the public origin.
+    return NextResponse.redirect(loginRedirectUrl(url.pathname + url.search, request));
   }
 
   const fields = [

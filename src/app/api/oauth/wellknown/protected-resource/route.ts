@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { SUPPORTED_SCOPES } from "@/lib/oauth/server";
-import { publicOrigin } from "@/lib/oauth/origin";
+import { publicOrigin } from "@/lib/app-url";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

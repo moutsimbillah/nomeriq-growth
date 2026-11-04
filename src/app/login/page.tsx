@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSessionUser, userCount } from "@/lib/auth/session";
+import { loginTarget } from "@/lib/app-url";
 import { AuthShell } from "@/components/auth-shell";
 import { LoginForm } from "@/components/auth-forms";
 
@@ -11,11 +12,12 @@ export default async function LoginPage({
   searchParams: Promise<{ next?: string }>;
 }) {
   const params = await searchParams;
-  const next = params.next;
+  // Sanitized once here, so every consumer of `next` gets a path on this site only.
+  const next = loginTarget(params.next);
   const count = await userCount();
   if (count === 0) redirect("/setup");
   const user = await getSessionUser();
-  if (user) redirect(next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard");
+  if (user) redirect(next);
 
   return (
     <AuthShell

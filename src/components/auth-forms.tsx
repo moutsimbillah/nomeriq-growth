@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ArrowRight, Eye, EyeOff } from "lucide-react";
 import { apiRequest } from "./client-ui";
+import { loginTarget } from "@/lib/app-url";
 
 export function LoginForm({ hasUsers, next }: { hasUsers: boolean; next?: string }) {
   const router = useRouter();
@@ -20,8 +21,7 @@ export function LoginForm({ hasUsers, next }: { hasUsers: boolean; next?: string
     try {
       await apiRequest("/api/auth/login", { body: { email, password } });
       // Only a same-site path is accepted, so this can never bounce to another host.
-      const target = next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
-      router.push(target);
+      router.push(loginTarget(next));
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Sign in failed.");
