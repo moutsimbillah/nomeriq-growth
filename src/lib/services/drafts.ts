@@ -337,6 +337,24 @@ export async function savePreparedFirstContactDraft(input: {
     }
     throw error;
   }
+  // draft_revisions is the version history of a draft: every text it has carried, with the current
+  // row holding the newest. The version created here used to be the one version missing from it, so
+  // a later assistant save that replaced the draft left the original text nowhere at all.
+  await db.query(
+    `INSERT INTO draft_revisions
+       (id, draft_id, subject, body, recipient_email, warnings, edited_by, edited_by_type)
+     VALUES (gen_random_uuid(), $1, $2, $3, $4, $5::jsonb, $6, $7)`,
+    [
+      id,
+      subject,
+      body,
+      prospect.contactEmail,
+      JSON.stringify(warnings),
+      input.actorUserId ?? null,
+      input.actorType,
+    ],
+  );
+
   await db.query(
     `UPDATE prospects SET status = CASE WHEN status IN ('new', 'verified') THEN 'draft_prepared' ELSE status END,
       next_action = COALESCE(next_action, 'Review the personalized first-contact draft'),
@@ -409,6 +427,8 @@ export async function saveDraft(input: {
     input.actorType === "founder" ? true : draft.founderEdited;
 
   const db = await getDb();
+  // Replacing a draft keeps the text it is replacing: draft_revisions is the version history, so a
+  // second save leaves the earlier text retrievable rather than overwriting it into oblivion.
   await db.transaction(async (tx) => {
     await tx.query(
       `INSERT INTO draft_revisions
