@@ -12,8 +12,25 @@ config({ path: ".env.local" });
 
 const OBSERVED_AT = "2026-11-03T00:00:00.000Z";
 
-async function main() {
-  if (!process.env.APP_ENCRYPTION_KEY) {
+/**
+ * SEED_SCOPE=founder creates the founder and the workspace settings and stops there, so a
+ * production database gets an account to sign in with and no sample data whatsoever.
+ * Anything else is the full local slice, samples included.
+ */
+export type SeedScope = "full" | "founder";
+
+export function resolveSeedScope(raw: string | undefined): SeedScope {
+  const value = (raw ?? "").trim().toLowerCase();
+  if (value === "founder" || value === "founder-only" || value === "founder_only") {
+    return "founder";
+  }
+  if (value === "" || value === "full") return "full";
+  throw new Error(`Unknown SEED_SCOPE "${raw}". Use "full" or "founder".`);
+}
+
+export async function main(scope: SeedScope = resolveSeedScope(process.env.SEED_SCOPE)) {
+  // The key encrypts mailbox credentials, and a founder-only run creates no mailbox.
+  if (scope === "full" && !process.env.APP_ENCRYPTION_KEY) {
     throw new Error("APP_ENCRYPTION_KEY is required to seed encrypted email credentials.");
   }
   const db = await getDb();
@@ -58,6 +75,13 @@ async function main() {
     },
     userId,
   );
+
+  // The guard: everything below this line is sample data for the local slice.
+  if (scope === "founder") {
+    console.log("Seed scope: founder — stopping before any sample leads, drafts or mailboxes.");
+    await closeDb();
+    return;
+  }
 
   const accounts = await listEmailAccounts();
   let account = accounts.find((item) => item.provider === "sandbox");
@@ -257,8 +281,12 @@ async function main() {
   await closeDb();
 }
 
-main().catch(async (error) => {
-  console.error(error);
-  await closeDb().catch(() => undefined);
-  process.exitCode = 1;
-});
+// Runs only as a CLI. The test suite imports main() instead of spawning it, because PGlite is
+// single-writer and a second process opening the same directory corrupts it.
+if (!process.env.VITEST) {
+  main().catch(async (error) => {
+    console.error(error);
+    await closeDb().catch(() => undefined);
+    process.exitCode = 1;
+  });
+}
