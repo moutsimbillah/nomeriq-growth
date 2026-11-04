@@ -32,7 +32,15 @@ export async function POST(
     const result = await sendDraft({
       draftId: id,
       actorUserId: user.id,
+      // The founder's own path: an address they typed is recorded as a founder-entered contact rather
+      // than refused. Campaigns and tools call sendDraft without this, so an agent-written draft still
+      // takes the recipient from the prospect's confirmed address.
+      allowFounderRecipient: true,
     });
+    if ("queued" in result) {
+      // Held back by the account's minimum interval: nothing was sent, and this is not a failure.
+      return NextResponse.json({ ok: true, data: result }, { status: 202 });
+    }
     return NextResponse.json({ ok: true, data: result });
   } catch (error) {
     return fail(error);

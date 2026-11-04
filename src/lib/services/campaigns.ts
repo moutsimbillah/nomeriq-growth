@@ -269,12 +269,28 @@ export async function processNextCampaignItem(
   }
 
   try {
-    await sendDraft({
+    const outcome = await sendDraft({
       draftId: item.draft_id,
       accountId: row.account_id,
       campaignId,
       actorUserId: userId,
     });
+    if ("queued" in outcome) {
+      // Held back by the account's own minimum interval. Nothing was sent, so the item returns to the
+      // queue and the runner can take it again once the window passes.
+      await db.query(
+        `UPDATE campaign_items SET status = 'queued', error = null, updated_at = now() WHERE id = $1`,
+        [item.id],
+      );
+      const usage = await getSendUsage(row.account_id);
+      return {
+        done: false,
+        sent: false,
+        error: undefined,
+        nextAllowedAt: usage.nextAllowedAt,
+        progress: await campaignProgress(campaignId),
+      };
+    }
     const progress = await campaignProgress(campaignId);
     if (progress.queued === 0) {
       await db.query(
@@ -315,7 +331,11 @@ export async function processNextCampaignItem(
        WHERE id = $2`,
       [message, item.id],
     );
-    if (appError?.code === "suppressed" || appError?.code === "already_contacted") {
+    if (
+      appError?.code === "suppressed" ||
+      appError?.code === "already_contacted" ||
+      appError?.code === "prospect_replied"
+    ) {
       await db.query(
         `UPDATE campaign_items SET status = 'skipped', error = $1, updated_at = now()
          WHERE id = $2`,

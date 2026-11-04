@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
 import { tagsFromActorType } from "@/lib/agent/agentTag";
+import { recordFounderEnteredEmail } from "./prospects";
 import { addedWindow, COUNTED_ADDED_RANGES, type AddedRange } from "@/lib/dates/pakistan";
 import type { AgentTag, ChannelTag } from "@/lib/types";
 import { generateFirstContact } from "@/lib/ai/writer";
@@ -450,11 +451,10 @@ export async function saveDraft(input: {
     throw new AppError("Add a valid recipient email address.");
   }
   if (!(await recipientIsVerified(draft.prospectId, recipientEmail))) {
-    throw new AppError(
-      "The recipient must match a publicly sourced, verified email on this prospect.",
-      422,
-      "unverified_recipient",
-    );
+    // The founder typed an address the research did not find. Keep it, as a founder-entered contact,
+    // rather than refusing the edit. AI-written drafts never reach here with a recipient of their own:
+    // the tool path always takes the prospect's confirmed address.
+    await recordFounderEnteredEmail(draft.prospectId, recipientEmail);
   }
   const truth = await getProductTruth();
   const warnings = validateDraft({
@@ -524,10 +524,9 @@ export async function approveDraft(
     throw new AppError("This draft has already been sent.", 409);
   }
   if (!(await recipientIsVerified(draft.prospectId, draft.recipientEmail))) {
-    throw new AppError(
-      "The recipient is not a verified public contact email.",
-      422,
-    );
+    // Same rule as the edit path: approving a draft addressed to a founder-entered contact is allowed,
+    // and the address is recorded as founder-entered so the send gate agrees.
+    await recordFounderEnteredEmail(draft.prospectId, draft.recipientEmail);
   }
   const db = await getDb();
   await db.query(

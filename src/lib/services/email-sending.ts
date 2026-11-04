@@ -7,6 +7,7 @@ import {
 import {
   deliverEmail,
   EmailDeliveryError,
+  type DeliveryResult,
   type EmailAttachmentInput,
 } from "@/lib/email/send-provider";
 import {
@@ -18,19 +19,37 @@ import {
   truncate,
 } from "@/lib/utils";
 import { getDraft } from "./drafts";
+import { recordFounderEnteredEmail } from "./prospects";
 import { getWorkspaceSettings } from "./settings";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export interface SendResult {
-  status: "accepted" | "sandbox";
+  status: "accepted" | "sandbox" | "uncertain";
   alreadySent: boolean;
   messageId: string;
   accountEmail: string;
   response: string;
   sentAt: string;
   draftId: string;
+  /** The server never confirmed delivery. Recorded as sent, with no step for the founder to take. */
+  deliveryUncertain?: boolean;
+  note?: string;
 }
+
+/**
+ * A send that was held back by the account's own minimum interval. Nothing was sent, nothing is
+ * recorded as sent, and the caller can try again once the window passes — the same shape the campaign
+ * runner already uses when it re-queues an item.
+ */
+export interface QueuedSendResult {
+  queued: true;
+  retryAfterSeconds: number;
+  note: string;
+  draftId: string;
+}
+
+export type SendOutcome = SendResult | QueuedSendResult;
 
 function appUrl(): string {
   return (process.env.APP_URL || "http://localhost:3100").replace(/\/$/, "");
@@ -126,23 +145,36 @@ export async function assertAccountCanSend(accountId: string): Promise<void> {
       "daily_limit_reached",
     );
   }
-  const lastSent = counts.rows[0]?.last_sent
-    ? new Date(counts.rows[0].last_sent as string).getTime()
-    : null;
-  if (lastSent) {
-    const elapsed = (Date.now() - lastSent) / 1000;
-    if (elapsed < account.minIntervalSeconds) {
-      const retryAfter = Math.ceil(account.minIntervalSeconds - elapsed);
-      throw new AppError(
-        `Sending too quickly. Your configured minimum interval is ${account.minIntervalSeconds}s. Try again in ${retryAfter}s.`,
-        429,
-        "min_interval",
-      );
-    }
-  }
 }
 
-async function checkRecipientSafety(prospectId: string, email: string) {
+/**
+ * The account's own minimum interval, kept apart from assertAccountCanSend on purpose: being too soon
+ * is not a refusal. Nothing was sent, so the send is held back and can go again — the caller queues it
+ * rather than reporting an error.
+ */
+export async function getSendReadiness(
+  accountId: string,
+): Promise<{ ready: true } | { ready: false; retryAfterSeconds: number }> {
+  const account = await getEmailAccountRecord(accountId);
+  if (!account) throw new AppError("Email account not found.", 404);
+  const db = await getDb();
+  const last = await db.query<{ last_sent: string | null }>(
+    `SELECT max(completed_at) AS last_sent FROM outbound_sends
+      WHERE account_id = $1 AND status IN ('accepted', 'sandbox', 'uncertain')`,
+    [accountId],
+  );
+  const lastSent = last.rows[0]?.last_sent ? new Date(last.rows[0].last_sent).getTime() : null;
+  if (!lastSent) return { ready: true };
+  const elapsed = (Date.now() - lastSent) / 1000;
+  if (elapsed >= account.minIntervalSeconds) return { ready: true };
+  return { ready: false, retryAfterSeconds: Math.ceil(account.minIntervalSeconds - elapsed) };
+}
+
+async function checkRecipientSafety(
+  prospectId: string,
+  email: string,
+  options: { allowFounderEntered?: boolean } = {},
+) {
   const db = await getDb();
   const prospect = await db.query<{ do_not_contact: boolean }>(
     `SELECT do_not_contact FROM prospects WHERE id = $1 AND archived_at IS NULL`,
@@ -172,11 +204,16 @@ async function checkRecipientSafety(prospectId: string, email: string) {
     [prospectId, normalizeEmail(email)],
   );
   if (!verified.rows.length) {
-    throw new AppError(
-      "The recipient is not the prospect's source-confirmed contact email.",
-      422,
-      "unverified_recipient",
-    );
+    if (!options.allowFounderEntered) {
+      throw new AppError(
+        "The recipient is not the prospect's source-confirmed contact email.",
+        422,
+        "unverified_recipient",
+      );
+    }
+    // The founder typed this address. Record it as a founder-entered contact so the lead shows where
+    // it came from and the next send does not have to ask again.
+    await recordFounderEnteredEmail(prospectId, email);
   }
 }
 
@@ -212,11 +249,16 @@ export interface SendDraftOptions {
   campaignId?: string | null;
   actorUserId: string;
   attachments?: EmailAttachmentInput[];
+  /**
+   * Set only by the founder's own send path: an address the founder typed is recorded as a
+   * founder-entered contact instead of being refused. Never set by a tool or campaign call.
+   */
+  allowFounderRecipient?: boolean;
 }
 
 export async function sendDraft(
   options: SendDraftOptions,
-): Promise<SendResult> {
+): Promise<SendOutcome> {
   const draft = await getDraft(options.draftId);
   if (!draft) throw new AppError("Draft not found.", 404);
   const db = await getDb();
@@ -226,11 +268,17 @@ export async function sendDraft(
   );
   const existingRow = existingSend.rows[0] ?? null;
 
-  // Idempotency must win even after the draft has transitioned to sent.
-  if (existingRow?.status === "accepted" || existingRow?.status === "sandbox") {
+  // Idempotency must win even after the draft has transitioned to sent. An uncertain attempt counts
+  // as sent too: it may well have been delivered, so repeating it is the one thing we must not do.
+  if (
+    existingRow?.status === "accepted" ||
+    existingRow?.status === "sandbox" ||
+    existingRow?.status === "uncertain"
+  ) {
     const account = await getEmailAccountRecord(existingRow.account_id);
     return {
       status: existingRow.status,
+      deliveryUncertain: existingRow.status === "uncertain",
       alreadySent: true,
       messageId: existingRow.transport_message_id || "",
       accountEmail: account?.emailAddress ?? "",
@@ -255,7 +303,9 @@ export async function sendDraft(
   if (!isEmail(draft.recipientEmail)) {
     throw new AppError("The recipient is not a valid email address.");
   }
-  await checkRecipientSafety(draft.prospectId, draft.recipientEmail);
+  await checkRecipientSafety(draft.prospectId, draft.recipientEmail, {
+    allowFounderEntered: options.allowFounderRecipient === true,
+  });
 
   if (existingRow) {
     const row = existingRow;
@@ -264,13 +314,6 @@ export async function sendDraft(
         "A send attempt for this draft is already in progress. Check Sent before retrying.",
         409,
         "send_in_progress",
-      );
-    }
-    if (row.status === "uncertain") {
-      throw new AppError(
-        "The previous attempt has uncertain delivery. Check the IONOS Sent folder and mark it resolved before retrying.",
-        409,
-        "uncertain_delivery",
       );
     }
     if (row.status === "failed") {
@@ -388,6 +431,15 @@ export async function sendDraft(
          WHERE draft_id = $1`,
         [draft.id],
       );
+      // The stop stays. The founder does not have to tidy up after it: the follow-up is cancelled
+      // here, with the reason kept on the draft.
+      await db.query(
+        `UPDATE drafts SET status = 'cancelled',
+          last_error = 'Cancelled automatically: the prospect replied before this follow-up was sent.',
+          updated_at = now()
+         WHERE id = $1`,
+        [draft.id],
+      );
       throw new AppError(
         "The prospect has replied since your last email. This follow-up was blocked.",
         409,
@@ -397,6 +449,18 @@ export async function sendDraft(
   }
 
   await assertAccountCanSend(account.id);
+  const readiness = await getSendReadiness(account.id);
+  if (!readiness.ready) {
+    // Nothing was sent, so nothing is recorded as sent: the attempt row goes, the draft stays
+    // approved, and the caller is told when it may go instead of being handed an error.
+    await db.query(`DELETE FROM outbound_sends WHERE draft_id = $1 AND status = 'sending'`, [draft.id]);
+    return {
+      queued: true,
+      retryAfterSeconds: readiness.retryAfterSeconds,
+      draftId: draft.id,
+      note: `Held back by your own minimum interval between sends. Nothing was sent — it can go in ${readiness.retryAfterSeconds}s.`,
+    };
+  }
 
   const footer = await buildComplianceFooter({
     accountProvider: account.provider,
@@ -437,7 +501,9 @@ export async function sendDraft(
   const text = `${draft.body.trim()}\n${footer.text}`;
   const html = `${textToHtmlParagraphs(draft.body.trim())}<hr style="border:none;border-top:1px solid #ddd;margin:24px 0" /><div style="font-size:12px;color:#666">${textToHtmlParagraphs(footer.text.replace(/^\n+/, ""))}</div>`;
 
-  let delivery;
+  let delivery: DeliveryResult;
+  // Set when the transport could not confirm delivery: the send counts as sent with this note.
+  let uncertainty: string | null = null;
   try {
     delivery = await deliverEmail(account, {
       to: draft.recipientEmail,
@@ -464,23 +530,34 @@ export async function sendDraft(
             error instanceof Error ? error.message : "SMTP send failed.",
             false,
           );
-    await db.query(
-      `UPDATE outbound_sends SET status = $1, error = $2, completed_at = now()
-       WHERE draft_id = $3`,
-      [failure.definitive ? "failed" : "uncertain", failure.message, draft.id],
-    );
-    await db.query(
-      `UPDATE drafts SET last_error = $1, updated_at = now() WHERE id = $2`,
-      [failure.message, draft.id],
-    );
-    throw new AppError(
-      failure.message,
-      502,
-      failure.definitive ? "smtp_rejected" : "delivery_uncertain",
-    );
+    if (failure.definitive) {
+      // A refusal is a refusal: nothing was delivered, the draft can be fixed and retried.
+      await db.query(
+        `UPDATE outbound_sends SET status = 'failed', error = $1, completed_at = now()
+         WHERE draft_id = $2`,
+        [failure.message, draft.id],
+      );
+      await db.query(
+        `UPDATE drafts SET last_error = $1, updated_at = now() WHERE id = $2`,
+        [failure.message, draft.id],
+      );
+      throw new AppError(failure.message, 502, "smtp_rejected");
+    }
+    // Anything else may well have been delivered, and repeating it is the one thing we must not do.
+    // So it counts as sent, with the uncertainty recorded, and there is nothing to resolve by hand.
+    uncertainty = failure.message;
+    delivery = {
+      mode: "live",
+      transportMessageId: messageId,
+      response: failure.message,
+    };
   }
 
-  const deliveryStatus = delivery.mode === "sandbox" ? "sandbox" : "accepted";
+  const deliveryStatus = uncertainty
+    ? "uncertain"
+    : delivery.mode === "sandbox"
+      ? "sandbox"
+      : "accepted";
   const sentAt = new Date().toISOString();
   try {
     await db.transaction(async (tx) => {
@@ -614,13 +691,17 @@ export async function sendDraft(
   }
 
   return {
-    status: deliveryStatus as "accepted" | "sandbox",
+    status: deliveryStatus,
     alreadySent: false,
     messageId: delivery.transportMessageId,
     accountEmail: account.emailAddress,
     response: delivery.response,
     sentAt,
     draftId: draft.id,
+    deliveryUncertain: uncertainty !== null,
+    note: uncertainty
+      ? "Recorded as sent. The sending server did not confirm delivery — check the mailbox if you need certainty."
+      : undefined,
   };
 }
 

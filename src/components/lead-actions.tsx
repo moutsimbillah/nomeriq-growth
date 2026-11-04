@@ -633,7 +633,8 @@ export function DraftEditor({
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  /** A note that is neither success nor failure: a held-back send, an unconfirmed delivery. */
+  const [softNote, setSoftNote] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -717,13 +718,21 @@ export function DraftEditor({
     setPending("send");
     setError(null);
     setNotice(null);
+    setSoftNote(null);
     try {
       await persist();
-      const result = await apiRequest(`/api/drafts/${draft.id}/send`, {
+      const result = (await apiRequest(`/api/drafts/${draft.id}/send`, {
         body: { approveFirst: true },
-      });
-      setConfirmOpen(false);
-      if (draft.kind === "first_contact") {
+      })) as { queued?: boolean; deliveryUncertain?: boolean; note?: string } | null;
+      if (result?.queued) {
+        // Held back by the mailbox's own minimum interval. Nothing was sent, and it is not a failure.
+        setSoftNote(result.note || "Held back by your minimum interval. Nothing was sent.");
+      } else if (result?.deliveryUncertain) {
+        setSoftNote(
+          result.note ||
+            "Recorded as sent. The sending server did not confirm delivery — check the mailbox if you need certainty.",
+        );
+      } else if (draft.kind === "first_contact") {
         setNotice(
           sandboxMode
             ? "Recorded in the sandbox mailbox. No message left Growth."
@@ -733,7 +742,6 @@ export function DraftEditor({
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not send.");
-      setConfirmOpen(false);
     } finally {
       setPending(null);
     }
@@ -831,8 +839,9 @@ export function DraftEditor({
             ))}
           </datalist>
           {!verifiedEmails.includes(recipient) && (
-            <p className="mt-1 text-12 font-medium text-rust">
-              This address is not a source-confirmed contact email. Sending will be blocked.
+            <p className="mt-1 text-12 font-medium text-[#76501a]">
+              Not one of the source-confirmed addresses. If you send to it, it is saved as a
+              founder-entered contact.
             </p>
           )}
         </div>
@@ -895,6 +904,11 @@ export function DraftEditor({
             {sendBlockedReason}
           </div>
         )}
+        {softNote && (
+          <div className="rounded-lg border border-amber/20 bg-amber/[0.05] px-2.5 py-2 text-12 leading-4 text-[#76501a]">
+            {softNote}
+          </div>
+        )}
 
         <div className="flex flex-wrap items-center gap-1.5 border-t border-line pt-4">
           {!sent && (
@@ -924,7 +938,7 @@ export function DraftEditor({
               )}
               <button
                 type="button"
-                onClick={() => setConfirmOpen(true)}
+                onClick={send}
                 disabled={!!pending || !canSend}
                 className="btn-primary btn-sm"
               >
@@ -962,50 +976,6 @@ export function DraftEditor({
         </div>
       </div>
 
-      <Modal
-        open={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        title={
-          sandboxMode
-            ? "Record this as a sandbox send?"
-            : "Send this email to a real prospect?"
-        }
-        description={
-          sandboxMode
-            ? "Growth will record the message and thread in the sandbox mailbox. No SMTP connection is made and nothing reaches the prospect."
-            : `This will send from the connected mailbox to ${recipient}. SMTP acceptance is not a guarantee of inbox delivery.`
-        }
-        width="sm"
-      >
-        <div className="rounded-xl border border-line bg-paper/50 p-3">
-          <div className="text-12 font-bold uppercase tracking-[0.12em] text-faint">
-            {sandboxMode ? "Sandbox preview" : "Live send"}
-          </div>
-          <div className="mt-1 text-12 font-semibold text-ink">{subject}</div>
-          <div className="mt-1 line-clamp-3 whitespace-pre-wrap text-12 leading-5 text-muted">
-            {body}
-          </div>
-        </div>
-        {error && <InlineError>{error}</InlineError>}
-        <SubmitBar>
-          <button type="button" className="btn-ghost" onClick={() => setConfirmOpen(false)}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className={liveMode ? "btn-primary" : "btn-lime"}
-            onClick={send}
-            disabled={pending === "send"}
-          >
-            {pending === "send" ? <LoaderCircle size={13} className="spin" /> : <Send size={13} />}
-            {pending === "send"
-              ? "Working…"
-              : sandboxMode
-                ? "Record sandbox send"
-                : "Send now"}
-          </button>
-        </SubmitBar>
-      </Modal>
     </div>
   );
 }

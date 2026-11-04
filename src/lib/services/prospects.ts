@@ -1017,6 +1017,32 @@ export async function archiveProspect(id: string, userId: string): Promise<void>
   });
 }
 
+/**
+ * Records an address the founder typed, after the research could not find one.
+ *
+ * It is stored as a founder-entered contact so the send gate allows it, and so the lead still shows
+ * which addresses came from a source and which came from the founder. A duplicate address for the
+ * same lead is a no-op; an address already on another lead is left alone (the global business-email
+ * unique would refuse it, and that refusal is correct).
+ */
+export async function recordFounderEnteredEmail(
+  prospectId: string,
+  email: string,
+): Promise<void> {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return;
+  const db = await getDb();
+  await db
+    .query(
+      `INSERT INTO prospect_emails
+         (id, prospect_id, email, normalized_email, source_url, source_type, is_primary, verified_at)
+       VALUES (gen_random_uuid(), $1, $2, $3, 'Entered by the founder in the portal.', 'founder_entered', false, now())
+       ON CONFLICT DO NOTHING`,
+      [prospectId, normalized, normalized],
+    )
+    .catch(() => undefined);
+}
+
 export async function getProspectEmails(prospectId: string): Promise<string[]> {
   const db = await getDb();
   const result = await db.query<{ email: string }>(

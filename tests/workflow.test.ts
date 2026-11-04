@@ -347,6 +347,7 @@ describe("Nomeriq Growth end-to-end workflow", () => {
       draftId: state.alphaDraftId,
       actorUserId: state.userId,
     });
+    if ("queued" in first) throw new Error("expected a send, not a queued hold");
     expect(first.status).toBe("sandbox");
     expect(first.alreadySent).toBe(false);
 
@@ -354,6 +355,7 @@ describe("Nomeriq Growth end-to-end workflow", () => {
       draftId: state.alphaDraftId,
       actorUserId: state.userId,
     });
+    if ("queued" in second) throw new Error("expected an idempotent send, not a queued hold");
     expect(second.alreadySent).toBe(true);
     expect(second.messageId).toBe(first.messageId);
 

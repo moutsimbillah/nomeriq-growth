@@ -14,6 +14,7 @@ import {
 import {
   deliverEmail,
   EmailDeliveryError,
+  type DeliveryResult,
   type EmailAttachmentInput,
 } from "@/lib/email/send-provider";
 import { applyInboundEffect } from "@/lib/email/sync";
@@ -22,6 +23,7 @@ import { getProspect } from "./prospects";
 import { getProductTruth, getWorkspaceSettings } from "./settings";
 import {
   assertAccountCanSend,
+  getSendReadiness,
   buildComplianceFooter,
 } from "./email-sending";
 
@@ -360,12 +362,13 @@ export async function sendReply(input: SendReplyInput) {
     [keyHash],
   );
   if (existing.rows[0]) {
-    if (["accepted", "sandbox"].includes(existing.rows[0].status)) {
+    if (["accepted", "sandbox", "uncertain"].includes(existing.rows[0].status)) {
       return {
         alreadySent: true,
         status: existing.rows[0].status,
         messageId: existing.rows[0].transport_message_id,
         sentAt: iso(existing.rows[0].completed_at),
+        deliveryUncertain: existing.rows[0].status === "uncertain",
       };
     }
     if (existing.rows[0].status === "failed") {
@@ -375,9 +378,9 @@ export async function sendReply(input: SendReplyInput) {
           started_at = now(), completed_at = null WHERE id = $1`,
         [existing.rows[0].id],
       );
-    } else {
+    } else if (existing.rows[0].status === "sending") {
       throw new AppError(
-        "This reply is already being processed or has uncertain delivery. Check Sent before retrying.",
+        "This reply is already being processed. Check Sent before retrying.",
         409,
         "reply_in_progress",
       );
@@ -454,7 +457,20 @@ export async function sendReply(input: SendReplyInput) {
     }
   }
 
-  let delivery;
+  const readiness = await getSendReadiness(account.id);
+  if (!readiness.ready) {
+    // Nothing was sent, so nothing is recorded as sent: the attempt row goes back and the reply can be
+    // tried again once the account's own window passes.
+    await db.query(`DELETE FROM outbound_sends WHERE id = $1 AND status = 'sending'`, [sendRowId]);
+    return {
+      queued: true,
+      retryAfterSeconds: readiness.retryAfterSeconds,
+      note: `Held back by your own minimum interval between sends. Nothing was sent — it can go in ${readiness.retryAfterSeconds}s.`,
+    };
+  }
+
+  let delivery: DeliveryResult;
+  let uncertainty: string | null = null;
   try {
     delivery = await deliverEmail(account, {
       to: conversation.replyTo,
@@ -479,20 +495,29 @@ export async function sendReply(input: SendReplyInput) {
             error instanceof Error ? error.message : "SMTP failed.",
             false,
           );
-    await db.query(
-      `UPDATE outbound_sends SET status = $1, error = $2, completed_at = now()
-       WHERE id = $3`,
-      [failure.definitive ? "failed" : "uncertain", failure.message, sendRowId],
-    );
-    throw new AppError(
-      failure.message,
-      502,
-      failure.definitive ? "smtp_rejected" : "delivery_uncertain",
-    );
+    if (failure.definitive) {
+      await db.query(
+        `UPDATE outbound_sends SET status = 'failed', error = $1, completed_at = now()
+         WHERE id = $2`,
+        [failure.message, sendRowId],
+      );
+      throw new AppError(failure.message, 502, "smtp_rejected");
+    }
+    // May have been delivered: count it as sent, record the uncertainty, ask nothing of the founder.
+    uncertainty = failure.message;
+    delivery = {
+      mode: "live",
+      transportMessageId: messageId,
+      response: failure.message,
+    };
   }
 
   const sentAt = new Date().toISOString();
-  const deliveryStatus = delivery.mode === "sandbox" ? "sandbox" : "accepted";
+  const deliveryStatus = uncertainty
+    ? "uncertain"
+    : delivery.mode === "sandbox"
+      ? "sandbox"
+      : "accepted";
   const messageDbId = crypto.randomUUID();
   const attachmentRecords = (input.attachments ?? []).map((attachment) => ({
     id: crypto.randomUUID(),
@@ -595,6 +620,10 @@ export async function sendReply(input: SendReplyInput) {
     status: deliveryStatus,
     messageId: delivery.transportMessageId,
     sentAt,
+    deliveryUncertain: uncertainty !== null,
+    note: uncertainty
+      ? "Recorded as sent. The sending server did not confirm delivery — check the mailbox if you need certainty."
+      : undefined,
   };
 }
 
