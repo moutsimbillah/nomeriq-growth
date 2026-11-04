@@ -210,7 +210,8 @@ export default async function LeadsPage({
             <table className="table">
               <thead>
                 <tr>
-                  <th className="w-[28%]">Business</th>
+                  <th className="w-[26%]">Business</th>
+                  <th className="w-[152px]">Agent</th>
                   <th>Markets</th>
                   <th>Contact</th>
                   <th>Stage</th>
@@ -231,11 +232,6 @@ export default async function LeadsPage({
                             <span className="truncate font-semibold text-ink group-hover:underline group-hover:decoration-line-strong group-hover:underline-offset-4">
                               {prospect.businessName}
                             </span>
-                            <AgentPill
-                              agent={prospect.sourceAgent ?? "unknown"}
-                              channel={prospect.sourceChannel}
-                              note={prospect.sourceAgent === "other" && prospect.sourceClient ? prospect.sourceClient : undefined}
-                            />
                             {prospect.firstDraftAgent &&
                               prospect.sourceAgent &&
                               prospect.firstDraftAgent !== prospect.sourceAgent && (
@@ -254,6 +250,23 @@ export default async function LeadsPage({
                           </span>
                         </span>
                       </Link>
+                    </td>
+                    <td className="w-[152px] max-w-[152px] align-top">
+                      <AgentPill
+                        agent={prospect.sourceAgent ?? "unknown"}
+                        channel={prospect.sourceChannel}
+                        note={prospect.sourceAgent === "other" ? prospect.sourceClient : undefined}
+                      />
+                      {prospect.firstDraftAgent &&
+                        prospect.sourceAgent &&
+                        prospect.firstDraftAgent !== prospect.sourceAgent && (
+                          <span
+                            title={`The draft was written by ${AGENT_LABELS[prospect.firstDraftAgent]}`}
+                            className="mt-1 block text-[10px] leading-tight text-amber"
+                          >
+                            ✎ draft by {AGENT_LABELS[prospect.firstDraftAgent]}
+                          </span>
+                        )}
                     </td>
                     <td>
                       <CategoryList categories={prospect.categories} limit={2} />

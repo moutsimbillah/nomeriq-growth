@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { AGENT_LABELS, agentProvenance } from "@/lib/agent/agentTag";
+import { agentProvenance } from "@/lib/agent/agentTag";
+import { AGENT_PILL_BASE, AGENT_PILL_CLASS, agentPillLabel } from "@/lib/agent/agentPill";
 import type { AgentTag, ChannelTag } from "@/lib/types";
 import {
   ArrowUpRight,
@@ -353,21 +354,31 @@ export function AgentPill({
   agent,
   channel,
   note,
+  size = "md",
   className,
 }: {
   agent: AgentTag | null;
   channel: ChannelTag | null;
-  note?: string;
+  note?: string | null;
+  size?: "md" | "lg";
   className?: string;
 }) {
   if (!agent && !channel) return null;
+  const tag = agent ?? "unknown";
+  const provenance = agentProvenance(agent ?? null, channel ?? null);
+  const tooltip = note ? `${provenance} — declared name: ${note}` : provenance;
   return (
     <span
-      title={agentProvenance(agent ?? null, channel ?? null)}
-      className={cn("badge border-line bg-paper font-semibold text-muted", className)}
+      title={tooltip}
+      className={cn(
+        AGENT_PILL_BASE,
+        AGENT_PILL_CLASS[tag],
+        size === "lg" && "px-3 py-1 text-[13px]",
+        className,
+      )}
     >
-      {agent ? AGENT_LABELS[agent] : "Unknown"}
-      {note ? <span className="font-normal opacity-70"> · {note}</span> : null}
+      {/* the name is always text: colour alone never carries the meaning */}
+      {agentPillLabel(agent ?? "unknown", note)}
     </span>
   );
 }

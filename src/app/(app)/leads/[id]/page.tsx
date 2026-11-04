@@ -31,6 +31,7 @@ import { getConversationForProspect } from "@/lib/services/conversations";
 import { getDefaultEmailAccount } from "@/lib/email/accounts";
 import { getWorkspaceSettings } from "@/lib/services/settings";
 import {
+  AgentPill,
   Card,
   CategoryPill,
   DataRow,
@@ -132,6 +133,19 @@ export default async function LeadDetailPage({
                 <BadgeCheck size={11} /> Verified business
               </span>
             )}
+            <span className="flex translate-y-1 items-center gap-2">
+              <AgentPill
+                agent={prospect.sourceAgent ?? "unknown"}
+                channel={prospect.sourceChannel}
+                note={prospect.sourceAgent === "other" ? prospect.sourceClient : undefined}
+                size="lg"
+              />
+              {prospect.sourceChannel ? (
+                <span className="text-[11px] font-medium text-muted">
+                  via {CHANNEL_LABELS[prospect.sourceChannel]}
+                </span>
+              ) : null}
+            </span>
           </span>
         }
         description={

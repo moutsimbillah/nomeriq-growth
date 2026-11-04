@@ -412,7 +412,7 @@ export default async function EmailPage({
                         <AgentPill
                           agent={draft.sourceAgent ?? "unknown"}
                           channel={draft.sourceChannel}
-                          note={draft.sourceAgent === "other" && draft.sourceClient ? draft.sourceClient : undefined}
+                          note={draft.sourceAgent === "other" ? draft.sourceClient : undefined}
                         />
                       </td>
                       <td>

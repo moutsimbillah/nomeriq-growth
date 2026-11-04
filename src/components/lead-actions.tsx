@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { AGENT_LABELS } from "@/lib/agent/agentTag";
+import { agentPillLabel } from "@/lib/agent/agentPill";
 import {
   Archive,
   ArrowRight,
@@ -797,7 +798,11 @@ export function DraftEditor({
             </span>
           </div>
           <p className="mt-1 text-[10.5px] text-muted">
-            {draft.sourceAgent ? `Drafted by ${AGENT_LABELS[draft.sourceAgent]}` : draft.aiGenerated ? `AI-assisted · ${draft.sourceClient || draft.aiModel || "model"}` : "Deterministic writer"}{" "}
+            {draft.sourceAgent
+              ? `Drafted by ${agentPillLabel(draft.sourceAgent, draft.sourceClient)}`
+              : draft.aiGenerated
+                ? `AI-assisted · ${draft.sourceClient || draft.aiModel || "model"}`
+                : "Deterministic writer"}{" "}
             · {words} words
             {draft.founderEdited ? " · founder-edited" : ""}
           </p>
