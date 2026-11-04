@@ -199,6 +199,7 @@ export default async function LeadDetailPage({
                     <span className="inline-flex items-center gap-1">
                       <ShieldCheck size={10} className="text-forest" />
                       Verified {prospect.verifiedAt ? formatDate(prospect.verifiedAt) : "date unknown"}
+                        {prospect.sourceClient ? ` · saved by ${prospect.sourceClient}` : ""}
                     </span>
                     {prospect.contactEmailSource && (
                       <a

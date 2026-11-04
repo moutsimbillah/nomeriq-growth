@@ -226,11 +226,12 @@ export function actorKeyUuid(key: ApiKeyIdentity): string | null {
 }
 
 /**
- * Client names are self-declared, so they are untrusted text: strip control characters (including
+ * Client names are self-declared, so they are untrusted text — used on the audit entry and on the
+ * row the client saved. Strip control characters (including
  * line breaks, which would forge an extra line in any log or report that renders the entry) and cap
  * the length so one client cannot bloat the audit table.
  */
-export function auditClientName(raw: string): string {
+export function sanitizeClientName(raw: string): string {
   return raw
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
     .replace(/\s+/g, " ")
@@ -261,7 +262,7 @@ export async function logAgentAction(input: {
       // ChatGPT, Gemini) present no API key, so without it they are all `api_key:custom` and can
       // only be separated by joining actor_id back to oauth_clients. The name is self-declared by
       // the client: reporting only, never read for permissions, scopes or trust.
-      JSON.stringify({ ...(input.metadata ?? {}), client: auditClientName(input.key.name) }),
+      JSON.stringify({ ...(input.metadata ?? {}), client: sanitizeClientName(input.key.name) }),
     ],
   );
 }

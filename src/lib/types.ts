@@ -104,6 +104,8 @@ export interface ProspectSummary {
   followerCount: string | null;
   subscriberCount: string | null;
   researchJobId: string | null;
+  /** The connector that saved this lead, as it named itself. Reporting only. */
+  sourceClient: string | null;
   nextAction: string | null;
   nextActionAt: string | null;
   lastContactedAt: string | null;
@@ -158,6 +160,8 @@ export interface Draft {
   recipientEmail: string;
   aiGenerated: boolean;
   aiModel: string | null;
+  /** The connector that saved this draft, as it named itself. Reporting only. */
+  sourceClient: string | null;
   productTruthVersion: number | null;
   warnings: DraftWarning[];
   founderEdited: boolean;

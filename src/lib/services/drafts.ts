@@ -242,12 +242,26 @@ export async function generateDraftForProspect(input: {
   return (await getDraft(draftId!))!;
 }
 
+/**
+ * Records which client saved a draft. Reporting only: never read for permissions, scopes or trust.
+ */
+async function stampSourceClient(
+  draftId: string,
+  sourceClient: string | null | undefined,
+): Promise<void> {
+  if (!sourceClient) return;
+  const db = await getDb();
+  await db.query(`UPDATE drafts SET source_client = $1 WHERE id = $2`, [sourceClient, draftId]);
+}
+
 export async function savePreparedFirstContactDraft(input: {
   prospectId: string;
   subject: string;
   body: string;
   actorType: "chatgpt" | "claude" | "deepseek" | "api";
   actorUserId?: string | null;
+  /** The connector that produced this draft, already sanitised. Reporting only. */
+  sourceClient?: string | null;
 }): Promise<{ draft: Draft; preserved: boolean }> {
   const prospect = await getProspect(input.prospectId);
   if (!prospect) throw new AppError("Prospect not found.", 404);
@@ -275,6 +289,7 @@ export async function savePreparedFirstContactDraft(input: {
       actorType: input.actorType,
       actorUserId: input.actorUserId,
     });
+    await stampSourceClient(existing.id, input.sourceClient);
     return { draft, preserved: false };
   }
   const subject = input.subject.trim();
@@ -297,9 +312,9 @@ export async function savePreparedFirstContactDraft(input: {
       `INSERT INTO drafts (
         id, prospect_id, research_job_id, kind, sequence, status, subject, body,
         recipient_email, ai_generated, ai_model, product_truth_version, warnings,
-        created_by_type, created_by_user_id, created_at, updated_at
+        created_by_type, created_by_user_id, source_client, created_at, updated_at
       ) VALUES ($1, $2, $3, 'first_contact', 0, 'draft', $4, $5, $6, true,
-        $7, $8, $9::jsonb, $10, $11, now(), now())`,
+        $7, $8, $9::jsonb, $10, $11, $12, now(), now())`,
       [
         id,
         prospect.id,
@@ -312,6 +327,7 @@ export async function savePreparedFirstContactDraft(input: {
         JSON.stringify(warnings),
         input.actorType,
         input.actorUserId ?? null,
+        input.sourceClient ?? null,
       ],
     );
   } catch (error) {

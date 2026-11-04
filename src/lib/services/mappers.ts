@@ -41,6 +41,7 @@ export function mapProspect(row: any): ProspectSummary {
     followerCount: row.follower_count,
     subscriberCount: row.subscriber_count,
     researchJobId: row.research_job_id,
+    sourceClient: row.source_client ?? null,
     nextAction: row.next_action,
     nextActionAt: iso(row.next_action_at),
     lastContactedAt: iso(row.last_contacted_at),
@@ -109,6 +110,7 @@ export function mapDraft(row: any): Draft {
     recipientEmail: row.recipient_email,
     aiGenerated: Boolean(row.ai_generated),
     aiModel: row.ai_model,
+    sourceClient: row.source_client ?? null,
     productTruthVersion: row.product_truth_version
       ? number(row.product_truth_version)
       : null,

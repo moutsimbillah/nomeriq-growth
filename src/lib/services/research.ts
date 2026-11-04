@@ -289,6 +289,53 @@ export async function getResearchOverview(): Promise<{
   };
 }
 
+/**
+ * Totals across every saved lead, independent of research jobs.
+ *
+ * The per-job counters only know about leads a job created, so a lead saved by a connector with no
+ * job at all is invisible to them. These figures come from the saved rows themselves — never from a
+ * job counter, never estimated — and say separately how many leads sit outside every job.
+ */
+export async function getOverallLeadTotals(): Promise<{
+  allLeads: number;
+  verifiedLeads: number;
+  verifiedWithEmail: number;
+  draftsSaved: number;
+  duplicatesRejected: number;
+  notInAnyResearchJob: number;
+}> {
+  const db = await getDb();
+  const result = await db.query<{
+    all_leads: number;
+    verified_leads: number;
+    verified_with_email: number;
+    drafts_saved: number;
+    duplicates_rejected: number;
+    not_in_any_job: number;
+  }>(
+    `SELECT
+       (SELECT count(*)::int FROM prospects WHERE archived_at IS NULL) AS all_leads,
+       (SELECT count(*)::int FROM prospects
+          WHERE qualification_status = 'verified' AND archived_at IS NULL) AS verified_leads,
+       (SELECT count(*)::int FROM prospects
+          WHERE qualification_status = 'verified' AND archived_at IS NULL
+            AND EXISTS (SELECT 1 FROM prospect_emails e WHERE e.prospect_id = prospects.id)) AS verified_with_email,
+       (SELECT count(*)::int FROM drafts) AS drafts_saved,
+       (SELECT count(*)::int FROM research_events WHERE event_type = 'duplicate_rejected') AS duplicates_rejected,
+       (SELECT count(*)::int FROM prospects
+          WHERE research_job_id IS NULL AND archived_at IS NULL) AS not_in_any_job`,
+  );
+  const row = result.rows[0];
+  return {
+    allLeads: Number(row.all_leads),
+    verifiedLeads: Number(row.verified_leads),
+    verifiedWithEmail: Number(row.verified_with_email),
+    draftsSaved: Number(row.drafts_saved),
+    duplicatesRejected: Number(row.duplicates_rejected),
+    notInAnyResearchJob: Number(row.not_in_any_job),
+  };
+}
+
 export async function getRecentResearchEvents(limit = 12) {
   const db = await getDb();
   const result = await db.query<any>(

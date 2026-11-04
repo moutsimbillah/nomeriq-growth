@@ -12,6 +12,7 @@ import {
 import {
   listResearchJobs,
   getResearchOverview,
+  getOverallLeadTotals,
   getResearchJob,
 } from "@/lib/services/research";
 import { getProductTruth, getWorkspaceSettings } from "@/lib/services/settings";
@@ -32,6 +33,7 @@ import { getDb } from "@/lib/db/client";
 import {
   logAgentAction,
   actorKeyUuid,
+  sanitizeClientName,
   requireScope,
   type ApiKeyIdentity,
 } from "./apiKeys";
@@ -204,11 +206,13 @@ export async function runAgentAction(
       requireScope(key, "progress:read");
       const jobs = await listResearchJobs();
       const overview = await getResearchOverview();
+      const overall = await getOverallLeadTotals();
       result = {
+        overall,
         overview,
         jobs: jobs.map(describeResearchJobForAgent),
         note:
-          "These counts come from the database. Report them even when they fall short of the target, and include the recorded reason a job is not running.",
+          "These counts come from the database. `overall` covers every saved lead, including leads that belong to no research job; `overview` and `jobs` only count leads a job created. Read `overall` when no job exists, and report it alongside the per-job figures. Report the numbers even when they fall short of the target, and include the recorded reason a job is not running.",
       };
       break;
     }
@@ -284,6 +288,7 @@ export async function runAgentAction(
         qualificationStatus: data.qualificationStatus ?? "verified",
         actorType: actorTypeFor(key),
         actorKeyId: actorKeyUuid(key),
+        sourceClient: sanitizeClientName(key.name),
         sources: data.sources,
       });
       result = {
@@ -306,6 +311,7 @@ export async function runAgentAction(
         subject: parsed.data.subject,
         body: parsed.data.body,
         actorType: actorTypeFor(key),
+        sourceClient: sanitizeClientName(key.name),
       });
       result = {
         saved: true,

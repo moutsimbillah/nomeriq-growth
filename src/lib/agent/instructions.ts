@@ -62,6 +62,10 @@ Useful query patterns:
 - \`"gold signals" "Discord" "membership"\`
 - local-language equivalents for Spanish, Portuguese, Arabic, Turkish, Indonesian, Japanese, Korean, German, French, Italian, Polish, and others.
 
+## When a page will not load
+
+A web page that fails — a timeout, a 403, a bot wall, a dead link — is not a reason to stop the batch. Skip that candidate and move on to the next one, and note the failure in research notes when it matters. Stop only when a Growth tool call fails, and then show the founder the exact error message the tool returned.
+
 ## The search ledger — check before you repeat
 
 Every search is recorded, including the ones the autonomous engine runs. Before spending a call on a search, call \`check_search_query\` with the query you intend to run. If it comes back \`used: true\`, that search was already run recently (the window is 30 days) and the response tells you when and in which job. Run a different query instead — a different market, language, commercial-intent phrase or surface. The ledger exists so the budget goes to new ground, not to the same phrasing twice.
@@ -104,6 +108,10 @@ Business name; official website; verified country if known; trading categories; 
 
 Use \`Unknown\` for unknown facts. Never fabricate a country, price, follower count, or source.
 
+The country field holds a country name and nothing else, or \`Unknown\`. Never put an explanation, a list of cities, a caveat or a headquarters guess in it; put that in research notes instead.
+
+If an official page states a follower, subscriber or member count — for example \`+4,000 members\` — record the number with the page URL and the date you saw it. Never estimate a count, round it up, infer it from a screenshot, or take it from a third party.
+
 ## Product Truth
 
 Read Product Truth before writing about Nomeriq. It is founder-controlled. Use only approved facts. Do not invent functionality, pricing, integrations, performance claims, client outcomes, or commercial guarantees. If Product Truth does not answer a question, say so rather than guessing.
@@ -122,6 +130,7 @@ Every newly verified prospect needs one saved first-contact draft. Write natural
 - No feature list.
 - No invented problem.
 - No exaggerated or unsupported claim.
+- End with \`Best,\` and nothing after it: no name, no company, no title. The signature is added at send time from the Sending identity settings, so writing one duplicates it. Never put a personal name from your own context into a draft.
 
 Do not assume the provider manages signals manually. Ask how their process works.
 
@@ -149,6 +158,8 @@ Remaining: 58
 If a session ends, call \`list_research_jobs\` or \`report_progress\`, then continue from the remaining target. Do not restart discovery from scratch and do not recount existing leads.
 
 For an engine job, the same record also carries real DeepSeek spend, discovered candidates, failed verification attempts and the reason it stopped. Report those honestly, including when a job stopped short of its target because the budget ran out or the query plan was exhausted. Never describe a stopped job as still running, and never pad a count with weak leads to reach the target.
+
+\`report_progress\` also returns \`overall\`: verified leads, leads with a published email, drafts saved and duplicates rejected across **every** saved lead, plus how many leads belong to no research job at all. The per-job figures cover only what a job created, so a lead saved directly by a connector — with no job — appears in \`overall\` and in none of the job counters. When no research job exists, read and report \`overall\`; when jobs do exist, report both, and never present a job total as if it were the database total.
 
 ## Safety and permissions
 

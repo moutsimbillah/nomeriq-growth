@@ -192,6 +192,7 @@ export interface SaveProspectInput {
   actorType?: "founder" | "chatgpt" | "claude" | "deepseek" | "api" | "seed";
   actorUserId?: string | null;
   actorKeyId?: string | null;
+  sourceClient?: string | null;
 }
 
 export interface SaveProspectResult {
@@ -317,11 +318,11 @@ export async function saveProspect(
           research_notes, instagram_key, instagram_url, youtube_key, youtube_url,
           x_key, x_url, telegram_key, telegram_url, linkedin_url, other_socials,
           follower_count, subscriber_count, verified_at, status, research_job_id,
-          created_by_type, created_by_user_id, created_by_key_id, metadata
+          created_by_type, created_by_user_id, created_by_key_id, source_client, metadata
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14,
           $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23, $24,
-          $25, $26, $27, $28, $29, $30, $31::jsonb
+          $25, $26, $27, $28, $29, $30, $31, $32::jsonb
         )`,
         [
           id,
@@ -354,6 +355,7 @@ export async function saveProspect(
           input.actorType ?? "founder",
           input.actorUserId ?? null,
           input.actorKeyId ?? null,
+          input.sourceClient ?? null,
           JSON.stringify({ verificationMethod: "public source review" }),
         ],
       );

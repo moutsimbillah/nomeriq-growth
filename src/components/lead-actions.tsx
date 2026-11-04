@@ -796,7 +796,7 @@ export function DraftEditor({
             </span>
           </div>
           <p className="mt-1 text-[10.5px] text-muted">
-            {draft.aiGenerated ? `AI-assisted · ${draft.aiModel || "model"}` : "Deterministic writer"}{" "}
+            {draft.aiGenerated ? `AI-assisted · ${draft.sourceClient || draft.aiModel || "model"}` : "Deterministic writer"}{" "}
             · {words} words
             {draft.founderEdited ? " · founder-edited" : ""}
           </p>
