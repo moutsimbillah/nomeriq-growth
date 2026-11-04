@@ -283,7 +283,6 @@ export function IntegrationsManager({
             ["MCP endpoint", `${appUrl}/api/mcp`],
             ["REST API base", `${appUrl}/api/agent/v1`],
             ["OpenAPI schema (ChatGPT Action)", `${appUrl}/api/agent/openapi`],
-            ["Shared skill download", `${appUrl}/api/assistant-skill`],
           ].map(([label, value]) => (
             <div key={label}>
               <div className="flex items-center justify-between gap-2">
@@ -314,6 +313,31 @@ export function IntegrationsManager({
             </p>
           </div>
         </div>
+        <div className="mt-3 rounded-lg border border-line bg-white/60 p-3">
+          <div className="flex items-center gap-2">
+            <Download size={12} className="text-muted" />
+            <div className="text-[10px] font-bold text-ink">Assistant skill</div>
+          </div>
+          <p className="mt-1 text-[9.5px] leading-4 text-muted">
+            A skill file with YAML frontmatter, downloaded as <code>SKILL.md</code>. The loader
+            carries no research rules — it tells the assistant to read them from Growth on every
+            session — so it never goes stale; upload it once. The full copy is a dated snapshot for
+            reference.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <a href="/api/assistant-skill?format=loader" className="btn-ghost btn-xs">
+              <Download size={10} /> Loader (recommended)
+            </a>
+            <a href="/api/assistant-skill?format=full" className="btn-ghost btn-xs">
+              <Download size={10} /> Full copy
+            </a>
+          </div>
+          <p className="mt-2 text-[9px] leading-4 text-faint">
+            If you also use the older nomeriq-growth skill, turn it off, or the assistant may follow
+            the old portal&apos;s tool names.
+          </p>
+        </div>
+
         <div className="mt-3 flex items-center gap-2 text-[9px] text-faint">
           <ShieldCheck size={10} />
           Both assistants read and write the same PostgreSQL records. No second
