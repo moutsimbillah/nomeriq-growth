@@ -362,7 +362,7 @@ export function DataRow({
       <dt className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-faint">
         {label}
       </dt>
-      <dd className="min-w-0 text-[12px] leading-5 text-ink">{children}</dd>
+      <dd className="wrap-anywhere min-w-0 text-[12px] leading-5 text-ink">{children}</dd>
     </div>
   );
 }

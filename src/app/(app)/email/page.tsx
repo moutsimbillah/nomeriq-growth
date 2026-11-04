@@ -504,7 +504,7 @@ export default async function EmailPage({
 
       {active === "Follow-ups" && (
         <div className="mt-4 space-y-4">
-          <div className="grid gap-3 sm:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-4 [&>*]:min-w-0">
             {[
               ["Waiting", followOverview.waiting],
               ["Due now", followOverview.due],

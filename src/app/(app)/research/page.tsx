@@ -177,7 +177,7 @@ export default async function ResearchPage({
             ))}
           </section>
 
-          <section className="mt-4 grid gap-4 xl:grid-cols-[1.6fr_1fr]">
+          <section className="mt-4 grid gap-4 xl:grid-cols-[1.6fr_1fr] [&>*]:min-w-0">
             <div className="space-y-3">
               {jobs.map((job) => (
                 <Card key={job.id} className="overflow-hidden">

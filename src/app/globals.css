@@ -292,3 +292,12 @@ a {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* A long unbreakable string — a percent-encoded source URL, a 120-character email, a pasted note —
+   must wrap inside its container instead of widening a grid column and pushing the neighbouring
+   column off-screen. Deliberately not inside a layer: it has to win over any utility that merely sets
+   white-space. */
+.wrap-anywhere {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

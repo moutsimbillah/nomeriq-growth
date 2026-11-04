@@ -149,7 +149,7 @@ export default async function DashboardPage() {
         />
       </section>
 
-      <section className="mt-4 grid gap-4 xl:grid-cols-[1.45fr_1fr]">
+      <section className="mt-4 grid gap-4 xl:grid-cols-[1.45fr_1fr] [&>*]:min-w-0">
         <div className="card-dark relative overflow-hidden p-6">
           <div className="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full border border-white/[0.06]" />
           <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full border border-white/[0.06]" />
@@ -318,7 +318,7 @@ export default async function DashboardPage() {
         </Card>
       </section>
 
-      <section className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_1.45fr]">
+      <section className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_1.45fr] [&>*]:min-w-0">
         <Card className="p-0">
           <div className="flex items-center justify-between px-5 pt-5">
             <SectionHeading

@@ -164,7 +164,7 @@ export default async function LeadDetailPage({
         }
       />
 
-      <div className="grid gap-4 xl:grid-cols-[1.45fr_1fr]">
+      <div className="grid gap-4 xl:grid-cols-[1.45fr_1fr] [&>*]:min-w-0">
         <div className="space-y-4">
           <Card className="p-5">
             <SectionHeading
@@ -180,7 +180,7 @@ export default async function LeadDetailPage({
                         <Mail size={14} />
                       </span>
                       <div>
-                        <div className="text-[14px] font-semibold text-ink">
+                        <div className="wrap-anywhere text-[14px] font-semibold text-ink">
                           {prospect.contactEmail}
                         </div>
                         <div className="mt-0.5 text-[9.5px] uppercase tracking-[0.1em] text-faint">
@@ -270,13 +270,13 @@ export default async function LeadDetailPage({
                       href={source.url}
                       target="_blank"
                       rel="noreferrer noopener"
-                      className="group flex items-start justify-between gap-3 rounded-lg border border-line bg-white/50 px-3 py-2.5 transition hover:border-line-strong hover:bg-white"
+                      className="group flex min-w-0 items-start justify-between gap-3 rounded-lg border border-line bg-white/50 px-3 py-2.5 transition hover:border-line-strong hover:bg-white"
                     >
                       <div className="min-w-0">
                         <div className="text-[11.5px] font-semibold text-ink group-hover:underline group-hover:underline-offset-4">
                           {source.label}
                         </div>
-                        <div className="mt-0.5 truncate text-[9.5px] text-faint">
+                        <div className="wrap-anywhere mt-0.5 text-[9.5px] text-faint" title={source.url}>
                           {source.url}
                         </div>
                         {source.notes && (

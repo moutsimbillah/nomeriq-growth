@@ -129,7 +129,7 @@ export default async function SettingsPage() {
         }
       />
 
-      <div className="grid gap-5 xl:grid-cols-[190px_1fr]">
+      <div className="grid gap-5 xl:grid-cols-[190px_1fr] [&>*]:min-w-0">
         <aside className="hidden xl:block">
           <nav className="sticky top-6 space-y-0.5">
             {[
