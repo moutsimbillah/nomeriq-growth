@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { Check, Copy, LoaderCircle, X } from "lucide-react";
+import { createPortal } from "react-dom";
 import { cn } from "@/lib/cn";
 
 export function Modal({
@@ -25,6 +26,12 @@ export function Modal({
   width?: "sm" | "md" | "lg";
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -39,15 +46,17 @@ export function Modal({
     };
   }, [open, onClose]);
 
-  if (!open) return null;
+  // Portalled onto <body>, so no ancestor transform, filter or backdrop-filter can turn the
+  // fixed positioning into a containing block and push the panel out of the viewport.
+  if (!open || !mounted) return null;
   const widths = {
     sm: "max-w-md",
     md: "max-w-2xl",
     lg: "max-w-4xl",
   };
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-forest/35 p-0 backdrop-blur-[2px] sm:items-center sm:p-6"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-forest/35 p-4 backdrop-blur-[2px] sm:p-6"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -58,12 +67,15 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        // A flex column capped at 90dvh: the header stays put and the body scrolls, so a long
+        // form (the key dialog's Name field and assistant choices) is always reachable. The
+        // outer layer never scrolls, which is what keeps a second scrollbar from appearing.
         className={cn(
-          "max-h-[92vh] w-full overflow-y-auto rounded-t-[22px] border border-line bg-panel shadow-2xl sm:rounded-[20px]",
+          "flex max-h-[90dvh] w-full flex-col overflow-hidden rounded-[20px] border border-line bg-panel shadow-2xl",
           widths[width],
         )}
       >
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-line bg-panel/95 px-5 py-4 backdrop-blur">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-line bg-panel px-5 py-4">
           <div>
             <h2 className="text-[16px] font-bold tracking-[-0.01em] text-ink">
               {title}
@@ -83,9 +95,10 @@ export function Modal({
             <X size={15} />
           </button>
         </div>
-        <div className="px-5 py-5">{children}</div>
+        <div className="overflow-y-auto px-5 py-5">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
