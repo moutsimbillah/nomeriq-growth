@@ -239,14 +239,98 @@ export function sanitizeClientName(raw: string): string {
     .slice(0, CLIENT_NAME_MAX);
 }
 
+/** What a tool call did, recorded on its audit entry. */
+export type ToolOutcome = "ok" | "denied" | "invalid" | "internal";
+
+/**
+ * Audit writes are capped, per client and in total, per minute. Beyond a cap a call is counted, not
+ * written: a broken client retrying in a loop, or a flood from clients that registered themselves
+ * just to fill the table, must not cost a row each. Both caps are keyed by the actor id the server
+ * issued (api_keys.id, or `oauth:<client_id>`), never by the client's self-declared name, which
+ * anyone can forge.
+ */
+export const AUDIT_CAP_PER_WINDOW = 120;
+export const AUDIT_GLOBAL_CAP_PER_WINDOW = 600;
+const AUDIT_WINDOW_MS = 60_000;
+const auditWindows = new Map<string, { start: number; written: number; suppressed: number }>();
+let auditGlobal = { start: 0, written: 0, suppressed: 0 };
+
+/** Test hooks: move a window into the past so the next call starts a fresh one. */
+export function __shiftAuditWindow(actorId: string): void {
+  const window = auditWindows.get(actorId);
+  if (window) window.start -= AUDIT_WINDOW_MS + 1;
+}
+
+export function __shiftGlobalAuditWindow(): void {
+  auditGlobal = { ...auditGlobal, start: auditGlobal.start - AUDIT_WINDOW_MS - 1 };
+}
+
 export async function logAgentAction(input: {
   key: ApiKeyIdentity;
   action: string;
+  /** ok, denied for a permission problem, invalid for bad arguments, internal for our own fault. */
+  outcome: ToolOutcome;
   entityType?: string;
   entityId?: string;
+  code?: string;
+  /** Present for an internal failure, so the caller's message and this row can be matched. */
+  reference?: string;
+  flags?: { created?: boolean; duplicate?: boolean; preserved?: boolean };
+  /** Extra reporting detail: argument names only, never values and never a request body. */
   metadata?: Record<string, unknown>;
 }): Promise<void> {
+  const now = Date.now();
+  let window = auditWindows.get(input.key.id);
+  let suppressedSince = 0;
+  let suppressedGlobalSince = 0;
+
+  if (!window || now - window.start >= AUDIT_WINDOW_MS) {
+    // A new minute: carry the previous window's suppression count onto the first row of this one.
+    suppressedSince = window?.suppressed ?? 0;
+    window = { start: now, written: 0, suppressed: 0 };
+    auditWindows.set(input.key.id, window);
+  } else if (window.written >= AUDIT_CAP_PER_WINDOW) {
+    window.suppressed += 1;
+    if (window.suppressed === 1) {
+      console.warn(
+        `[agent] audit capped: client=${input.key.id} cap=${AUDIT_CAP_PER_WINDOW}/min — further calls this minute are counted, not written`,
+      );
+    }
+    return;
+  }
+
+  if (now - auditGlobal.start >= AUDIT_WINDOW_MS) {
+    suppressedGlobalSince = auditGlobal.suppressed;
+    auditGlobal = { start: now, written: 0, suppressed: 0 };
+  } else if (auditGlobal.written >= AUDIT_GLOBAL_CAP_PER_WINDOW) {
+    auditGlobal.suppressed += 1;
+    if (auditGlobal.suppressed === 1) {
+      console.warn(
+        `[agent] audit capped globally: cap=${AUDIT_GLOBAL_CAP_PER_WINDOW}/min across all clients — further calls this minute are counted, not written`,
+      );
+    }
+    return;
+  }
+
+  window.written += 1;
+  auditGlobal.written += 1;
+
   const db = await getDb();
+  const metadata: Record<string, unknown> = {
+    outcome: input.outcome,
+    ...(input.code ? { code: input.code } : {}),
+    ...(input.reference ? { reference: input.reference } : {}),
+    ...(input.flags ?? {}),
+    ...(suppressedSince ? { suppressedSince } : {}),
+    ...(suppressedGlobalSince ? { suppressedGlobalSince } : {}),
+    ...(input.metadata ?? {}),
+    // The client's own name travels with every entry. OAuth-connected clients (claude.ai,
+    // ChatGPT, Gemini) present no API key, so without it they are all `api_key:custom` and can
+    // only be separated by joining actor_id back to oauth_clients. The name is self-declared by
+    // the client: reporting only, never read for permissions, scopes or trust.
+    client: sanitizeClientName(input.key.name),
+  };
+
   await db.query(
     `INSERT INTO audit_log
       (id, actor_type, actor_id, action, entity_type, entity_id, metadata)
@@ -258,11 +342,7 @@ export async function logAgentAction(input: {
       input.action,
       input.entityType ?? null,
       input.entityId ?? null,
-      // The client's own name travels with every entry. OAuth-connected clients (claude.ai,
-      // ChatGPT, Gemini) present no API key, so without it they are all `api_key:custom` and can
-      // only be separated by joining actor_id back to oauth_clients. The name is self-declared by
-      // the client: reporting only, never read for permissions, scopes or trust.
-      JSON.stringify({ ...(input.metadata ?? {}), client: sanitizeClientName(input.key.name) }),
+      JSON.stringify(metadata),
     ],
   );
 }

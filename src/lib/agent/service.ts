@@ -30,6 +30,7 @@ import {
 } from "@/lib/services/research-ledger";
 import { buildFollowUp } from "@/lib/ai/writer";
 import { getDb } from "@/lib/db/client";
+import { reportToolError } from "./toolErrors";
 import {
   logAgentAction,
   actorKeyUuid,
@@ -154,7 +155,54 @@ export interface AgentToolResult {
   text: string;
 }
 
+/** The flags worth recording for the tools that write or check for duplicates. */
+function outcomeFlags(action: string, result: Record<string, unknown>) {
+  if (action === "save_prospect") {
+    return { created: Boolean(result.created), duplicate: Boolean(result.duplicate) };
+  }
+  if (action === "save_draft") {
+    // A draft is either saved (created) or handed back because the founder's own version was kept.
+    return { created: Boolean(result.saved), preserved: Boolean(result.preservedExisting) };
+  }
+  if (action === "check_duplicate") {
+    return { duplicate: Boolean(result.duplicate) };
+  }
+  return {};
+}
+
+/**
+ * Runs a tool and records the outcome either way: ok, denied (a permission problem), invalid (bad
+ * arguments) or internal — with the codes and flags that let a run be graded from the audit log
+ * alone. No argument values, no request bodies.
+ */
 export async function runAgentAction(
+  key: ApiKeyIdentity,
+  action: string,
+  args: Record<string, unknown> = {},
+): Promise<AgentToolResult> {
+  try {
+    return await executeAgentAction(key, action, args);
+  } catch (error) {
+    const appError = error instanceof AppError ? error : null;
+    const failure = reportToolError(action, error);
+    const outcome =
+      !appError
+        ? "internal"
+        : appError.status === 401 || appError.status === 403
+          ? "denied"
+          : "invalid";
+    await logAgentAction({
+      key,
+      action,
+      outcome,
+      code: failure.code,
+      reference: failure.reference,
+    }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function executeAgentAction(
   key: ApiKeyIdentity,
   action: string,
   args: Record<string, unknown> = {},
@@ -503,6 +551,8 @@ export async function runAgentAction(
   await logAgentAction({
     key,
     action,
+    outcome: "ok",
+    flags: outcomeFlags(action, result),
     metadata: { args: Object.keys(args) },
   }).catch(() => undefined);
 
@@ -779,6 +829,12 @@ export async function runMcpTool(
   args: Record<string, unknown>,
 ): Promise<AgentToolResult> {
   if (!TOOL_DEFINITIONS.some((tool) => tool.name === name)) {
+    await logAgentAction({
+      key,
+      action: name || "(no tool name)",
+      outcome: "invalid",
+      code: "unknown_tool",
+    }).catch(() => undefined);
     throw new AppError(`Unknown tool: ${name}`, 404, "unknown_tool");
   }
   return runAgentAction(key, name, args);
