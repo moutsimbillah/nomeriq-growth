@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { fail, readJson } from "@/lib/api";
-import { registerOAuthClient } from "@/lib/oauth/server";
+import { checkOAuthRegistrationRateLimit, clientIp } from "@/lib/auth/request";
+import { assertClientCapacity, registerOAuthClient } from "@/lib/oauth/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,6 +10,10 @@ export const dynamic = "force-dynamic";
 /** RFC 7591 dynamic client registration — this is what claude.ai and ChatGPT call first. */
 export async function POST(request: Request) {
   try {
+    // Open registration, so it is bounded twice: per address, and in total while unapproved.
+    checkOAuthRegistrationRateLimit(clientIp(request));
+    await assertClientCapacity();
+
     const body = await readJson<Record<string, unknown>>(request);
 
     const registered = await registerOAuthClient({

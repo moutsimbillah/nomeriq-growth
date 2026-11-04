@@ -69,6 +69,37 @@ export function clearLoginFailures(key: string): void {
   attempts.delete(key);
 }
 
+/**
+ * Connector registration is open by design (a hosted MCP client has to register itself
+ * before it can ask for anything), so it is rate limited per address and capped in total.
+ * Mirrors the sign-in limiter above: fixed window, in-memory, one window per caller.
+ */
+export const OAUTH_REGISTRATIONS_PER_HOUR = 10;
+
+const registrations = new Map<string, { count: number; resetAt: number }>();
+
+export function checkOAuthRegistrationRateLimit(ip: string): void {
+  const now = Date.now();
+  const record = registrations.get(ip);
+  if (!record || record.resetAt < now) {
+    registrations.set(ip, { count: 1, resetAt: now + 60 * 60_000 });
+    return;
+  }
+  if (record.count >= OAUTH_REGISTRATIONS_PER_HOUR) {
+    throw new AppError(
+      "Too many connector registrations from this address. Try again in an hour.",
+      429,
+      "rate_limited",
+    );
+  }
+  record.count += 1;
+}
+
+/** Test seam: clears every registration window. */
+export function resetOAuthRegistrationLimits(): void {
+  registrations.clear();
+}
+
 export function clientIp(request: Request): string {
   return (
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||

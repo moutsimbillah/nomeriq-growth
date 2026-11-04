@@ -66,6 +66,32 @@ function cleanRedirectUris(input: unknown): string[] {
   return uris;
 }
 
+export const OAUTH_PENDING_CLIENT_LIMIT = 50;
+
+/**
+ * A client is "pending" until a token is issued for it — that is, until the founder has
+ * actually approved a connector. Registration is open, so this cap is what stops an
+ * unbounded flood of unapproved clients from growing the table forever.
+ */
+export async function countPendingClients(): Promise<number> {
+  const db = await getDb();
+  const result = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM oauth_clients WHERE last_used_at IS NULL`,
+  );
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+export async function assertClientCapacity(): Promise<void> {
+  const pending = await countPendingClients();
+  if (pending >= OAUTH_PENDING_CLIENT_LIMIT) {
+    throw new AppError(
+      `Too many connectors are waiting to be approved (${pending}). Approve or remove one before registering another.`,
+      429,
+      "client_capacity_reached",
+    );
+  }
+}
+
 export async function registerOAuthClient(input: {
   clientName?: unknown;
   redirectUris?: unknown;
