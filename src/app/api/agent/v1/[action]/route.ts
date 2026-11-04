@@ -3,6 +3,7 @@ import { authenticateApiKey } from "@/lib/agent/apiKeys";
 import { runAgentAction } from "@/lib/agent/service";
 import { corsHeaders, preflight } from "@/lib/api/cors";
 import { AppError } from "@/lib/utils";
+import { reportToolError } from "@/lib/agent/toolErrors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,19 +31,13 @@ export async function POST(
     const result = await runAgentAction(key, action, args);
     return NextResponse.json({ ok: true, data: result.data }, { headers: cors });
   } catch (error) {
-    if (error instanceof AppError) {
+      const failure = reportToolError("agent.v1", error);
       return NextResponse.json(
-        { ok: false, error: error.message, code: error.code },
-        { status: error.status, headers: cors },
+        { ok: false, error: failure.message, code: failure.code },
+        { status: failure.status, headers: cors },
       );
     }
-    console.error("Agent API error", error);
-    return NextResponse.json(
-      { ok: false, error: "The Growth API request failed." },
-      { status: 500, headers: cors },
-    );
   }
-}
 
 export async function GET(
   request: Request,

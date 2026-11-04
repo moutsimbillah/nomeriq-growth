@@ -211,6 +211,20 @@ export function requireScope(key: ApiKeyIdentity, scope: ApiScope): void {
 
 const CLIENT_NAME_MAX = 80;
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * prospects and drafts record who created a row in `created_by_key_id`, which is a uuid column.
+ * An API key's id is a uuid, but an OAuth client's identity is `oauth:<clientId>` — a string no
+ * uuid column can hold. Passing it through failed the insert with "invalid input syntax for type
+ * uuid", so every save from a connector died before its audit entry was written. Only a real key
+ * id is recorded there; the client itself is named on the audit entry, which is what reporting
+ * reads.
+ */
+export function actorKeyUuid(key: ApiKeyIdentity): string | null {
+  return UUID_PATTERN.test(key.id) ? key.id : null;
+}
+
 /**
  * Client names are self-declared, so they are untrusted text: strip control characters (including
  * line breaks, which would forge an extra line in any log or report that renders the entry) and cap

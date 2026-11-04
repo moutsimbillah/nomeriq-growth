@@ -8,6 +8,7 @@ import { ASSISTANT_SKILL } from "@/lib/agent/instructions";
 import { corsHeaders, preflight } from "@/lib/api/cors";
 import { publicOrigin } from "@/lib/app-url";
 import { AppError } from "@/lib/utils";
+import { reportToolError } from "@/lib/agent/toolErrors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -141,19 +142,17 @@ async function handleRpc(request: Request, message: Record<string, unknown>) {
         isError: false,
       });
     } catch (error) {
-      const appError = error instanceof AppError ? error : null;
+      // A failure has to say why — which field, which permission, or that it broke on our side —
+      // and it is logged here with the tool name, because the caller's transcript is not ours.
+      const failure = reportToolError(name, error);
       return rpcResult(request, id, {
-        content: [
-          {
-            type: "text",
-            text: appError?.message || "The Growth tool failed.",
-          },
-        ],
+        content: [{ type: "text", text: failure.message }],
+        structuredContent: { error: { code: failure.code } },
         isError: true,
       });
     }
   }
-  return rpcError(request, id, -32601, `Method not found: ${method}`);
+      return rpcError(request, id, -32601, `Method not found: ${method}`);
 }
 
 export async function POST(request: Request) {

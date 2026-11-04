@@ -31,6 +31,7 @@ import { buildFollowUp } from "@/lib/ai/writer";
 import { getDb } from "@/lib/db/client";
 import {
   logAgentAction,
+  actorKeyUuid,
   requireScope,
   type ApiKeyIdentity,
 } from "./apiKeys";
@@ -282,7 +283,7 @@ export async function runAgentAction(
         researchJobId: data.researchJobId || null,
         qualificationStatus: data.qualificationStatus ?? "verified",
         actorType: actorTypeFor(key),
-        actorKeyId: key.id,
+        actorKeyId: actorKeyUuid(key),
         sources: data.sources,
       });
       result = {
