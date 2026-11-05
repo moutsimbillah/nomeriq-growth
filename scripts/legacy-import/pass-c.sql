@@ -83,3 +83,23 @@ SELECT 'known item: unresolved sent reply' AS check, (433 - count(*))::text AS v
 UNION ALL SELECT 'known item: unmatched inbound (NEEDS_MATCHING)', count(*)::text FROM stg.rows WHERE source_table = 'marketing_conversation_links' AND data->>'state' = 'NEEDS_MATCHING'
 UNION ALL SELECT 'known item: unsent drafts under old Product Truth', count(*)::text FROM drafts WHERE status = 'draft' AND created_by_type = 'legacy'
 UNION ALL SELECT 'known item: excerpt-only inbound replies', count(*)::text FROM messages WHERE direction = 'inbound' AND source = 'legacy_import' AND error = 'excerpt only, full body pending mailbox sync';
+
+-- The five figures pass D must have produced, asserted in this session. A pass D that landed nowhere now fails
+-- the acceptance instead of passing it: that is the failure this block exists to catch.
+DO $passd$
+DECLARE
+  v int; s int; g int; l int; e int; bad text := '';
+BEGIN
+  SELECT count(*) INTO v FROM prospects WHERE qualification_status = 'verified';
+  IF v <> 515 THEN bad := bad || format(' verified=%s (expected 515)', v); END IF;
+  SELECT count(*) INTO s FROM prospect_sources;
+  IF s <> 1673 THEN bad := bad || format(' sources=%s (expected 1673)', s); END IF;
+  SELECT count(*) INTO g FROM prospects WHERE signal_description IS NOT NULL;
+  IF g <> 574 THEN bad := bad || format(' signals=%s (expected 574)', g); END IF;
+  SELECT count(*) INTO l FROM suppressions WHERE prospect_id IS NOT NULL;
+  IF l <> 58 THEN bad := bad || format(' linked=%s (expected 58)', l); END IF;
+  SELECT count(*) INTO e FROM prospects WHERE follow_up_excluded;
+  IF e <> 2 THEN bad := bad || format(' excluded=%s (expected 2)', e); END IF;
+  IF bad <> '' THEN RAISE EXCEPTION 'pass D did not land on this database:%', bad; END IF;
+  RAISE NOTICE 'pass D outputs verified here: 515 verified, 1673 sources, 574 signals, 58 linked, 2 excluded';
+END $passd$;
