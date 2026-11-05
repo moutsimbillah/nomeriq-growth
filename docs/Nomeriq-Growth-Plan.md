@@ -361,7 +361,7 @@ Four phases over about six weeks, each closed by a gate that must pass before th
 | --- | --- | --- |
 | 1. Foundation | Week 1 | DNS + warm-up start, Lightsail server, PostgreSQL + backups and restore drill, deploy local build, safety fixes (QPS label and limit, key expiry, minimal scopes, rate limits, CORS allowlist, route guard, README), server scheduler |
 | 2. Research engine | Weeks 2–3 | Multiple DeepSeek APIs, research ledger, key expiry and rate limits, lessons and outcome reasons groundwork, test on 25 leads |
-| 3. Email | Weeks 3–5 | Bounce handling, one-click send queue, scheduled mail sync, inbox as conversations, first real sends |
+| 3. Email | Weeks 3–5 | The email phase in detail below: quick fixes, mailbox foundations, the eleven-folder inbox, AI providers, AI drafting with full conversation context, small analytics, and agent connectors. Closed by gate 3 |
 | 4. Scale and measure | Week 6 onward | Scheduled follow-ups, weekly outcome digest, 5-number scoreboard, $30 budget alert, review reply rate |
 
 Weeks are planning estimates. The email phase overlaps research so the first sends can go out as soon as warm-up ends.
@@ -372,6 +372,77 @@ Weeks are planning estimates. The email phase overlaps research so the first sen
 2. **25 leads, 0 duplicates (end of phase 2):** a real research run saves 25 qualified leads with published emails and source URLs, and no duplicate records. Claude and ChatGPT connect to the new MCP with their own keys, read the shared skill, and a duplicate check through each returns the existing record.
 3. **Warm-up done, sends OK (end of phase 3):** 3–4 weeks of warm-up complete; test threads reply from their pinned mailbox; the Sent folder shows exactly one copy per email; a test bounce lands in Failed; scheduled mailbox sync runs with logs and a failure alert.
 4. **Learning works (end of phase 4):** the weekly digest, run by the scheduler on real sends, produces at least one proposed lesson with its evidence, and you approve it; the next drafts visibly follow it.
+
+## Phase 3 in detail — the email phase (agreed 2026-11-06)
+
+Phase 3 is delivered as seven numbered items, in this order. Each item ships as one commit with its
+own tests; every deploy goes through `docs/DEPLOYMENT.md`, and a migration's SQL is shown to the
+founder before it is applied on live. Nothing here weakens the standing rule: agents research,
+propose and save drafts; the founder approves and sends.
+
+**0. Quick fixes, deployed on their own.**
+Translation display moves out of a side panel into the message header — a small **Translate** button
+beside the date, shown only for messages that are not in English, which flips the body in place to
+the translation with a "Translated from <language> · Show original" label and flips back; the original
+text is never altered and the translation is cached, so flipping is instant and calls the AI once.
+The cause of the AI provider being unavailable on live (translation and Suggest with AI) is
+established read-only and reported; keys are the founder's to change. Display caps are removed:
+the Sent tab and the Follow-ups lists show the true total with **Load more**, like the Leads page.
+The existing "Prepare due follow-ups" button is confirmed to respect its cap, and is disabled until
+item 4 replaces it if it does not.
+
+**1. Mailbox foundations.** Scheduled IMAP sync per connected profile, filling the empty bodies of
+imported messages by Message-ID and matching the unmatched inbound by sender address and domain;
+bounce handling (a permanent bounce becomes a suppression, soft bounces are retried and then
+suppressed); a copy of every sent email saved into the mailbox's Sent folder; and an automatic pause
+of a sending profile whose bounce rate over its last 50 sends exceeds 3%.
+
+**2. The folder inbox.** The eleven folders become the main email screen — conversation list plus
+thread view, filters and counts across all conversations, sender and agent pills, newest first.
+Screenshots of the design (local dev, throwaway user) are reviewed and approved before the surface
+is wired fully.
+
+**3. AI providers.** OpenAI, Anthropic (Claude), Google Gemini and any OpenAI-compatible custom
+endpoint join DeepSeek for the built-in engine and every AI action, alongside the MCP connectors
+(which are unchanged). Each provider's current documented web search and page fetching is confirmed
+from its own docs first. Model and search are separated: Settings chooses a model per task, and for
+research a search/fetch source — the model's own built-in web search where that is reliable, or a
+dedicated search API usable with any model. Tasks covered: lead research, first-email drafting,
+follow-up drafting, Suggest with AI (reply), Simulate a test reply, translation and classification.
+The founder enters every key himself in Settings; keys are encrypted, never shown again and never
+logged. Fallback order is configured per task. Engine jobs keep their spend caps and rate limits and
+show cost per job. Every lead and draft records the provider and model that produced it (the agent
+pill reads e.g. "Engine · Claude"); widening `source_agent` needs a migration, whose SQL goes to the
+founder first. Before any switch, the same research test (5 known providers) runs on each configured
+provider, compared side by side on found, verified, duplicates caught and cost.
+
+**4. AI drafting with full context.** Suggest with AI, Simulate a test reply, first emails and
+follow-ups all use the whole conversation in time order (including translations), everything known
+about the lead (evidence, sources, pricing, audience, notes, stage, earlier drafts) and Product
+Truth, and follow the shared skill's rules: Product Truth claims only, no prices or results, one real
+observation, ends with "Best,", and the prospect's language is noted. Follow-ups in bulk: in
+"Eligible but not yet prepared", a checkbox per row with **Select all** and **Prepare selected**,
+plus **Prepare next N** with a batch size the founder sets (default 10, newest contacts first).
+Prepared drafts land in a review queue (the Unanswered section and Drafts) where the founder edits
+and approves selected or all. Approved drafts are queued and sent within each profile's daily limit.
+Nothing is ever sent without the founder's approval.
+
+**5. Analytics, small and meaningful.** One page: the funnel (contacted, replied, interested, demo,
+won), reply rate by sender, market and agent, replies after a follow-up, and bounce rate per sender,
+per week.
+
+**6. Connectors.** Email tools for agents through MCP — list folders, follow-ups due, save follow-up
+drafts in bulk; drafts only, no send tool, the agent boundary stays — and a downloadable skill file
+per platform (Claude, ChatGPT instructions, Gemini, Hermes).
+
+**Item 5 of the phase-3 gate still applies**, and gate 3 now additionally requires the items above to
+be live before part 2 begins: connecting `moutsim@nomeriq.com` with the founder step by step (he
+enters the password in Settings; sync only first; the 19 bodies filled and the 8 matched are checked;
+one test email to his own address; then replies; then follow-ups at a daily rate agreed with him,
+starting at 20).
+
+**Stops that always come back to the founder:** connecting any mailbox, the first real send,
+switching automatic follow-ups on, any key, and any live migration.
 
 ## Success metrics and scope
 
