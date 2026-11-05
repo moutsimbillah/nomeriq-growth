@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { closeDb, getDb } from "@/lib/db/client";
 import { hashPassword } from "@/lib/auth/password";
 import { prepareFollowUpDrafts } from "@/lib/services/followups";
-import { ensureWorkspaceDefaults } from "@/lib/services/settings";
+import { ensureWorkspaceDefaults, updateWorkspaceSettings } from "@/lib/services/settings";
 
 /**
  * The 04:00 job must not turn a fresh import into hundreds of follow-up drafts overnight.
@@ -106,5 +106,26 @@ describe("automatic follow-ups", () => {
   it("drafts nothing more on a second run the same day", async () => {
     expect(await prepareFollowUpDrafts({ userId })).toHaveLength(0);
     expect(await followUps()).toHaveLength(3);
+  });
+
+  it("refuses more than 50 a day, and keeps the switch off until it is on", async () => {
+    const db = await getDb();
+    await db.query(`UPDATE workspace_settings SET legal_business_name = 'Nomeriq' WHERE id = 'default'`);
+
+    const off = await updateWorkspaceSettings({ followUpAutoEnabled: false }, userId);
+    expect(off.followUpAutoEnabled).toBe(false);
+
+    await expect(updateWorkspaceSettings({ followUpDailyLimit: 51 }, userId)).rejects.toThrow(/0 and 50/i);
+    const saved = await updateWorkspaceSettings(
+      { followUpDailyLimit: 50, followUpAutoEnabled: true },
+      userId,
+    );
+    expect(saved.followUpDailyLimit).toBe(50);
+    expect(saved.followUpAutoEnabled).toBe(true);
+
+    // the quota is a day's, not a lead's: raising it lets the next lead through, not all of them
+    const more = await prepareFollowUpDrafts({ userId });
+    expect(more).toHaveLength(1);
+    expect(await followUps()).toHaveLength(4);
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LoaderCircle, Save } from "lucide-react";
 import type { WorkspaceSettings } from "@/lib/services/settings";
@@ -22,6 +22,30 @@ export function WorkspaceSettingsForm({
   const [senderSignature, setSenderSignature] = useState(settings.senderSignature);
   const [footerNote, setFooterNote] = useState(settings.footerNote);
   const [followUpMax, setFollowUpMax] = useState(settings.followUpMax);
+  const [followUpAutoEnabled, setFollowUpAutoEnabled] = useState(
+    settings.followUpAutoEnabled,
+  );
+  const [followUpDailyLimit, setFollowUpDailyLimit] = useState(
+    settings.followUpDailyLimit,
+  );
+  const [followUpsDue, setFollowUpsDue] = useState<number | null>(null);
+
+  // How many leads the job would draft for right now. Read once: the number is context for the switch,
+  // not something this form changes.
+  useEffect(() => {
+    let live = true;
+    fetch("/api/follow-ups", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (!live || !data) return;
+        const due = data.due ?? data.overview?.due ?? data.waiting ?? null;
+        setFollowUpsDue(typeof due === "number" ? due : null);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
   const [delay1, setDelay1] = useState(settings.followUpDelay1Days);
   const [delay2, setDelay2] = useState(settings.followUpDelay2Days);
   const [syncStaleHours, setSyncStaleHours] = useState(settings.syncStaleHours);
@@ -51,6 +75,8 @@ export function WorkspaceSettingsForm({
           senderSignature,
           footerNote,
           followUpMax,
+          followUpAutoEnabled,
+          followUpDailyLimit,
           followUpDelay1Days: delay1,
           followUpDelay2Days: delay2,
           syncStaleHours,
@@ -126,6 +152,41 @@ export function WorkspaceSettingsForm({
           Follow-up policy
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-4">
+          <div>
+            <label className="label">Automatic follow-ups</label>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={followUpAutoEnabled}
+                onChange={(event) => setFollowUpAutoEnabled(event.target.checked)}
+              />
+              <span>Draft follow-ups for me</span>
+            </label>
+            <p className="field-hint">
+              Off means the follow-up job drafts nothing at all — nothing automatic is written for a lead
+              until you switch this on.
+              {followUpsDue === null
+                ? ""
+                : ` ${followUpsDue} lead${followUpsDue === 1 ? "" : "s"} due right now.`}
+            </p>
+          </div>
+          <div>
+            <label className="label">Followers per day</label>
+            <input
+              type="number"
+              min={0}
+              max={50}
+              className="input"
+              value={followUpDailyLimit}
+              onChange={(event) =>
+                setFollowUpDailyLimit(Number(event.target.value))
+              }
+            />
+            <p className="field-hint">
+              At most this many a day, newest last send first, so recent contacts come first and the oldest
+              backlog last. 0 means none even when the switch is on.
+            </p>
+          </div>
           <div>
             <label className="label">Follow-ups</label>
             <select

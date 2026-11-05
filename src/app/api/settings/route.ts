@@ -14,6 +14,9 @@ const schema = z.object({
   senderSignature: z.string().max(1000).optional(),
   footerNote: z.string().max(2000).optional(),
   followUpMax: z.number().int().min(0).max(3).optional(),
+  // Automatic follow-ups: off unless switched on, and a day's quota, bounded to match the CHECK.
+  followUpAutoEnabled: z.boolean().optional(),
+  followUpDailyLimit: z.number().int().min(0).max(50).optional(),
   followUpDelay1Days: z.number().int().min(1).max(60).optional(),
   followUpDelay2Days: z.number().int().min(1).max(60).optional(),
   syncStaleHours: z.number().int().min(1).max(720).optional(),
