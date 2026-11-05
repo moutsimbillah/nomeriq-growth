@@ -18,8 +18,8 @@ import {
   listSentMessages,
   listUnknownInbound,
 } from "@/lib/services/conversations";
-import { defaultSenderLabel, senderLabels, senderShortName } from "@/lib/email/senderPill";
-import { getDraftOriginFacets, listDrafts } from "@/lib/services/drafts";
+import { defaultSenderLabel, NO_SENDER_LABEL, senderLabels, senderShortName } from "@/lib/email/senderPill";
+import { DRAFT_PAGE_SIZE, getDraftOriginFacets, listDraftsPage } from "@/lib/services/drafts";
 import { ADDED_LABELS, COUNTED_ADDED_RANGES } from "@/lib/dates/pakistan";
 import { readLeadFilters } from "@/lib/leads/leadFilters";
 import { AGENT_LABELS, AGENT_TAGS } from "@/lib/agent/agentTag";
@@ -83,10 +83,18 @@ export default async function EmailPage({
   };
   const active = tabMap[(params.tab || "inbox").toLowerCase()] || "Inbox";
 
+  // The Drafts window is the query string's `limit`, so "Load more" only has to raise it. The service
+  // clamps it to the true filtered total, which the Drafts header prints.
+  const requestedDraftLimit = Number.parseInt(params.limit ?? "", 10);
+  const draftWindow =
+    Number.isFinite(requestedDraftLimit) && requestedDraftLimit > 0
+      ? requestedDraftLimit
+      : DRAFT_PAGE_SIZE;
+
   const [
     conversations,
     sent,
-    drafts,
+    draftPage,
     campaigns,
     followOverview,
     followCandidates,
@@ -96,7 +104,7 @@ export default async function EmailPage({
   ] = await Promise.all([
     listConversations({ onlyReplied: true, limit: 100 }),
     listSentMessages(100),
-    listDrafts(undefined, 120, filters.agent, {
+    listDraftsPage(undefined, draftWindow, filters.agent, {
       agent: filters.agent,
       sender: filters.sender,
       added: filters.added,
@@ -110,11 +118,28 @@ export default async function EmailPage({
     listEmailAccounts(),
     listUnknownInbound(20),
   ]);
+  const drafts = draftPage.rows;
+  const draftsTotal = draftPage.total;
+  // "Load more" for Drafts keeps every filter in the address bar and only raises the window.
+  const draftMoreParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value && key !== "limit") draftMoreParams.set(key, value);
+  }
+  draftMoreParams.set("tab", "drafts");
+  draftMoreParams.set(
+    "limit",
+    String(Math.min(draftPage.limit + DRAFT_PAGE_SIZE, draftsTotal)),
+  );
+  const draftLoadMoreHref = `/email?${draftMoreParams.toString()}`;
   const senderLabelById = senderLabels(accounts);
   const defaultProfile = accounts.find((account) => account.isDefault) ?? accounts[0] ?? null;
   const defaultLabel = defaultSenderLabel(defaultProfile);
   const draftSenderTitle = (profileId: string | null | undefined) => {
     if (!profileId) {
+      // A never-default mailbox is not a default, so this sentence must not promise it will send.
+      if (defaultProfile?.neverDefault) {
+        return `${NO_SENDER_LABEL} — no mailbox is the default, so pin a sending profile on this lead before emailing it`;
+      }
       return defaultProfile
         ? `No sending profile yet — ${defaultProfile.emailAddress} (${defaultProfile.name}) is the default and will send`
         : "No sending profile yet, and no default mailbox is connected";
@@ -460,6 +485,23 @@ export default async function EmailPage({
               Filter
             </button>
           </form>
+          {/* The total is the whole filtered set, never the loaded rows: a capped page reads
+              "Showing 120 of 578", and the capped number is never presented as the count. */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5 text-12 text-muted">
+            <span className="flex items-center gap-2">
+              <FileText size={13} />
+              {draftsTotal === 0 ? (
+                <span>0 drafts</span>
+              ) : (
+                <span>
+                  Showing <strong className="font-bold text-ink">{drafts.length}</strong> of{" "}
+                  <strong className="font-bold text-ink">{draftsTotal}</strong>{" "}
+                  {draftsTotal === 1 ? "draft" : "drafts"}
+                </span>
+              )}
+            </span>
+            <span className="text-faint">Sorted by most recently updated</span>
+          </div>
           {drafts.length === 0 ? (
             <EmptyState
               icon="sparkles"
@@ -544,6 +586,13 @@ export default async function EmailPage({
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {draftPage.hasMore && (
+            <div className="flex justify-center border-t border-line px-4 py-3 text-12">
+              <Link href={draftLoadMoreHref} className="btn-secondary btn-sm">
+                Load more drafts
+              </Link>
             </div>
           )}
         </Card>

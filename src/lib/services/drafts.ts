@@ -82,13 +82,18 @@ function addedCondition(filters: DraftFilters, params: unknown[]): string | null
   return `d.created_at >= $${params.length - 1} AND d.created_at < $${params.length}`;
 }
 
-export async function listDrafts(
-  status?: string,
-  limit = 100,
-  agent?: string,
-  filters: DraftFilters = {},
-): Promise<Draft[]> {
-  const db = await getDb();
+/** The row cap for one page of the Drafts list; "Load more" grows the window by this much. */
+export const DRAFT_PAGE_SIZE = 120;
+
+/** A ceiling for callers that pass their own limit to `listDrafts`. The Drafts page does not use it. */
+const MAX_DRAFT_LIMIT = 200;
+
+/** The WHERE for a draft filter, shared by the list, the count and the page. */
+function draftWhere(
+  status: string | undefined,
+  agent: string | undefined,
+  filters: DraftFilters,
+): { conditions: string[]; params: unknown[] } {
   const params: unknown[] = [];
   const conditions: string[] = [];
   if (status) {
@@ -107,14 +112,84 @@ export async function listDrafts(
   }
   const added = addedCondition(filters, params);
   if (added) conditions.push(added);
-  params.push(Math.min(limit, 200));
+  return { conditions, params };
+}
+
+const DRAFT_COUNT_SELECT = `SELECT count(*)::int AS n FROM drafts d
+  JOIN prospects p ON p.id = d.prospect_id`;
+
+export async function listDrafts(
+  status?: string,
+  limit = 100,
+  agent?: string,
+  filters: DraftFilters = {},
+): Promise<Draft[]> {
+  const db = await getDb();
+  const { conditions, params } = draftWhere(status, agent, filters);
+  const queryParams = [...params, Math.min(Math.max(limit, 1), MAX_DRAFT_LIMIT)];
   const result = await db.query<any>(
     `${DRAFT_SELECT}
      ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
-     ORDER BY d.updated_at DESC LIMIT $${params.length}`,
-    params,
+     ORDER BY d.updated_at DESC LIMIT $${queryParams.length}`,
+    queryParams,
   );
   return result.rows.map(mapDraft);
+}
+
+/**
+ * How many drafts match the filters, over the whole set. The page size never changes this number, so
+ * it is safe to print beside a capped window as its true total.
+ */
+export async function countDrafts(
+  status?: string,
+  agent?: string,
+  filters: DraftFilters = {},
+): Promise<number> {
+  const db = await getDb();
+  const { conditions, params } = draftWhere(status, agent, filters);
+  const result = await db.query<{ n: number }>(
+    `${DRAFT_COUNT_SELECT}
+     ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}`,
+    params,
+  );
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+export interface DraftListPage {
+  rows: Draft[];
+  /** How many drafts match the filters in total — the whole set, never just this window. */
+  total: number;
+  /** The window size actually used. */
+  limit: number;
+  /** True while matching rows remain beyond this window. */
+  hasMore: boolean;
+}
+
+/**
+ * One window of the Drafts list together with the true filtered total. The window never exceeds what
+ * matches, so repeated "Load more" steps always reach the last row, and the total is what the header
+ * shows — never the loaded rows.
+ */
+export async function listDraftsPage(
+  status?: string,
+  limit?: number,
+  agent?: string,
+  filters: DraftFilters = {},
+): Promise<DraftListPage> {
+  const db = await getDb();
+  const { conditions, params } = draftWhere(status, agent, filters);
+  const total = await countDrafts(status, agent, filters);
+  const requested = Math.max(limit ?? DRAFT_PAGE_SIZE, 1);
+  const window = Math.min(requested, total);
+  const queryParams = [...params, window];
+  const result = await db.query<any>(
+    `${DRAFT_SELECT}
+     ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+     ORDER BY d.updated_at DESC LIMIT $${queryParams.length}`,
+    queryParams,
+  );
+  const rows = result.rows.map(mapDraft);
+  return { rows, total, limit: window, hasMore: rows.length < total };
 }
 
 async function recipientIsVerified(

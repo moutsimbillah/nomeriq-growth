@@ -9,10 +9,14 @@ import {
   UsersRound,
 } from "lucide-react";
 import { listEmailAccounts } from "@/lib/email/accounts";
-import { defaultSenderLabel, senderLabels, senderShortName } from "@/lib/email/senderPill";
-import { getProspectOriginFacets, listProspects } from "@/lib/services/prospects";
+import { defaultSenderLabel, NO_SENDER_LABEL, senderLabels, senderShortName } from "@/lib/email/senderPill";
+import {
+  getProspectOriginFacets,
+  listProspectsPage,
+  PROSPECT_PAGE_SIZE,
+} from "@/lib/services/prospects";
 import { AGENT_LABELS, AGENT_TAGS, CHANNEL_LABELS, CHANNEL_TAGS } from "@/lib/agent/agentTag";
-import { countActiveFilters, readLeadFilters } from "@/lib/leads/leadFilters";
+import { countActiveFilters, leadFilterQuery, readLeadFilters } from "@/lib/leads/leadFilters";
 import { ADDED_LABELS, COUNTED_ADDED_RANGES } from "@/lib/dates/pakistan";
 import { listResearchJobs } from "@/lib/services/research";
 import {
@@ -37,12 +41,22 @@ export default async function LeadsPage({
 }) {
   const params = await searchParams;
   const filters = readLeadFilters(params as Record<string, string | undefined>);
-  const [prospects, jobs, facets, senderProfiles] = await Promise.all([
-    listProspects({ ...filters, limit: 150 }),
+  // The window is the query string's `limit`, so "Load more" only has to raise it. The service clamps
+  // it to the true filtered total, which the header prints, so the loaded rows are never the total.
+  const requestedLimit = Number.parseInt(params.limit ?? "", 10);
+  const windowLimit =
+    Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : PROSPECT_PAGE_SIZE;
+  const [page, jobs, facets, senderProfiles] = await Promise.all([
+    listProspectsPage({ ...filters, limit: windowLimit }),
     listResearchJobs(),
     getProspectOriginFacets(filters),
     listEmailAccounts(),
   ]);
+  const prospects = page.rows;
+  const total = page.total;
+  const moreSearch = new URLSearchParams(leadFilterQuery(filters).replace(/^\?/, ""));
+  moreSearch.set("limit", String(Math.min(page.limit + PROSPECT_PAGE_SIZE, total)));
+  const loadMoreHref = `/leads?${moreSearch.toString()}`;
   const senderById = new Map(senderProfiles.map((account) => [account.id, account]));
   const senderLabelById = senderLabels(senderProfiles);
   const defaultProfile = senderProfiles.find((account) => account.isDefault) ?? senderProfiles[0] ?? null;
@@ -54,6 +68,10 @@ export default async function LeadsPage({
   // The pill says the domain; the tooltip carries the full address and the profile's own name.
   const senderTitle = (profileId: string | null | undefined) => {
     if (!profileId) {
+      // A never-default mailbox is not a default, so this sentence must not promise it will send.
+      if (defaultProfile?.neverDefault) {
+        return `${NO_SENDER_LABEL} — no mailbox is the default, so pin a sending profile on this lead before emailing it`;
+      }
       return defaultProfile
         ? `No sending profile yet — ${defaultProfile.emailAddress} (${defaultProfile.name}) is the default and will send`
         : "No sending profile yet, and no default mailbox is connected";
@@ -250,8 +268,17 @@ export default async function LeadsPage({
       <div className="mb-2.5 flex items-center justify-between px-1">
         <div className="flex items-center gap-2 text-12 text-muted">
           <UsersRound size={13} />
-          <strong className="font-bold text-ink">{prospects.length}</strong>
-          {prospects.length === 1 ? "business" : "businesses"}
+          {/* The total is the whole filtered set, never the loaded rows: a capped page reads
+              "Showing 150 of 578", and the capped number is never presented as the count. */}
+          {total === 0 ? (
+            <span>0 businesses</span>
+          ) : (
+            <span>
+              Showing <strong className="font-bold text-ink">{prospects.length}</strong> of{" "}
+              <strong className="font-bold text-ink">{total}</strong>{" "}
+              {total === 1 ? "business" : "businesses"}
+            </span>
+          )}
           {activeFilterCount > 0 && " matching your filters"}
         </div>
         <div className="flex items-center gap-1.5 text-12 text-faint">
@@ -402,11 +429,20 @@ export default async function LeadsPage({
         )}
       </Card>
 
+      {page.hasMore && (
+        <div className="mt-4 flex justify-center">
+          <Link href={loadMoreHref} className="btn-secondary">
+            Load more
+          </Link>
+        </div>
+      )}
+
       {prospects.length > 0 && (
-        <div className="mt-4 flex items-center justify-between text-12 text-faint">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-12 text-faint">
           <span>
-            Showing up to 150 prospects. Use search and filters to narrow the
-            database.
+            {page.hasMore
+              ? `Load more to see the remaining ${total - prospects.length}.`
+              : `All ${total} ${total === 1 ? "prospect" : "prospects"} shown.`}
           </span>
           <span>Updated {formatDate(new Date())}</span>
         </div>

@@ -592,8 +592,9 @@ function addedCondition(
 }
 
 /**
- * How many leads each agent and each channel has, under the filters currently applied — the agent and
- * channel narrowing is excluded from its own count so every option shows what choosing it would give.
+ * How many leads sit under each filter option, under the filters currently applied — each axis is
+ * counted with every other filter applied but not its own, so an option shows what choosing it would
+ * return right now. Every count is over the whole filtered set, never a page.
  */
 export async function getProspectOriginFacets(
   filters: ProspectFilters = {},
@@ -638,64 +639,88 @@ export async function getProspectOriginFacets(
     conditions.push(`NOT EXISTS (SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id)`);
   }
 
-  // Each axis is counted with every filter applied except its own, so an option shows what choosing
-  // it would return right now — and the other axis' narrowing does move the numbers.
   const where = conditions.join(" AND ");
 
-  // The agent counts carry the channel filter, and the channel counts carry the agent filter. Both
-  // carry the added-date window, because a day range narrows them.
-  const agentParams = [...params];
-  let agentWhere = where;
-  if (filters.channel && filters.channel !== "unknown") {
-    agentParams.push(filters.channel);
-    agentWhere = `${where} AND p.source_channel = $${agentParams.length}`;
-  } else if (filters.channel === "unknown") {
-    agentWhere = `${where} AND p.source_channel IS NULL`;
-  }
-  const agentAdded = addedCondition(filters, "p.created_at", agentParams);
-  if (agentAdded) agentWhere = `${agentWhere} AND ${agentAdded}`;
+  // Each filter as a clause another axis can carry. A clause pushes its parameter onto the array it
+  // is given, so every axis keeps its own parameter list and the placeholders stay in step.
+  const agentClause = (target: unknown[]): string | null => {
+    if (filters.agent === "unknown") return `(p.source_agent IS NULL OR p.source_agent = 'unknown')`;
+    if (filters.agent) {
+      target.push(filters.agent);
+      return `p.source_agent = $${target.length}`;
+    }
+    return null;
+  };
+  const channelClause = (target: unknown[]): string | null => {
+    if (filters.channel === "unknown") return "p.source_channel IS NULL";
+    if (filters.channel) {
+      target.push(filters.channel);
+      return `p.source_channel = $${target.length}`;
+    }
+    return null;
+  };
+  const senderClause = (target: unknown[]): string | null => {
+    if (filters.sender === "default") return "p.sending_profile_id IS NULL";
+    if (filters.sender) {
+      target.push(filters.sender);
+      return `p.sending_profile_id = $${target.length}`;
+    }
+    return null;
+  };
 
-  const channelParams = [...params];
-  let channelWhere = where;
-  if (filters.agent && filters.agent !== "unknown") {
-    channelParams.push(filters.agent);
-    channelWhere = `${where} AND p.source_agent = $${channelParams.length}`;
-  } else if (filters.agent === "unknown") {
-    channelWhere = `${where} AND (p.source_agent IS NULL OR p.source_agent = 'unknown')`;
-  }
-  const channelAdded = addedCondition(filters, "p.created_at", channelParams);
-  if (channelAdded) channelWhere = `${channelWhere} AND ${channelAdded}`;
+  // Every axis is counted with all the filters applied except its own, and always over the whole
+  // filtered set — so a count never moves because more rows were loaded.
+  const agentParams: unknown[] = [...params];
+  const agentWhere = [
+    where,
+    channelClause(agentParams),
+    senderClause(agentParams),
+    addedCondition(filters, "p.created_at", agentParams),
+  ]
+    .filter(Boolean)
+    .join(" AND ");
+
+  const channelParams: unknown[] = [...params];
+  const channelWhere = [
+    where,
+    agentClause(channelParams),
+    senderClause(channelParams),
+    addedCondition(filters, "p.created_at", channelParams),
+  ]
+    .filter(Boolean)
+    .join(" AND ");
+
+  const senderParams: unknown[] = [...params];
+  const senderWhere = [
+    where,
+    agentClause(senderParams),
+    channelClause(senderParams),
+    addedCondition(filters, "p.created_at", senderParams),
+  ]
+    .filter(Boolean)
+    .join(" AND ");
 
   // One count per preset, each with every other filter applied and the added axis left open, so the
   // numbers say what choosing that range would return.
   const added: Record<string, number> = {};
   for (const range of COUNTED_ADDED_RANGES) {
-    const rangeParams = [...params];
-    const rangeCondition = addedCondition({ ...filters, added: range }, "p.created_at", rangeParams);
+    const rangeParams: unknown[] = [...params];
+    const rangeWhere = [
+      where,
+      agentClause(rangeParams),
+      channelClause(rangeParams),
+      senderClause(rangeParams),
+      addedCondition({ ...filters, added: range }, "p.created_at", rangeParams),
+    ]
+      .filter(Boolean)
+      .join(" AND ");
     const rows = await db.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM prospects p WHERE ${rangeCondition ? `${where} AND ${rangeCondition}` : where}`,
+      `SELECT count(*)::int AS n FROM prospects p WHERE ${rangeWhere}`,
       rangeParams,
     );
     added[range] = Number(rows.rows[0]?.n ?? 0);
   }
 
-  // The sender counts carry the agent, channel and date filters, and leave the sender axis open.
-  const senderParams = [...params];
-  let senderWhere = where;
-  if (filters.agent && filters.agent !== "unknown") {
-    senderParams.push(filters.agent);
-    senderWhere = `${senderWhere} AND p.source_agent = $${senderParams.length}`;
-  } else if (filters.agent === "unknown") {
-    senderWhere = `${senderWhere} AND (p.source_agent IS NULL OR p.source_agent = 'unknown')`;
-  }
-  if (filters.channel && filters.channel !== "unknown") {
-    senderParams.push(filters.channel);
-    senderWhere = `${senderWhere} AND p.source_channel = $${senderParams.length}`;
-  } else if (filters.channel === "unknown") {
-    senderWhere = `${senderWhere} AND p.source_channel IS NULL`;
-  }
-  const senderAdded = addedCondition(filters, "p.created_at", senderParams);
-  if (senderAdded) senderWhere = `${senderWhere} AND ${senderAdded}`;
   const senders = await db.query<{ sender: string; n: number }>(
     `SELECT coalesce(p.sending_profile_id::text, 'default') AS sender, count(*)::int AS n
        FROM prospects p WHERE ${senderWhere} GROUP BY 1`,
@@ -722,10 +747,21 @@ export async function getProspectOriginFacets(
   };
 }
 
-export async function listProspects(
-  filters: ProspectFilters = {},
-): Promise<ProspectSummary[]> {
-  const db = await getDb();
+/** The row cap for one page of the leads list; "Load more" grows the window by this much. */
+export const PROSPECT_PAGE_SIZE = 150;
+
+/** A ceiling for callers that pass their own limit to `listProspects`. The list page does not use it. */
+const MAX_PROSPECT_LIMIT = 200;
+
+/**
+ * The WHERE for a lead filter, shared by the list, the count and the page so they can never disagree
+ * about which rows match. The window (limit/offset) is applied by the caller, never here — which is
+ * what keeps a count independent of the page size.
+ */
+function prospectWhere(filters: ProspectFilters): {
+  conditions: string[];
+  params: unknown[];
+} {
   const conditions = ["p.archived_at IS NULL"];
   const params: unknown[] = [];
   if (filters.query?.trim()) {
@@ -785,17 +821,76 @@ export async function listProspects(
   }
   const added = addedCondition(filters, "p.created_at", params);
   if (added) conditions.push(added);
-  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 200);
+  return { conditions, params };
+}
+
+export interface ProspectListPage {
+  rows: ProspectSummary[];
+  /** How many leads match the filters in total — the whole set, never just this window. */
+  total: number;
+  /** The window size actually used. */
+  limit: number;
+  offset: number;
+  /** True while matching rows remain beyond this window. */
+  hasMore: boolean;
+}
+
+export async function listProspects(
+  filters: ProspectFilters = {},
+): Promise<ProspectSummary[]> {
+  const db = await getDb();
+  const { conditions, params } = prospectWhere(filters);
+  const limit = Math.min(Math.max(filters.limit ?? 100, 1), MAX_PROSPECT_LIMIT);
   const offset = Math.max(filters.offset ?? 0, 0);
-  params.push(limit, offset);
+  const queryParams = [...params, limit, offset];
   const result = await db.query<any>(
     `${PROSPECT_SELECT}
      WHERE ${conditions.join(" AND ")}
      ORDER BY p.updated_at DESC
-     LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params,
+     LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}`,
+    queryParams,
   );
   return result.rows.map(mapProspect);
+}
+
+/**
+ * How many leads match the filters, over the whole set. The page size never changes this number, so
+ * it is safe to print beside a capped window as its true total.
+ */
+export async function countProspects(filters: ProspectFilters = {}): Promise<number> {
+  const db = await getDb();
+  const { conditions, params } = prospectWhere(filters);
+  const result = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM prospects p WHERE ${conditions.join(" AND ")}`,
+    params,
+  );
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+/**
+ * One window of the leads list together with the true filtered total. The window never exceeds what
+ * matches, so repeated "Load more" steps (each asking for the previous limit plus a page) always
+ * reach the last row, and the total is what the header shows — never the loaded rows.
+ */
+export async function listProspectsPage(
+  filters: ProspectFilters = {},
+): Promise<ProspectListPage> {
+  const db = await getDb();
+  const { conditions, params } = prospectWhere(filters);
+  const offset = Math.max(filters.offset ?? 0, 0);
+  const total = await countProspects(filters);
+  const requested = Math.max(filters.limit ?? PROSPECT_PAGE_SIZE, 1);
+  const limit = Math.min(requested, Math.max(total - offset, 0));
+  const queryParams = [...params, limit, offset];
+  const result = await db.query<any>(
+    `${PROSPECT_SELECT}
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY p.updated_at DESC
+     LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}`,
+    queryParams,
+  );
+  const rows = result.rows.map(mapProspect);
+  return { rows, total, limit, offset, hasMore: offset + rows.length < total };
 }
 
 export interface UpdateProspectInput {
