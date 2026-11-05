@@ -9,6 +9,8 @@ export interface WorkspaceSettings {
   senderSignature: string;
   footerNote: string;
   followUpMax: number;
+  followUpAutoEnabled: boolean;
+  followUpDailyLimit: number;
   followUpDelay1Days: number;
   followUpDelay2Days: number;
   syncStaleHours: number;
@@ -72,6 +74,8 @@ export async function getWorkspaceSettings(): Promise<WorkspaceSettings> {
     senderSignature: row.sender_signature,
     footerNote: row.footer_note,
     followUpMax: number(row.follow_up_max, 2),
+    followUpAutoEnabled: row.follow_up_auto_enabled === true,
+    followUpDailyLimit: number(row.follow_up_daily_limit, 10),
     followUpDelay1Days: number(row.follow_up_delay_1_days, 4),
     followUpDelay2Days: number(row.follow_up_delay_2_days, 7),
     syncStaleHours: number(row.sync_stale_hours, 24),
@@ -96,6 +100,13 @@ export async function updateWorkspaceSettings(
   }
   if (next.followUpMax < 0 || next.followUpMax > 3) {
     throw new AppError("Follow-ups must be between 0 and 3.");
+  }
+  if (
+    !Number.isInteger(next.followUpDailyLimit) ||
+    next.followUpDailyLimit < 0 ||
+    next.followUpDailyLimit > 50
+  ) {
+    throw new AppError("Automatic follow-ups must be between 0 and 50 a day.");
   }
   if (next.followUpDelay1Days < 1 || next.followUpDelay2Days < 1) {
     throw new AppError("Follow-up delays must be at least one day.");
@@ -130,6 +141,8 @@ export async function updateWorkspaceSettings(
        sender_signature = $3,
        footer_note = $4,
        follow_up_max = $5,
+       follow_up_auto_enabled = $15,
+       follow_up_daily_limit = $16,
        follow_up_delay_1_days = $6,
        follow_up_delay_2_days = $7,
        sync_stale_hours = $8,
@@ -156,6 +169,8 @@ export async function updateWorkspaceSettings(
       next.deepseekSearchQps,
       next.deepseekFetchQps,
       userId,
+      next.followUpAutoEnabled,
+      next.followUpDailyLimit,
     ],
   );
   return getWorkspaceSettings();

@@ -385,6 +385,12 @@ describe("Nomeriq Growth end-to-end workflow", () => {
        WHERE prospect_id = $1`,
       [state.alphaId],
     );
+    // automatic follow-ups are off by default (migration 020): this test is about what happens once the
+    // founder has switched them on
+    await db.query(
+      `UPDATE workspace_settings SET follow_up_auto_enabled = true, follow_up_daily_limit = 10
+        WHERE id = 'default'`,
+    );
     const prepared = await prepareFollowUpDrafts({
       userId: state.userId,
       prospectIds: [state.alphaId],

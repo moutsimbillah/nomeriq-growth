@@ -46,7 +46,7 @@ export async function listFollowUpCandidates(): Promise<FollowUpCandidate[]> {
      JOIN prospects p ON p.id = c.prospect_id
      WHERE c.last_outbound_at IS NOT NULL AND p.archived_at IS NULL
        AND p.do_not_contact = false
-     ORDER BY c.last_outbound_at ASC`,
+     ORDER BY c.last_outbound_at DESC`,
   );
   const candidates: FollowUpCandidate[] = [];
   for (const row of result.rows) {
@@ -107,13 +107,29 @@ export async function prepareFollowUpDrafts(input: {
       409,
     );
   }
-  const candidates = (await listFollowUpCandidates()).filter(
-    (candidate) =>
-      candidate.due &&
-      !candidate.activeDraftId &&
-      (!input.prospectIds?.length ||
-        input.prospectIds.includes(candidate.prospectId)),
+  if (!settings.followUpAutoEnabled) {
+    // Off by default, so an import of hundreds of contacted leads cannot turn into hundreds of drafts
+    // on the first night. The founder switches this on in Settings when the backlog should start moving.
+    return [];
+  }
+  const db0 = await getDb();
+  const madeToday = await db0.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM drafts
+      WHERE kind = 'follow_up' AND created_by_type = 'founder'
+        AND created_at >= date_trunc('day', now())`,
   );
+  const room = Math.max(0, settings.followUpDailyLimit - Number(madeToday.rows[0]?.n ?? 0));
+  if (room === 0) return [];
+  const candidates = (await listFollowUpCandidates())
+    .filter(
+      (candidate) =>
+        candidate.due &&
+        !candidate.activeDraftId &&
+        (!input.prospectIds?.length ||
+          input.prospectIds.includes(candidate.prospectId)),
+    )
+    // Newest last send first: recent contacts get a timely follow-up and the oldest backlog comes last.
+    .slice(0, room);
   const created: Draft[] = [];
   const db = await getDb();
   for (const candidate of candidates) {

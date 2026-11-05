@@ -124,6 +124,13 @@ UPDATE conversations c SET
                                   coalesce((SELECT max(m.received_at) FROM messages m WHERE m.conversation_id = c.id AND m.direction = 'inbound'), 'epoch'::timestamptz)),
        updated_at = now();
 
+-- B5b. the reply classification the follow-up job reads, in the case it compares against
+UPDATE conversations c SET classification = sub.classification, classification_source = 'legacy_import'
+  FROM (SELECT om.prospect_id, lower(r.data->>'classification') AS classification
+          FROM stg.rows r JOIN stg.old_to_new om ON om.old_prospect_id = r.data->>'prospect_id'
+         WHERE r.source_table = 'marketing_outreach_replies') sub
+ WHERE sub.prospect_id = c.prospect_id;
+
 -- ------------------------------------------------ B6. status, pins, and the 4 NOT_INTERESTED
 UPDATE prospects p SET status = CASE WHEN p.status = 'new' THEN 'contacted' ELSE p.status END,
        sending_profile_id = coalesce(p.sending_profile_id, (SELECT id FROM email_accounts WHERE normalized_email = 'moutsim@nomeriq.com')),
