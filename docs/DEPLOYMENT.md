@@ -227,6 +227,36 @@ Rehearse it against a throwaway database (`--target growth_restoretest --rehears
 changes) before trusting it, and note that `import-window.sh` is a one-off record of the 2026-11-05 migration,
 not a tool to run again.
 
+### The agent cannot run a restore — by design
+
+`restore-safe.sh` and `rehearse.sh` are hard-denied to the agent in Hermes
+(`approvals.deny`, rule `*restore-safe.sh*` and `*rehearse.sh*`), in both the `default`
+and `growth` profiles. The deny rule is absolute: it fires at the tool layer, before
+auto-approval, and cannot be waived by `--yolo`, `/yolo` or `approvals.mode=off`. This
+is deliberate — a restore swaps the live database, so it is a founder decision every
+time it happens, not something the agent should be able to reach on its own.
+
+Because the rule matches the *word* anywhere in the command, the agent also cannot
+`cat`, `grep` or `bash -n` these scripts; it reads them through its file-reading tool
+instead. That is the accepted cost of an absolute rule.
+
+**Emergency procedure (founder, by hand — the agent must not do any of this):**
+
+1. The founder opens `C:\Users\Welcome\AppData\Local\hermes\config.yaml` and
+   `...\profiles\growth\config.yaml` in an editor and deletes exactly one line from the
+   `approvals: → deny:` list in each: the `- '*restore-safe.sh*'` entry. Leave every
+   other rule in place. (`hermes config unset` is itself denied; edit the file.)
+2. The founder tells the agent to run the restore. The agent runs
+   `restore-safe.sh` (or `rehearse.sh`) with the verified dump.
+3. Immediately after, the founder puts the two lines back — same indentation,
+   `    - '*restore-safe.sh*'` under `deny:` — and confirms with
+   `hermes config get approvals.deny`, which must show the rule again.
+
+The rule stays out only for the duration of the approved restore; an unstaged window is
+the failure mode this procedure exists to bound. To confirm the block is live at any
+time: `hermes approvals test 'bash scripts/legacy-import/restore-safe.sh'` must report
+`BLOCKED`.
+
 ## Applying migrations to production
 
 `npm run db:migrate` writes to whatever database its environment points at. With nothing set it falls back to

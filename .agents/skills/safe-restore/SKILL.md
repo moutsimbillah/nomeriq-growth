@@ -13,6 +13,40 @@ metadata:
 `scripts/legacy-import/restore-safe.sh` in the repo is the **only** supported way to put a
 dump back. It never writes into the live database. Read it before running it.
 
+## The agent cannot run this — by design
+
+`restore-safe.sh` and `rehearse.sh` are hard-denied to the agent in Hermes
+(`approvals.deny`: `*restore-safe.sh*`, `*rehearse.sh*`), in **both** the `default` and
+`growth` profiles. The block fires at the tool layer, before auto-approval, and
+`--yolo` / `/yolo` / `approvals.mode=off` cannot waive it. A restore swaps the live
+database, so it is a founder decision every single time — not a step the agent reaches
+for. `hermes approvals test 'bash scripts/legacy-import/restore-safe.sh'` must print
+`BLOCKED`.
+
+Consequence of an absolute rule: it matches the word anywhere in the command, so the
+agent cannot `cat`, `grep` or `bash -n` these scripts either. Read them with the
+file-reading tool instead. Do not rephrase a blocked command to get around this — that
+is exactly what the rule exists to stop.
+
+## Emergency procedure — founder only, by hand
+
+The agent must not do step 1 or step 3. If the agent is asked to, it refuses and says why.
+
+1. **Founder:** in a text editor, open `C:\Users\Welcome\AppData\Local\hermes\config.yaml`
+   and `C:\Users\Welcome\AppData\Local\hermes\profiles\growth\config.yaml`. Under
+   `approvals:` → `deny:`, delete exactly the one line `    - '*restore-safe.sh*'`.
+   Leave every other rule untouched. (`hermes config unset` is itself denied — edit the
+   file, or the change cannot be made at all.)
+2. **Agent:** with the rule gone, run the restore with the verified dump, in the normal
+   order below.
+3. **Founder:** put the line back immediately —
+   `    - '*restore-safe.sh*'` at the same indentation under `deny:` — in both files, and
+   confirm with `hermes config get approvals.deny` that it is listed again.
+
+The rule is out only for the duration of that one approved restore. Leaving it out is
+the failure mode this procedure bounds; if you are unsure whether it went back, run the
+`approvals test` above.
+
 ## Refusals — these need the founder, every time
 
 - Restoring into the **live** database (`--target growth` without `--rehearsal`).
