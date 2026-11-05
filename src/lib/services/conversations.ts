@@ -22,6 +22,7 @@ import { applyInboundEffect } from "@/lib/email/sync";
 import { suggestReply, type ReplySuggestion } from "@/lib/ai/reply";
 import { getProspect } from "./prospects";
 import { newestMessageFirst } from "./message-order";
+import { getMessageTranslation } from "./message-translations";
 import { getProductTruth, getWorkspaceSettings } from "./settings";
 import {
   assertAccountCanSend,
@@ -218,6 +219,15 @@ export async function getConversation(
       )
     : { rows: [] };
   const suppressed = prospect.doNotContact || suppression.rows.length > 0;
+  const resultMessages = await Promise.all(
+    messages.rows.map(async (row) => ({
+      ...mapMessage(row),
+      translation:
+        row.direction === "inbound"
+          ? await getMessageTranslation(row.id)
+          : null,
+    })),
+  );
   return {
     id: row.id,
     prospect,
@@ -230,7 +240,7 @@ export async function getConversation(
       : null,
     lastInboundAt: iso(row.last_inbound_at),
     lastOutboundAt: iso(row.last_outbound_at),
-    messages: messages.rows.map(mapMessage),
+    messages: resultMessages,
     replyTo: lastInbound?.from_email ?? prospect.contactEmail,
     suppressed,
     sendable: Boolean(lastInbound) && !suppressed,
@@ -344,8 +354,17 @@ export async function suggestConversationReply(
     direction: message.direction,
     fromEmail: message.fromEmail,
     subject: message.subject,
-    bodyText: message.bodyText,
+    // The original is sent as the body; the stored excerpt is only a fallback when the body is
+    // empty, so the model never reads an excerpt as if it were the whole message.
+    bodyText: message.bodyText?.trim() ? message.bodyText : (message.snippet ?? ""),
     sentAt: message.sentAt,
+    translation: message.translation
+      ? {
+          sourceLanguage: message.translation.sourceLanguage,
+          translatedText: message.translation.translatedText,
+          status: message.translation.status,
+        }
+      : null,
   }));
   const suggestion = await suggestReply({
     truth,

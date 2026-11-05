@@ -15,6 +15,7 @@ import {
   type EmailAccountRecord,
 } from "./accounts";
 import { classifyReply, stripQuotedReply } from "./classify";
+import { translateOnArrival } from "@/lib/services/message-translations";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -525,6 +526,8 @@ export async function storeParsedMessage(input: {
         subject,
         date.toISOString(),
       );
+      // Fire-and-forget: never blocks or fails message ingest.
+      void translateOnArrival(messageDbId);
     } else {
       await applyOutboundEffect(
         owner.conversationId,

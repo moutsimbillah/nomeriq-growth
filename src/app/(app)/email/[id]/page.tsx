@@ -33,6 +33,7 @@ import {
   ReplyComposer,
   SimulateReplyButton,
 } from "@/components/conversation-actions";
+import { MessageTranslation } from "@/components/message-translation";
 import { formatDateTime, relativeTime } from "@/lib/utils";
 import { CLASSIFICATION_LABELS } from "@/lib/types";
 
@@ -186,17 +187,41 @@ export default async function ConversationPage({
                   </div>
                   <div
                     className={
-                      body.kind === "body" ? "email-body" : "email-body text-muted"
+                      inbound && body.kind !== "pending"
+                        ? "grid gap-4 lg:grid-cols-2"
+                        : undefined
                     }
                   >
-                    {body.text}
+                    <div>
+                      {inbound && (
+                        <p className="mb-1.5 text-12 font-semibold text-ink">
+                          Original
+                        </p>
+                      )}
+                      <div
+                        className={
+                          body.kind === "body"
+                            ? "email-body"
+                            : "email-body text-muted"
+                        }
+                      >
+                        {body.text}
+                      </div>
+                      {body.kind === "excerpt" && (
+                        <p className="mt-1 text-12 text-faint">
+                          Excerpt only — the full message appears when the mailbox
+                          is connected.
+                        </p>
+                      )}
+                    </div>
+                    {inbound && body.kind !== "pending" && (
+                      <MessageTranslation
+                        messageId={message.id}
+                        initialTranslation={message.translation}
+                        excerpt={body.kind === "excerpt"}
+                      />
+                    )}
                   </div>
-                  {body.kind === "excerpt" && (
-                    <p className="mt-1 text-12 text-faint">
-                      Excerpt only — the full message appears when the mailbox is
-                      connected.
-                    </p>
-                  )}
                   {message.attachments.length > 0 && (
                     <div className="mt-4 flex flex-wrap gap-1.5 border-t border-line/60 pt-3">
                       {message.attachments.map((attachment, attachmentIndex) =>

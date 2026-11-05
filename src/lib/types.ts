@@ -371,4 +371,7 @@ export interface Message {
   source: string;
   external: boolean;
   draftId: string | null;
+  translation?:
+    | import("@/lib/services/message-translations").CachedTranslation
+    | null;
 }
