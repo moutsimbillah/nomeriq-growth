@@ -226,3 +226,42 @@ live database, and its order matters:
 Rehearse it against a throwaway database (`--target growth_restoretest --rehearsal`, which skips the service
 changes) before trusting it, and note that `import-window.sh` is a one-off record of the 2026-11-05 migration,
 not a tool to run again.
+
+## Applying migrations to production
+
+`npm run db:migrate` writes to whatever database its environment points at. With nothing set it falls back to
+the embedded PGlite and prints `Target: local embedded Postgres (PGlite)`. That happened on 2026-11-05: a deploy
+ran it from a bare shell, so migrations 019-022 went into a throwaway embedded database while live kept running
+code that expected them. Load the environment, and never run it from a bare shell:
+
+```bash
+sudo -u growth bash -c "set -a; . /home/growth/.growth.env; set +a; cd /home/growth/app && AUTO_MIGRATE=false npm run db:migrate"
+```
+
+Assert the target BEFORE it applies anything, and abort otherwise:
+
+```bash
+sudo -u growth bash -c 'set -a; . /home/growth/.growth.env; set +a; python3 -c "import os,sys,urllib.parse; u=urllib.parse.urlparse(os.environ[\"DATABASE_URL\"]); print(\"  target:\", u.hostname, u.path); sys.exit(1) if (u.path.strip(chr(47)) != \"growth\" or u.hostname not in (\"127.0.0.1\",\"localhost\")) else None"'
+```
+
+Then confirm the run reports a Postgres target on `growth`. If it says PGlite, nothing was applied and the
+deployed code is running against a schema that cannot serve it - stop, load the environment, re-run.
+
+### Check the ledger against the schema before any deploy
+
+`_migrations` records only the migrations the tool itself ran. Anything applied by hand - provisioning, the
+import window's harness - is invisible to it, and the tool will try to apply every unrecorded file again, in
+order, including ones that rewrite constraints. So before deploying:
+
+```bash
+sudo -u growth python3 /tmp/pgx.py psql -d growth -X -A -t -c "SELECT id FROM _migrations ORDER BY id"
+```
+
+Every file in `src/db/migrations/` must appear there. For a migration whose effect is already present but
+unrecorded, verify the effect itself - its columns, constraints, tables or schema - and only then record it:
+
+```sql
+INSERT INTO _migrations (id) VALUES ('014_founder_entered_email.sql') ON CONFLICT (id) DO NOTHING;
+```
+
+Never backfill on faith, and never record a migration you have not proved.
