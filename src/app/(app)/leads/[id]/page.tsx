@@ -45,7 +45,7 @@ import {
   PageHeader,
   SectionHeading,
 } from "@/components/ui";
-import { defaultSenderLabel, senderLabels, senderShortName } from "@/lib/email/senderPill";
+import { NO_SENDER_LABEL, senderLabels, senderShortName } from "@/lib/email/senderPill";
 import {
   AddSourceButton,
   ArchiveLeadButton,
@@ -74,28 +74,33 @@ export default async function LeadDetailPage({
   ]);
   const profileAccounts = await listEmailAccounts();
   const profileLabelById = senderLabels(profileAccounts);
-  const defaultProfile = profileAccounts.find((row) => row.isDefault) ?? profileAccounts[0] ?? null;
-  const defaultLabel = defaultSenderLabel(defaultProfile);
   const profileOptions = profileAccounts.map((row) => ({
     id: row.id,
     label: profileLabelById.get(row.id) ?? senderShortName(row),
   }));
 
-  // The lead's own profile when it has one; the mailbox that would send otherwise.
-  const sendingProfile = prospect.sendingProfileId
+  // The mailbox this lead's email comes from: its own pinned profile, else the workspace default — and
+  // nothing else. There is deliberately no "the only account" fallback, so a lead the import never pinned
+  // is not shown as nomeriq.com (and cannot be sent from it either).
+  const pinnedProfile = prospect.sendingProfileId
     ? await getEmailAccountRecord(prospect.sendingProfileId).catch(() => null)
-    : account;
-  const pinnedLabel = sendingProfile
-    ? (profileLabelById.get(sendingProfile.id) ?? senderShortName(sendingProfile))
-    : defaultLabel;
+    : null;
+  const sendingProfile = pinnedProfile ?? account;
+  const labelOf = (profile: { id: string; name: string; emailAddress: string }) =>
+    profileLabelById.get(profile.id) ?? senderShortName(profile);
+  const pinnedLabel = pinnedProfile ? labelOf(pinnedProfile) : NO_SENDER_LABEL;
   const envSandbox = (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() !== "live";
-  const sandboxMode = envSandbox || account?.provider === "sandbox";
+  const sandboxMode = envSandbox || sendingProfile?.provider === "sandbox";
   const followUps = drafts.filter((item) => item.kind === "follow_up");
   const blockedReasons: string[] = [];
-  if (!account) blockedReasons.push("No email account is connected in Settings.");
-  else if (account.status !== "connected")
+  if (!sendingProfile)
     blockedReasons.push(
-      account.lastError || "The connected mailbox is not healthy.",
+      "This lead has no sending profile yet. Pick the mailbox it is sent from on the lead page.",
+    );
+  else if (sendingProfile.status !== "connected")
+    blockedReasons.push(
+      sendingProfile.lastError ||
+        "The mailbox that would send for this lead is not healthy.",
     );
   if (!sandboxMode && !settings.postalAddress.trim())
     blockedReasons.push(
@@ -165,14 +170,16 @@ export default async function LeadDetailPage({
             />
             <SenderPill
               profile={
-                prospect.sendingProfileId
-                  ? { id: prospect.sendingProfileId, label: pinnedLabel }
-                  : { id: null, label: defaultLabel }
+                pinnedProfile
+                  ? { id: pinnedProfile.id, label: pinnedLabel }
+                  : { id: null, label: NO_SENDER_LABEL }
               }
               title={
-                sendingProfile
-                  ? `${sendingProfile.emailAddress} — ${sendingProfile.name}`
-                  : "No sending profile yet, and no default mailbox is connected"
+                pinnedProfile
+                  ? `${pinnedProfile.emailAddress} — ${pinnedProfile.name}`
+                  : account
+                    ? `No sending profile yet — ${account.emailAddress} (${account.name}) is the default and will send this lead's first email`
+                    : "No sending profile yet — pick the mailbox this lead is sent from"
               }
               size="lg"
             />

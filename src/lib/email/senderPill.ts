@@ -72,13 +72,27 @@ export function senderLabels(
 }
 
 /**
+ * What a lead with no sender of its own shows, wherever the sender is shown.
+ *
+ * The lead has not been pinned to a mailbox, so it names none. A domain here would be a claim the lead
+ * cannot back — which is exactly how nomeriq.com, the import's own mailbox, came to be shown on leads the
+ * import never pinned to it.
+ */
+export const NO_SENDER_LABEL = "No sender yet";
+
+/**
  * The label for a lead that is not pinned yet: it has no sender of its own, so name the profile that
  * would send — its domain — and say that it is the default. Never the bare word "default": the founder
  * should be able to read which mailbox a press of Send would use.
+ *
+ * A profile that may never be the default (the import's own mailbox) is not one that would send, so it is
+ * never named — the lead has no sender yet, and saying otherwise would name a mailbox it was never
+ * assigned.
  */
 export function defaultSenderLabel(
-  defaultProfile: { emailAddress?: string | null } | null,
+  defaultProfile: { emailAddress?: string | null; neverDefault?: boolean } | null,
 ): string {
+  if (defaultProfile?.neverDefault) return NO_SENDER_LABEL;
   const domain = defaultProfile ? domainOf(defaultProfile.emailAddress) : "";
   return domain && domain !== "unknown" ? `${domain} · default` : "default";
 }

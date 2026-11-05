@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db/client";
 import {
   getDefaultEmailAccount,
   getEmailAccountRecord,
+  type EmailAccountRecord,
 } from "@/lib/email/accounts";
 import {
   pinSendingProfile,
@@ -375,16 +376,28 @@ export async function sendDraft(
     }
   }
 
-  // The lead's pinned profile wins outright. Until it is pinned, an explicit choice stands, and only
-  // then the default — so a founder's pick is never quietly overridden by the workspace default. A
-  // draft's thread may not exist yet, so only the lead's own pin is consulted here; replies read the
-  // thread's pin as well (see sendReply).
+  // The lead's pinned profile wins outright. Until it is pinned, an explicit choice stands, and only a
+  // mailbox the founder actually marked as the default may fill in — never simply "the only account":
+  // nomeriq.com belongs to the leads the import pinned to it, and a lead it did not pin must not be sent
+  // from silently. A draft's thread may not exist yet, so only the lead's own pin is consulted here;
+  // replies read the thread's pin as well (see sendReply).
   const pinnedProfile = await resolvePinnedProfile({ prospectId: draft.prospectId });
-  const account =
-    pinnedProfile ??
-    ((options.accountId
-      ? await getEmailAccountRecord(options.accountId)
-      : await getDefaultEmailAccount(true)) ?? null);
+  let account: EmailAccountRecord | null = null;
+  if (pinnedProfile) {
+    account = pinnedProfile;
+  } else if (options.accountId) {
+    account = await getEmailAccountRecord(options.accountId);
+  } else {
+    account = await getDefaultEmailAccount(true);
+    if (!account) {
+      await db.query(`DELETE FROM outbound_sends WHERE draft_id = $1`, [draft.id]);
+      throw new AppError(
+        "This lead has no sending profile yet, and no mailbox is set as the default. Pick the mailbox this lead is sent from on the lead page before sending — a mailbox is only ever used by the leads pinned to it.",
+        409,
+        "no_sender_profile",
+      );
+    }
+  }
   if (!account) {
     await db.query(`DELETE FROM outbound_sends WHERE draft_id = $1`, [draft.id]);
     throw new AppError(

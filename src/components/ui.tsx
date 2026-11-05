@@ -379,8 +379,8 @@ export function Avatar({
  * not a filled badge — the sender is context, not a claim about who did the work — and it always spells
  * the profile's name, so it never relies on colour.
  *
- * A lead with no profile yet has no sender of its own, and says "default" rather than naming a mailbox
- * it has never used.
+ * A lead with no profile yet has no sender of its own, and the caller spells that out — `NO_SENDER_LABEL`,
+ * "No sender yet" — rather than naming a mailbox the lead was never assigned.
  */
 export function SenderPill({
   profile,
@@ -399,7 +399,7 @@ export function SenderPill({
     title ??
     (profile?.id
       ? `Sending profile: ${label}`
-      : "No sending profile yet — the default profile will be used");
+      : "No sending profile yet — pick the mailbox this lead is sent from");
   return (
     <span
       title={tooltip}

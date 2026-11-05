@@ -457,7 +457,7 @@ export function EmailAccountsManager({
                     </button>
                   </>
                 )}
-                {!account.isDefault && (
+                {!account.isDefault && !account.neverDefault && (
                   <button
                     type="button"
                     className="btn-ghost btn-xs"
@@ -466,6 +466,16 @@ export function EmailAccountsManager({
                   >
                     <Star size={10} /> Make default
                   </button>
+                )}
+                {account.neverDefault && (
+                  // The import's own mailbox. It may only be used by the leads the import pinned to it, so
+                  // the server refuses to make it the default and the offer is not shown here either.
+                  <span
+                    className="text-12 text-faint"
+                    title="This mailbox belongs to the imported leads and may only be used by the leads pinned to it, so it can never be the workspace default."
+                  >
+                    import only — never the default
+                  </span>
                 )}
                 {accounts.length > 1 && (
                   <button

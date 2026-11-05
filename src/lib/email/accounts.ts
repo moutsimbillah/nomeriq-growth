@@ -31,6 +31,12 @@ export interface EmailAccountRecord {
   dailySendLimit: number;
   minIntervalSeconds: number;
   isDefault: boolean;
+  /**
+   * True for the import's own mailbox (moutsim@nomeriq.com): it exists so the messages the import
+   * brought in have a mailbox to belong to, and it may only be used by the leads the import pinned to
+   * it. It is never the workspace default, and the API refuses to make it one.
+   */
+  neverDefault: boolean;
   /** The profile's own sign-off; empty means fall back to the workspace signature. */
   signature: string;
   /** When this profile's warm-up began, or null for no ramp. */
@@ -66,6 +72,7 @@ function mapAccount(row: any): EmailAccountRecord {
     dailySendLimit: Number(row.daily_send_limit),
     minIntervalSeconds: Number(row.min_interval_seconds),
     isDefault: Boolean(row.is_default),
+    neverDefault: Boolean(row.never_default),
     signature: row.signature ?? "",
     warmupStartedAt: iso(row.warmup_started_at),
     createdAt: iso(row.created_at) ?? "",
@@ -85,17 +92,27 @@ export async function getEmailAccountRecord(
   return result.rows[0] ? mapAccount(result.rows[0]) : null;
 }
 
+/**
+ * The workspace default: the one account whose is_default is true — and only that one.
+ *
+ * There is deliberately no "the only account" fallback. A mailbox is the sender for the leads pinned to
+ * it; being the default is a separate, deliberate choice the founder makes. Picking a row merely because
+ * it is the one row available silently assigned a mailbox — nomeriq.com, which belongs to the imported
+ * leads — to every lead the import never pinned to it. With nothing marked default this returns null, and
+ * the caller says so rather than naming a sender the lead does not have.
+ */
 export async function getDefaultEmailAccount(
   requireConnected = false,
 ): Promise<EmailAccountRecord | null> {
   const db = await getDb();
   const result = await db.query<any>(
     `SELECT * FROM email_accounts
-     WHERE status <> 'disabled'
-     ORDER BY is_default DESC, created_at ASC LIMIT 1`,
+     WHERE status <> 'disabled' AND is_default = true AND never_default = false
+     ORDER BY created_at ASC LIMIT 1`,
   );
   const account = result.rows[0] ? mapAccount(result.rows[0]) : null;
-  if (requireConnected && account?.status !== "connected") {
+  if (!account) return null;
+  if (requireConnected && account.status !== "connected") {
     throw new AppError(
       "Connect a healthy email account in Settings before sending.",
       409,
@@ -103,6 +120,11 @@ export async function getDefaultEmailAccount(
     );
   }
   return account;
+}
+
+/** The one sentence both refusals share: why this mailbox may never be the workspace default. */
+function neverDefaultMessage(account: { emailAddress: string }): string {
+  return `${account.emailAddress} belongs to the imported leads and may only be used by the leads the import pinned to it, so it can never be the workspace default. Pin it to a lead instead.`;
 }
 
 export async function listEmailAccounts(): Promise<PublicEmailAccount[]> {
@@ -266,6 +288,12 @@ export async function updateEmailAccount(
 ): Promise<PublicEmailAccount> {
   const current = await getEmailAccountRecord(id);
   if (!current) throw new AppError("Email account not found.", 404);
+  // A mailbox that may never be the default cannot be made one, however the request is worded.
+  // never_default is deliberately not part of EmailAccountInput, so the normal update path can never
+  // clear the mark either — only a migration can change it.
+  if (current.neverDefault && input.isDefault === true) {
+    throw new AppError(neverDefaultMessage(current), 409, "never_default_account");
+  }
   const merged: EmailAccountInput = {
     provider: input.provider ?? current.provider,
     emailAddress: input.emailAddress ?? current.emailAddress,
@@ -280,7 +308,7 @@ export async function updateEmailAccount(
     username: input.username ?? current.username,
     dailySendLimit: input.dailySendLimit ?? current.dailySendLimit,
     minIntervalSeconds: input.minIntervalSeconds ?? current.minIntervalSeconds,
-    isDefault: input.isDefault ?? current.isDefault,
+    isDefault: current.neverDefault ? false : (input.isDefault ?? current.isDefault),
     signature: input.signature === undefined ? current.signature : input.signature,
     warmupStartedAt:
       input.warmupStartedAt === undefined ? current.warmupStartedAt : input.warmupStartedAt,
@@ -344,6 +372,11 @@ export async function updateEmailAccount(
 }
 
 export async function setDefaultEmailAccount(id: string): Promise<void> {
+  const account = await getEmailAccountRecord(id);
+  if (!account) throw new AppError("Email account not found.", 404, "email_account_not_found");
+  if (account.neverDefault) {
+    throw new AppError(neverDefaultMessage(account), 409, "never_default_account");
+  }
   const db = await getDb();
   await db.transaction(async (tx) => {
     await tx.query(`UPDATE email_accounts SET is_default = false WHERE id <> $1`, [id]);
