@@ -342,12 +342,12 @@ export function EmailAccountsManager({
                         className={`badge ${
                           account.status === "connected"
                             ? "border-forest/20 bg-lime/20 text-forest"
-                            : account.status === "error"
+                            : account.status === "error" || account.status === "paused_bounce"
                               ? "border-rust/20 bg-rust/[0.05] text-rust"
                               : ""
                         }`}
                       >
-                        {account.status}
+                        {account.status === "paused_bounce" ? "paused · bounce rate" : account.status}
                       </span>
                       <span className="badge capitalize">
                         {account.provider === "sandbox"
@@ -364,13 +364,19 @@ export function EmailAccountsManager({
                     </div>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className="btn-ghost btn-xs"
-                  onClick={() => openEdit(account)}
-                >
-                  Edit
-                </button>
+                <div className="flex items-center gap-1.5">
+                  {/* An automatic pause is cleared here, by hand: nothing resumes itself. */}
+                  {account.status === "paused_bounce" && (
+                    <ResumeBouncePauseButton accountId={account.id} />
+                  )}
+                  <button
+                    type="button"
+                    className="btn-ghost btn-xs"
+                    onClick={() => openEdit(account)}
+                  >
+                    Edit
+                  </button>
+                </div>
               </div>
 
               {account.lastError && (
@@ -775,5 +781,40 @@ export function EmailAccountsManager({
         </form>
       </Modal>
     </div>
+  );
+}
+
+/**
+ * Clearing an automatic bounce pause.
+ *
+ * Separate from Edit on purpose: editing a mailbox and resuming a paused one are different decisions,
+ * and the second must be deliberate. The reason the profile paused is shown first, so the founder
+ * decides with the number in front of him.
+ */
+function ResumeBouncePauseButton({ accountId }: { accountId: string }) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function resume() {
+    setPending(true);
+    setError(null);
+    try {
+      await apiRequest(`/api/email/accounts/${accountId}/resume`, { method: "POST" });
+      router.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not resume.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <span className="flex flex-col items-end gap-0.5">
+      <button type="button" className="btn-secondary btn-xs" onClick={resume} disabled={pending}>
+        {pending ? "Resuming…" : "Resume sending"}
+      </button>
+      {error && <span className="max-w-[220px] text-right text-12 text-rust">{error}</span>}
+    </span>
   );
 }

@@ -12,6 +12,7 @@ import {
   resolvePinnedProfile,
   warmupDailyLimit,
 } from "@/lib/email/profiles";
+import { saveSentCopyForMessage } from "@/lib/email/sent-copy";
 import {
   deliverEmail,
   EmailDeliveryError,
@@ -34,6 +35,10 @@ import { getWorkspaceSettings } from "./settings";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export interface SendResult {
+  /** True when a copy is confirmed in the mailbox's Sent folder (or was already there). */
+  sentCopySaved?: boolean;
+  /** Why the copy was not written, when it was not. Never a send failure. */
+  sentCopyNote?: string | null;
   status: "accepted" | "sandbox" | "uncertain";
   alreadySent: boolean;
   messageId: string;
@@ -129,6 +134,16 @@ export async function buildComplianceFooter(input: {
 export async function assertAccountCanSend(accountId: string): Promise<void> {
   const account = await getEmailAccountRecord(accountId);
   if (!account) throw new AppError("Email account not found.", 404);
+  // An automatic bounce pause is a refusal with its own code: it is not a misconfigured mailbox, so
+  // the founder is told what happened and how to clear it rather than being sent to Settings blind.
+  if (account.status === "paused_bounce") {
+    throw new AppError(
+      account.lastError ||
+        "This profile is paused because its recent bounce rate is above 3%. Check the address and the prospect emails, then resume it in Settings.",
+      409,
+      "bounce_rate_paused",
+    );
+  }
   if (account.status !== "connected") {
     throw new AppError(
       account.lastError ||
@@ -630,6 +645,9 @@ export async function sendDraft(
     };
   }
 
+  // Assigned inside the recording transaction and used after it, for the Sent-folder copy.
+  let messageDbId: string | null = null;
+
   const deliveryStatus = uncertainty
     ? "uncertain"
     : delivery.mode === "sandbox"
@@ -665,7 +683,7 @@ export async function sendDraft(
         tx,
       );
 
-      const messageDbId = crypto.randomUUID();
+      messageDbId = crypto.randomUUID();
       const attachmentRecords = (options.attachments ?? []).map((attachment) => ({
         id: crypto.randomUUID(),
         filename: attachment.filename,
@@ -774,6 +792,27 @@ export async function sendDraft(
     );
   }
 
+  // The email has left; this only makes webmail agree with Growth. A failure here is recorded as
+  // "copy not saved yet" and retried by the next mailbox sync, so it can never undo a send.
+  const sentCopy = messageDbId
+    ? await saveSentCopyForMessage(account, messageDbId, {
+        messageId: delivery.transportMessageId,
+        to: draft.recipientEmail,
+        subject,
+        text,
+        html,
+        fromName: account.fromName,
+        fromEmail: account.emailAddress,
+        headers: {
+          ...footer.headers,
+          ...(previous?.message_id
+            ? { "In-Reply-To": previous.message_id, References: references.join(" ") }
+            : {}),
+        },
+        attachments: options.attachments,
+      }).catch(() => null)
+    : null;
+
   return {
     status: deliveryStatus,
     alreadySent: false,
@@ -782,6 +821,8 @@ export async function sendDraft(
     response: delivery.response,
     sentAt,
     draftId: draft.id,
+    sentCopySaved: sentCopy?.saved ?? false,
+    sentCopyNote: sentCopy?.note ?? null,
     deliveryUncertain: uncertainty !== null,
     note: uncertainty
       ? "Recorded as sent. The sending server did not confirm delivery — check the mailbox if you need certainty."

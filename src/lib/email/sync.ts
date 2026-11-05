@@ -16,6 +16,8 @@ import {
 } from "./accounts";
 import { classifyReply, stripQuotedReply } from "./classify";
 import { translateOnArrival } from "@/lib/services/message-translations";
+import { pauseProfileIfBouncing, recordBounceIfAny } from "./bounce-handling";
+import { listUncopiedSentMessages, saveSentCopyForMessage } from "./sent-copy";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -25,6 +27,12 @@ const INITIAL_DAYS = 30;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 export interface SyncResult {
+  /** The inbound rows this run was able to attach to a lead, and how each was found. */
+  rematched?: { scanned: number; matched: number; byAddress: number; byDomain: number } | null;
+  /** The Sent-folder copies this run wrote, or confirmed. */
+  sentCopies?: { attempted: number; saved: number; alreadyPresent: number } | null;
+  /** True when this run paused the profile on its own bounce rate. */
+  pausedByBounceRate?: boolean;
   accountId: string;
   imported: number;
   skipped: number;
@@ -517,6 +525,37 @@ export async function storeParsedMessage(input: {
     );
   }
 
+  // A delivery report is checked BEFORE anything treats the message as a reply. A bounce is a
+  // transport fact about one address: it must not mark the thread answered, and it must not cancel a
+  // follow-up as though the prospect had written back. `recordBounceIfAny` answers `isBounce: false`
+  // for ordinary mail, which then takes the reply path unchanged.
+  const bounce =
+    input.direction === "inbound"
+      ? await recordBounceIfAny({
+          accountId: input.account.id,
+          messageDbId,
+          fromEmail,
+          subject,
+          bodyText: text,
+          contentType: parsed.headers.get("content-type")?.toString() ?? null,
+          headers: {
+            "x-failed-recipients": parsed.headers.get("x-failed-recipients")?.toString() ?? null,
+            status: parsed.headers.get("status")?.toString() ?? null,
+          },
+        }).catch(() => null)
+      : null;
+
+  if (bounce?.isBounce) {
+    // Recorded against the report itself, not the thread: the row keeps its owner when the headers
+    // found one, and stays unmatched (and therefore out of every reply count) when they did not.
+    return {
+      inserted: true,
+      filled: false,
+      conversationId: owner.conversationId,
+      prospectId: owner.prospectId,
+    };
+  }
+
   if (owner.conversationId && owner.prospectId) {
     if (input.direction === "inbound") {
       await applyInboundEffect(
@@ -793,14 +832,24 @@ export async function syncEmailAccount(accountId: string): Promise<SyncResult> {
 
       const db = await getDb();
       await db.query(
+        // A successful sync says the mailbox is reachable, which is not the same as "allowed to
+        // send": a profile paused by its bounce rate stays paused until the founder lifts it.
         `UPDATE email_accounts SET last_sync_at = now(), last_checked_at = now(),
-          status = 'connected', last_error = null, updated_at = now()
+          status = CASE WHEN status = 'paused_bounce' THEN status ELSE 'connected' END,
+          last_error = CASE WHEN status = 'paused_bounce' THEN last_error ELSE null END,
+          updated_at = now()
          WHERE id = $1`,
         [accountId],
       );
     } finally {
       await client.logout().catch(() => undefined);
     }
+    // Everything below is local. A sync that read the mailbox has done its job even if these fail,
+    // so they are attempted and reported rather than allowed to fail the run.
+    result.rematched = await rematchUnmatchedInbound().catch(() => null);
+    result.sentCopies = await backfillSentCopies(account.id).catch(() => null);
+    result.pausedByBounceRate = await pauseProfileIfBouncing(accountId).catch(() => false);
+
     return result;
   } catch (error) {
     if (error instanceof AppError) throw error;
@@ -812,6 +861,133 @@ export async function syncEmailAccount(accountId: string): Promise<SyncResult> {
   } finally {
     syncing.delete(accountId);
   }
+}
+
+/**
+ * Re-run the owner match for inbound messages that never found one.
+ *
+ * The sync already matches on thread headers, then the exact sender address, then the sender's
+ * non-generic domain. This exists for the rows that arrived *before* the lead they belong to was in
+ * the database — the import's unmatched inbound — so a later run can attach them instead of leaving
+ * them invisible in the Inbox for ever.
+ *
+ * It only ever fills a null owner: a message already attached to a lead is never moved, because the
+ * thread it sits in is the history the founder has already read. Every match is written with the
+ * reason it was found (`matched_by`), so an attach can be explained afterwards.
+ */
+export async function rematchUnmatchedInbound(
+  limit = 200,
+): Promise<{ scanned: number; matched: number; byAddress: number; byDomain: number }> {
+  const db = await getDb();
+  const unmatched = await db.query<{
+    id: string;
+    from_email: string;
+    subject: string | null;
+    received_at: string | null;
+    created_at: string | null;
+  }>(
+    `SELECT id, from_email, subject, received_at, created_at FROM messages
+      WHERE direction = 'inbound' AND prospect_id IS NULL
+      ORDER BY coalesce(received_at, created_at) ASC
+      LIMIT $1`,
+    [Math.max(1, Math.min(limit, 500))],
+  );
+
+  let matched = 0;
+  let byAddress = 0;
+  let byDomain = 0;
+
+  for (const row of unmatched.rows) {
+    const email = normalizeEmail(row.from_email ?? "");
+    if (!email) continue;
+    // A bounce report is not a conversation: attaching it to a lead would invent a reply.
+    const bounce = await recordBounceIfAny({
+      accountId: null,
+      messageDbId: row.id,
+      fromEmail: email,
+      subject: row.subject ?? "",
+      bodyText: "",
+    });
+    if (bounce.isBounce) continue;
+
+    const domain = emailDomain(email);
+    const generic = Boolean(domain && /gmail|outlook|yahoo|hotmail|icloud|proton/i.test(domain));
+    const prospectId =
+      (await findProspectByEmail(email)) ?? (generic ? null : await findProspectByDomain(domain));
+    if (!prospectId) continue;
+
+    const foundByAddress = Boolean(await findProspectByEmail(email));
+    const when = row.received_at ?? row.created_at ?? new Date().toISOString();
+    const conversationId = await conversationForProspect(
+      prospectId,
+      row.subject ?? "(no subject)",
+      when,
+    );
+    const updated = await db.query(
+      `UPDATE messages SET prospect_id = $2, conversation_id = $3, matched_by = $4
+        WHERE id = $1 AND prospect_id IS NULL`,
+      [row.id, prospectId, conversationId, foundByAddress ? "exact_email" : "sender_domain"],
+    );
+    if (!updated.rowCount) continue;
+    matched += 1;
+    if (foundByAddress) byAddress += 1;
+    else byDomain += 1;
+
+    // The conversation's own counters move with it, so an attached reply shows in the Inbox counts.
+    await db.query(
+      `UPDATE conversations SET
+         last_message_at = GREATEST(coalesce(last_message_at, $2::timestamptz), $2::timestamptz),
+         last_inbound_at = GREATEST(coalesce(last_inbound_at, $2::timestamptz), $2::timestamptz),
+         unread_count = unread_count + 1,
+         updated_at = now()
+       WHERE id = $1`,
+      [conversationId, when],
+    );
+  }
+
+  return { scanned: unmatched.rows.length, matched, byAddress, byDomain };
+}
+
+/**
+ * Write the Sent-folder copies that were not written at send time.
+ *
+ * A send path that could not reach IMAP leaves `sent_copy_saved_at` null. This walks those messages
+ * oldest-first (well, newest first, which is what matters to a founder reading webmail) and appends
+ * the copy, marking each one as it succeeds. A message already present in the folder is marked too:
+ * "confirmed" is the fact being recorded, not "we appended it".
+ */
+export async function backfillSentCopies(
+  accountId: string,
+  limit = 10,
+): Promise<{ attempted: number; saved: number; alreadyPresent: number }> {
+  const account = await getEmailAccountRecord(accountId);
+  if (!account || account.provider === "sandbox") {
+    return { attempted: 0, saved: 0, alreadyPresent: 0 };
+  }
+  const pending = await listUncopiedSentMessages(accountId, limit);
+  const db = await getDb();
+  let saved = 0;
+  let alreadyPresent = 0;
+  for (const row of pending) {
+    const body = await db.query<{ body_text: string | null; body_html: string | null; subject: string }>(
+      `SELECT body_text, body_html, subject FROM messages WHERE id = $1`,
+      [row.id],
+    );
+    const message = body.rows[0];
+    if (!message) continue;
+    const outcome = await saveSentCopyForMessage(account, row.id, {
+      messageId: row.messageId,
+      to: row.to,
+      subject: message.subject ?? row.subject,
+      text: message.body_text ?? "",
+      html: message.body_html ?? "",
+      fromName: account.fromName,
+      fromEmail: account.emailAddress,
+    });
+    if (outcome.saved && outcome.alreadyPresent) alreadyPresent += 1;
+    else if (outcome.saved) saved += 1;
+  }
+  return { attempted: pending.length, saved, alreadyPresent };
 }
 
 export async function getSyncHealth(accountId: string) {

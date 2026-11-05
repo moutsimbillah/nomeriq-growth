@@ -24,7 +24,11 @@ export interface EmailAccountRecord {
   imapSecure: boolean;
   username: string;
   passwordEncrypted: string;
-  status: "unverified" | "connected" | "error" | "disabled";
+  /**
+   * `paused_bounce` is written only by the sync's own bounce-rate check: the profile sent enough to be
+   * judged and more than 3% of it bounced. It refuses to send until the founder resumes it in Settings.
+   */
+  status: "unverified" | "connected" | "error" | "disabled" | "paused_bounce";
   lastError: string | null;
   lastCheckedAt: string | null;
   lastSyncAt: string | null;

@@ -20,6 +20,7 @@ import {
 } from "@/lib/email/send-provider";
 import { applyInboundEffect } from "@/lib/email/sync";
 import { suggestReply, type ReplySuggestion } from "@/lib/ai/reply";
+import { saveSentCopyForMessage } from "@/lib/email/sent-copy";
 import { getProspect } from "./prospects";
 import { newestMessageFirst } from "./message-order";
 import { getMessageTranslation } from "./message-translations";
@@ -742,12 +743,28 @@ export async function sendReply(input: SendReplyInput) {
     );
   }
 
+  // Best-effort, after the reply is recorded: webmail should show the reply Growth sent. A failure
+  // leaves the row unmarked and the next mailbox sync writes it, so it cannot undo the send.
+  const sentCopy = await saveSentCopyForMessage(account, messageDbId, {
+    messageId: delivery.transportMessageId,
+    to: conversation.replyTo,
+    subject,
+    text,
+    html,
+    fromName: account.fromName,
+    fromEmail: account.emailAddress,
+    headers: { "In-Reply-To": lastInbound.id, References: references.join(" ") },
+    attachments: input.attachments,
+  }).catch(() => null);
+
   return {
     alreadySent: false,
     status: deliveryStatus,
     messageId: delivery.transportMessageId,
     sentAt,
     deliveryUncertain: uncertainty !== null,
+    sentCopySaved: sentCopy?.saved ?? false,
+    sentCopyNote: sentCopy?.note ?? null,
     note: uncertainty
       ? "Recorded as sent. The sending server did not confirm delivery — check the mailbox if you need certainty."
       : undefined,
