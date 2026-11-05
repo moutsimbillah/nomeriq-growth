@@ -39,15 +39,8 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS sent_copy_saved_at timestamptz;
 CREATE INDEX IF NOT EXISTS outbound_sends_account_completed_idx
   ON outbound_sends(account_id, completed_at DESC);
 
+-- Lock the new table down the same way as every other table. Row-level security on, and no
+-- privileges for PUBLIC. No role-specific grants, because this server has no `anon` or
+-- `authenticated` role to revoke from.
 ALTER TABLE email_bounces ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON email_bounces FROM PUBLIC;
-
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
-    EXECUTE 'REVOKE ALL ON email_bounces FROM anon';
-  END IF;
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    EXECUTE 'REVOKE ALL ON email_bounces FROM authenticated';
-  END IF;
-END $$;
