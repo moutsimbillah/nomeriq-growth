@@ -250,3 +250,18 @@ The old Growth tables appear to live in the same free-plan Supabase project that
 8. **Later, in the email phase:** connect the IONOS mailbox and sync it to fill in full email bodies.
 
 The new research and sending pause until step 7 passes.
+
+## Identity keys (approved 5 Nov 2026)
+
+A `VERIFIED` or `PROPOSED` identity becomes a unique key on the lead — one key per platform, in the
+`domain_key`, `instagram_key`, `youtube_key`, `x_key` and `telegram_key` columns. Only an identity that is
+`CONFLICTED` or `RETIRED` is written to `other_socials` instead, so it is kept without claiming a key it may
+not own.
+
+Codex measured zero valid collisions. Any collision the import finds is **reported, and the second one goes
+to `other_socials` — never merged**, because merging two businesses' accounts is worse than a lead missing a
+key. Two malformed YouTube handles (Pride Trading Academy, Research Aim) are stored in `other_socials` for
+the same reason: they are not usable as keys.
+
+Non-email contact routes are not identity keys: the 11 contact forms, 7 Telegram DMs and 3 WhatsApp routes
+go to `other_socials`, or into research notes where they carry context a key cannot hold.
