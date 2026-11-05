@@ -45,3 +45,11 @@ At the start of every session, before doing anything else, read `docs/Nomeriq-Gr
 ## 10. Lockfiles are generated with npm 10.9.x, never npm 11
 
 `package-lock.json` must be generated with the npm the server actually runs — npm 10.9.x. npm 11 omits the `optional` flag on hoisted platform packages such as `@esbuild/aix-ppc64` and has written a dependency entry with no version at all. `npm install` tolerates both, so local builds pass while `npm ci` fails on every platform — the fault only ever shows up on a clean install. `package.json` therefore requires npm `10.x` and `.npmrc` sets `engine-strict=true`, so the wrong npm fails loudly instead of quietly writing a bad lockfile. After any dependency change, prove the lockfile with `npm ci` on a clean tree before committing it.
+
+## 11. Standing boundary: `.agents/charter.md`
+
+`.agents/charter.md` defines what the manager may do alone and what always needs the
+founder's approval. Read it at the start of every session alongside
+`docs/Nomeriq-Growth-Plan.md` and `.agents/notes/current-task.md`, and treat it as a
+rule of this repository. Changing it is a founder-approval action.
+
