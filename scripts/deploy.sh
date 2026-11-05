@@ -2,20 +2,26 @@
 # scripts/deploy.sh — the deploy in docs/DEPLOYMENT.md, as one reviewed script.
 #
 # Why this file exists: the runbook's privileged half (a restart) cannot be typed as an SSH command,
-# because `systemctl restart growth` is a hard-denied pattern for the agent. The store's rule is that a
+# because restarting the service is a hard-denied pattern for the agent. The charter's rule is that a
 # deny rule is never worked around by writing the blocked command into a file and running the file, so
-# this script lives in the repository, is reviewed by the founder once, and only then may be run:
+# this script lives in the repository, is reviewed by the founder once, and only then may be run.
 #
-#     ssh ubuntu@<host> 'sudo -n bash /home/growth/app/scripts/deploy.sh all'
+# It is never run from inside the checkout: the build step resets /home/growth/app, which would
+# replace the running file under it. Run a copy from the reviewed commit that sits outside the
+# checkout, with its reviewed hash next to it:
 #
-# The script is the whole deploy — backup, build, restart, verify — so the review covers everything it
-# does. Any later change to this file needs a fresh review, because it contains a denied command.
+#     ssh ubuntu@<host> 'cd / && sudo -n bash /home/growth/deploy/deploy.sh all'
+#
+# The copy checks itself against /home/growth/deploy/SHA256SUMS (the hash recorded in
+# docs/DEPLOYMENT.md) before doing anything. A changed script means a new hash and a new review.
 #
 # What it will NOT do:
 #   - touch .env, .growth.env or .env.production
 #   - delete anything, drop a database, or restore a dump
-#   - run a migration (that is a separate, explicitly approved step)
-#   - deploy when the local gate has not run: it refuses if the working tree is dirty
+#   - run a migration (that is a separate, explicitly approved step; when one is pending the
+#     script stops before the restart and prints the order: dump, build, the approved migration,
+#     restart)
+#   - proceed when the server checkout is dirty after the hard reset
 #
 # Usage:  deploy.sh dump | build | restart | all      (default: all)
 set -euo pipefail
@@ -23,6 +29,7 @@ set -euo pipefail
 APP=/home/growth/app
 BACKUPS=/var/backups/growth
 DEPLOY_KEY=/home/growth/.ssh/deploy_growth
+PGX="$APP/scripts/pgx.py"      # the reviewed helper, in the repo — nothing the deploy needs lives in /tmp
 MIN_TABLE_DATA=50
 
 step="${1:-all}"
@@ -35,13 +42,55 @@ git_as_growth() {
   as_growth "GIT_SSH_COMMAND='ssh -i $DEPLOY_KEY -o IdentitiesOnly=yes' git -C $APP $1"
 }
 
+# The reset inside build() replaces files under $APP — including this script if it lived there.
+case "$PWD/" in
+  "$APP/"*)
+    echo "REFUSING: never run the deploy from inside the checkout ($APP)."
+    echo "Run a copy outside it, e.g. /home/growth/deploy/deploy.sh."
+    exit 5
+    ;;
+esac
+
+# The running copy must be the reviewed bytes: its hash has to match the sibling SHA256SUMS,
+# which records the hash documented in docs/DEPLOYMENT.md.
+if ! (cd "$(dirname "$0")" && sha256sum -c SHA256SUMS >/dev/null 2>&1); then
+  echo "REFUSING: this copy of deploy.sh does not match the reviewed hash in SHA256SUMS."
+  echo "A changed script means a new hash and a new review."
+  exit 6
+fi
+
+# Every migration file in the checkout must already be in _migrations. Prints the missing ones.
+migrations_missing() {
+  local missing=""
+  local f base
+  for f in "$APP"/src/db/migrations/*.sql; do
+    base="$(basename "$f")"
+    if ! sudo -n -u growth python3 "$PGX" psql -d growth -X -A -t \
+      -c "SELECT 1 FROM _migrations WHERE id = '$base'" 2>/dev/null | grep -q 1; then
+      missing="$missing $base"
+    fi
+  done
+  printf '%s' "$missing"
+}
+
+require_migrations_applied() {
+  local missing
+  missing="$(migrations_missing)"
+  if [ -n "$missing" ]; then
+    echo "REFUSING: $step needs every migration applied, but these files are not in _migrations:"
+    printf '%s\n' "$missing"
+    echo "Order for a deploy with a migration: dump, build, the approved migration, then restart."
+    exit 4
+  fi
+}
+
 dump() {
   say "verified backup"
   mkdir -p "$BACKUPS"
   local name entries
   name="$BACKUPS/deploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
   # Credentials come from the app's own env file through pgx.py, never from a command line.
-  sudo -n -u growth python3 /tmp/pgx.py pg_dump -d growth -Fc -f "$name"
+  sudo -n -u growth python3 "$PGX" pg_dump -d growth -Fc -f "$name"
   chmod 600 "$name"
   entries="$(pg_restore --list "$name" | grep -c 'TABLE DATA' || true)"
   printf 'dump: %s\nsize: %s bytes\nmode: %s\ntable-data entries: %s\n' \
@@ -84,6 +133,7 @@ build() {
 }
 
 restart() {
+  require_migrations_applied
   say "what is running before"
   printf 'commit on disk: %s\n' "$(as_growth "git -C $APP rev-parse --short HEAD")"
   printf 'loopback health: %s\n' "$(curl -s -m 5 http://127.0.0.1:3100/api/health || echo '(no answer)')"
@@ -109,10 +159,10 @@ restart() {
   echo "timers:"
   sudo -n systemctl list-timers --all 'growth-*' --no-pager | sed -n '1,12p'
   echo "migration ledger (newest 4):"
-  sudo -n -u growth python3 /tmp/pgx.py psql -d growth -X -A -t \
+  sudo -n -u growth python3 "$PGX" psql -d growth -X -A -t \
     -c "SELECT id FROM _migrations ORDER BY id DESC LIMIT 4" 2>/dev/null || echo "(pgx helper missing)"
   echo "counts:"
-  sudo -n -u growth python3 /tmp/pgx.py psql -d growth -X -A -F'|' -c \
+  sudo -n -u growth python3 "$PGX" psql -d growth -X -A -F'|' -c \
     "SELECT (SELECT count(*) FROM prospects) AS prospects,
             (SELECT count(*) FROM prospects WHERE qualification_status='verified') AS verified,
             (SELECT count(*) FROM drafts) AS drafts,
@@ -127,6 +177,6 @@ case "$step" in
   dump) dump ;;
   build) build ;;
   restart) restart ;;
-  all) dump; build; restart ;;
+  all) dump; build; require_migrations_applied; restart ;;
   *) echo "unknown step: $step"; exit 2 ;;
 esac

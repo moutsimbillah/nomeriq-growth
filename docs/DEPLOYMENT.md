@@ -295,3 +295,35 @@ INSERT INTO _migrations (id) VALUES ('014_founder_entered_email.sql') ON CONFLIC
 ```
 
 Never backfill on faith, and never record a migration you have not proved.
+
+### The reviewed deploy script
+
+The privileged half of a deploy (a service restart) is hard-denied to the agent, so it lives in the
+repository at `scripts/deploy.sh`, reviewed by the founder once before its first run. The deploy
+relies on nothing in `/tmp`: the database helper is `scripts/pgx.py`, which reads `DATABASE_URL` from
+`/home/growth/.growth.env` and passes it through the process environment.
+
+- **Never run it from inside the checkout.** The build step hard-resets `/home/growth/app`, which
+  would replace the running file. The script refuses when its working directory is inside the
+  checkout.
+- **Run a copy outside the checkout**, taken from the exact reviewed commit, and only after its
+  `sha256` matches the reviewed hash. The copy lives at `/home/growth/deploy/deploy.sh` with
+  `/home/growth/deploy/SHA256SUMS` next to it, and the script refuses to run unless
+  `sha256sum -c` passes there. **A changed script means a new hash and a new review.**
+- **A migration is never applied by the script.** When any file in `src/db/migrations/` is missing
+  from `_migrations`, the script refuses `restart` (and `all`, at the restart boundary) and prints
+  the order: dump, build, the approved migration, then restart.
+
+Run:
+
+```bash
+cd / && sudo -n bash /home/growth/deploy/deploy.sh all
+```
+
+Steps are separately callable: `dump`, `build`, `restart`.
+
+Reviewed `scripts/deploy.sh` sha256:
+
+```text
+bb86e975a211864901579eee24a31a3aeab395a25c715aac3f1bac101358f8b6  scripts/deploy.sh
+```
