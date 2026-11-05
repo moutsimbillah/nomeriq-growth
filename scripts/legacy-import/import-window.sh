@@ -18,7 +18,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 MODE=rehearsal; [ "$TARGET" = "growth" ] && MODE=live
-NEW=bdc5a1d; PREV=b511f13
+NEW=c1fbf9e; PREV=b511f13
 APP=/home/growth/app
 WORK=/home/growth/rehearsal
 EXPORT=/home/growth/import/Nomeriq-Growth-Export-20261104T201547Z-2aa5fc9e2b
@@ -147,7 +147,7 @@ run sudo systemctl start growth-cron-research.timer growth-cron-sends.timer grow
 echo "timers: $(sudo systemctl is-active growth-cron-research.timer growth-cron-sends.timer growth-cron-follow-ups.timer | tr '\n' ' ')"
 
 step "9. cleanup"
-run rm -rf "$EXPORT"
+run sudo -u growth rm -rf "$EXPORT"
 run sudo -u postgres dropdb --if-exists growth_import_dryrun
 run sudo -u postgres dropdb --if-exists growth_rehearsal
 echo; echo "LIVE WINDOW COMPLETE"
