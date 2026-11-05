@@ -26,6 +26,7 @@ import {
   truncate,
 } from "@/lib/utils";
 import { getDraft } from "./drafts";
+import { messageRealTime, newestMessageFirst } from "./message-order";
 import { recordFounderEnteredEmail } from "./prospects";
 import { getWorkspaceSettings } from "./settings";
 
@@ -249,10 +250,36 @@ async function latestConversationMessage(conversationId: string) {
     // time for imported rows, so it cannot say which message really came last.
     `SELECT message_id, references_json, subject FROM messages
      WHERE conversation_id = $1
-     ORDER BY COALESCE(sent_at, received_at, created_at) DESC, created_at DESC, id DESC LIMIT 1`,
+     ORDER BY ${newestMessageFirst()} LIMIT 1`,
     [conversationId],
   );
   return result.rows[0] ?? null;
+}
+
+/**
+ * Has the prospect written since our own last message to them?
+ *
+ * Both sides are compared by the time each message really happened, never by `created_at`: an
+ * imported inbound row carries the import time in `created_at`, which is later than every real send,
+ * so a `created_at` comparison reported a reply to every send — cancelling follow-ups that were
+ * overdue to go. The newest outbound is measured the same way, so a send stored late does not look
+ * older than it is. No outbound at all still means any inbound counts as a reply, as before.
+ */
+export async function hasReplySinceLastOutbound(
+  conversationId: string,
+): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.query(
+    `SELECT 1 FROM messages
+     WHERE conversation_id = $1 AND direction = 'inbound'
+       AND ${messageRealTime()} > COALESCE((
+         SELECT max(${messageRealTime()}) FROM messages
+         WHERE conversation_id = $1 AND direction = 'outbound'
+       ), '-infinity'::timestamptz)
+     LIMIT 1`,
+    [conversationId],
+  );
+  return result.rows.length > 0;
 }
 
 export interface SendDraftOptions {
@@ -451,17 +478,7 @@ export async function sendDraft(
       );
       throw new AppError("A follow-up needs an existing conversation.", 409);
     }
-    const inboundAfter = await db.query(
-      `SELECT 1 FROM messages
-       WHERE conversation_id = $1 AND direction = 'inbound'
-         AND created_at > COALESCE((
-           SELECT max(created_at) FROM messages
-           WHERE conversation_id = $1 AND direction = 'outbound'
-         ), '-infinity'::timestamptz)
-       LIMIT 1`,
-      [conversation.rows[0].id],
-    );
-    if (inboundAfter.rows.length) {
+    if (await hasReplySinceLastOutbound(conversation.rows[0].id)) {
       await db.query(
         `UPDATE outbound_sends SET status = 'blocked',
           error = 'Prospect replied; follow-up cancelled', completed_at = now()

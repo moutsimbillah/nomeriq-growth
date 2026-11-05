@@ -7,6 +7,7 @@ import {
   getConversation,
   MESSAGE_BODY_PENDING_TEXT,
   messageBodyForDisplay,
+  previewMessages,
 } from "@/lib/services/conversations";
 
 /**
@@ -244,6 +245,41 @@ describe("the conversation thread is ordered by the time it really happened", ()
     const page = readFileSync("src/app/(app)/email/[id]/page.tsx", "utf8");
     expect(page).toContain("index === 0 && inbound");
     expect(page).not.toContain("conversation.messages.length - 1 && inbound");
+  });
+});
+
+describe("the lead page's conversation preview", () => {
+  it("shows the five most recent messages, newest first, not the five oldest", async () => {
+    const conversation = (await getConversation(conversationId))!;
+    const preview = previewMessages(conversation.messages);
+
+    expect(preview).toHaveLength(5);
+    expect(preview.map((message) => message.id)).toEqual([
+      ids["in-1104"],
+      ids["in-1103"],
+      ids["live-1102"],
+      ids["out-2110"],
+      ids["in-1030"],
+    ]);
+
+    // The five stored last are the five oldest here, all with the same created_at: this is exactly
+    // what `slice(-5)` on the newest-first thread put on the page before.
+    const tail = conversation.messages.slice(-5).map((message) => message.id);
+    expect(tail.slice(2)).toEqual([ids["blank"], ids["excerpt"], ids["full"]]);
+    expect([tail[0], tail[1]].sort()).toEqual([ids["tie-a"], ids["tie-b"]].sort());
+    for (const id of tail) expect(preview.map((message) => message.id)).not.toContain(id);
+  });
+
+  /**
+   * The page is a server component and vitest runs without a DOM, so the page is not rendered here.
+   * What is asserted is that it takes its five messages from the helper above — the order of those
+   * five is covered by the case before this one — and no longer slices the tail of the thread.
+   */
+  it("takes the preview from the newest end of the thread, never the tail", () => {
+    const page = readFileSync("src/app/(app)/leads/[id]/page.tsx", "utf8");
+    expect(page).toContain("previewMessages(conversation.messages)");
+    expect(page).not.toContain("conversation.messages.slice(-5)");
+    expect(page).not.toMatch(/conversation\.messages\.slice\(-\d+\)/);
   });
 });
 

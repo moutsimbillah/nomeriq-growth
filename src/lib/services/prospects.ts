@@ -29,6 +29,7 @@ import type {
   ProspectSummary,
 } from "@/lib/types";
 import { mapEmail, mapProspect, mapProspectDetail, mapSource } from "./mappers";
+import { newestMessageFirst } from "./message-order";
 import { refreshResearchJobStatus } from "./research";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -1213,8 +1214,10 @@ export async function getProspectConversationContext(prospectId: string) {
   );
   const messages = conversation.rows[0]
     ? await db.query<any>(
+        // The most recent messages by the time they really happened, newest first: `created_at` is
+        // the import time for imported rows, so ordering by it picked an arbitrary set.
         `SELECT direction, from_email, subject, body_text, sent_at, received_at, source, external
-         FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 20`,
+         FROM messages WHERE conversation_id = $1 ORDER BY ${newestMessageFirst()} LIMIT 20`,
         [conversation.rows[0].id],
       )
     : { rows: [] };

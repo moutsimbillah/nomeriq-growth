@@ -27,7 +27,7 @@ import {
   getFirstContactDraft,
   listDraftsForProspect,
 } from "@/lib/services/drafts";
-import { getConversationForProspect } from "@/lib/services/conversations";
+import { getConversationForProspect, previewMessages } from "@/lib/services/conversations";
 import { SendingProfileControl } from "@/components/sending-profile-control";
 import { FollowUpExclusionControl } from "@/components/follow-up-exclusion-control";
 import {
@@ -478,7 +478,7 @@ export default async function LeadDetailPage({
               </div>
             ) : (
               <div className="mt-4 space-y-2">
-                {conversation.messages.slice(-5).map((message) => (
+                {previewMessages(conversation.messages).map((message) => (
                   <div
                     key={message.id}
                     className={`rounded-xl border px-3 py-2.5 ${

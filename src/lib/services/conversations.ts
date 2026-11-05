@@ -21,6 +21,7 @@ import {
 import { applyInboundEffect } from "@/lib/email/sync";
 import { suggestReply, type ReplySuggestion } from "@/lib/ai/reply";
 import { getProspect } from "./prospects";
+import { newestMessageFirst } from "./message-order";
 import { getProductTruth, getWorkspaceSettings } from "./settings";
 import {
   assertAccountCanSend,
@@ -30,23 +31,8 @@ import {
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-/**
- * The instant a message really happened, newest first.
- *
- * `created_at` is the row's insert time, and for an imported row that is the import time — identical
- * for every row of that import, so it says nothing about the order the conversation happened in.
- * The real time is `sent_at`, falling back to `received_at`, and only then `created_at`; that is the
- * same convention `listSentMessages` and `listUnknownInbound` already use. `id` breaks a tie, so two
- * messages with the same instant never swap places between renders.
- */
-function newestMessageFirst(alias = ""): string {
-  const column = (name: string) => (alias ? `${alias}.${name}` : name);
-  return [
-    `COALESCE(${column("sent_at")}, ${column("received_at")}, ${column("created_at")}) DESC`,
-    `${column("created_at")} DESC`,
-    `${column("id")} DESC`,
-  ].join(", ");
-}
+// Re-exported so the conversation service keeps its one public entry point for the thread order.
+export { newestMessageFirst };
 
 /** What an imported message with no full body shows instead of an empty card. */
 export const MESSAGE_BODY_PENDING_TEXT =
@@ -76,6 +62,23 @@ export function messageBodyForDisplay(
   const excerpt = message.snippet?.trim();
   if (excerpt) return { kind: "excerpt", text: excerpt };
   return { kind: "pending", text: MESSAGE_BODY_PENDING_TEXT };
+}
+
+/** How many messages a lead page shows before the founder opens the full thread. */
+export const CONVERSATION_PREVIEW_LIMIT = 5;
+
+/**
+ * The messages a lead page previews: the few most recent, in the order the thread is read.
+ *
+ * `getConversation` returns the thread newest first, so the newest messages are at the front — taking
+ * the tail would show the five oldest. They are kept in that order rather than reversed, so the
+ * preview and the thread it links to both put the latest message at the top.
+ */
+export function previewMessages(
+  messages: Message[],
+  limit = CONVERSATION_PREVIEW_LIMIT,
+): Message[] {
+  return messages.slice(0, Math.max(0, limit));
 }
 
 function mapMessage(row: any): Message {
