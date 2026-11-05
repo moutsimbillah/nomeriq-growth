@@ -14,12 +14,18 @@ import {
 } from "lucide-react";
 import {
   getConversation,
+  getConversationCounts,
   listConversations,
   listSentMessages,
   listUnknownInbound,
 } from "@/lib/services/conversations";
 import { defaultSenderLabel, NO_SENDER_LABEL, senderLabels, senderShortName } from "@/lib/email/senderPill";
-import { DRAFT_PAGE_SIZE, getDraftOriginFacets, listDraftsPage } from "@/lib/services/drafts";
+import {
+  countDrafts,
+  DRAFT_PAGE_SIZE,
+  getDraftOriginFacets,
+  listDraftsPage,
+} from "@/lib/services/drafts";
 import { ADDED_LABELS, COUNTED_ADDED_RANGES } from "@/lib/dates/pakistan";
 import { readLeadFilters } from "@/lib/leads/leadFilters";
 import { AGENT_LABELS, AGENT_TAGS } from "@/lib/agent/agentTag";
@@ -107,6 +113,8 @@ export default async function EmailPage({
     followDrafts,
     accounts,
     unknown,
+    inboxCounts,
+    openDraftTotal,
   ] = await Promise.all([
     listConversations({ onlyReplied: true, limit: 100 }),
     listSentMessages(100),
@@ -125,6 +133,16 @@ export default async function EmailPage({
     listFollowUpDrafts(),
     listEmailAccounts(),
     listUnknownInbound(20),
+    getConversationCounts({ onlyReplied: true }),
+    countDrafts("draft", filters.agent, {
+      agent: filters.agent,
+      sender: filters.sender,
+      added: filters.added,
+      addedFrom: filters.addedFrom,
+      addedTo: filters.addedTo,
+      timezone: filters.timezone,
+      now: filters.now,
+    }),
   ]);
   const drafts = draftPage.rows;
   const draftsTotal = draftPage.total;
@@ -182,10 +200,16 @@ export default async function EmailPage({
     {
       href: "/email?tab=inbox",
       label: "Inbox",
-      count: conversations.reduce((sum, item) => sum + item.unreadCount, 0),
+      // The unread total for the whole filter, not the sum over the loaded window.
+      count: inboxCounts.unread,
     },
     { href: "/email?tab=sent", label: "Sent", count: sent.length },
-    { href: "/email?tab=drafts", label: "Drafts", count: openDrafts.length },
+    {
+      href: "/email?tab=drafts",
+      label: "Drafts",
+      // Every open draft the filter admits, not just the ones this page loaded.
+      count: openDraftTotal,
+    },
     {
       href: "/email?tab=campaigns",
       label: "Campaigns",
@@ -252,6 +276,17 @@ export default async function EmailPage({
 
       {active === "Inbox" && (
         <div className="mt-4 space-y-4">
+          {/* The loaded window is never presented as the total: the service counts the whole filtered set. */}
+          <div className="flex flex-wrap items-center justify-between gap-2 text-12 text-muted">
+            <span>
+              Showing <strong className="font-bold text-ink">{conversations.length}</strong> of{" "}
+              <strong className="font-bold text-ink">{inboxCounts.total}</strong>{" "}
+              {inboxCounts.total === 1 ? "conversation" : "conversations"}
+            </span>
+            <span className="text-faint">
+              {inboxCounts.unread} unread {inboxCounts.unread === 1 ? "reply" : "replies"}
+            </span>
+          </div>
           <Card className="overflow-hidden">
             {conversations.length === 0 ? (
               <EmptyState
@@ -470,7 +505,7 @@ export default async function EmailPage({
                   {ADDED_LABELS[range]} ({draftFacets.added[range] ?? 0})
                 </option>
               ))}
-              <option value="custom" disabled={params.added !== "custom"}>
+              <option value="custom">
                 {ADDED_LABELS.custom}
               </option>
             </select>

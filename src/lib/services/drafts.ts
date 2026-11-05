@@ -110,7 +110,7 @@ function draftWhere(
   }
   if (agent) {
     params.push(agent);
-    conditions.push(`d.source_agent = $${params.length}`);
+    conditions.push(`coalesce(d.source_agent, 'unknown') = $${params.length}`);
   }
   if (filters.sender === "default") {
     conditions.push("p.sending_profile_id IS NULL");
@@ -730,7 +730,7 @@ export async function getDraftOriginFacets(
   {
     const params = [...baseParams];
     const agentClause = filters.agent
-      ? (params.push(filters.agent), `d.source_agent = $${params.length}`)
+      ? (params.push(filters.agent), `coalesce(d.source_agent, 'unknown') = $${params.length}`)
       : null;
     const condition = addedCondition(filters, params);
     const clauses = [agentClause, condition].filter(Boolean) as string[];
@@ -748,7 +748,7 @@ export async function getDraftOriginFacets(
   for (const range of COUNTED_ADDED_RANGES) {
     const params = [...baseParams];
     const agentClause = filters.agent
-      ? (params.push(filters.agent), `d.source_agent = $${params.length}`)
+      ? (params.push(filters.agent), `coalesce(d.source_agent, 'unknown') = $${params.length}`)
       : null;
     const senderOnly = senderClause(params);
     const condition = addedCondition({ ...filters, added: range }, params);

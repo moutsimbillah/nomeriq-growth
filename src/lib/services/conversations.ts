@@ -133,12 +133,15 @@ function mapConversation(row: any): ConversationSummary {
   };
 }
 
-export async function listConversations(input: {
-  onlyReplied?: boolean;
-  query?: string;
-  limit?: number;
-} = {}): Promise<ConversationSummary[]> {
-  const db = await getDb();
+/**
+ * The Inbox WHERE clause, built once so the list and the uncapped counts always admit exactly the
+ * same rows. The conditions reference `$n` placeholders whose values are returned in `params`.
+ * Callers with their own placeholders append their value and use `params.length` for its index.
+ */
+function conversationWhere(input: { onlyReplied?: boolean; query?: string }): {
+  conditions: string[];
+  params: unknown[];
+} {
   const conditions = ["c.last_message_at IS NOT NULL"];
   const params: unknown[] = [];
   if (input.onlyReplied !== false) {
@@ -152,6 +155,16 @@ export async function listConversations(input: {
       ))`,
     );
   }
+  return { conditions, params };
+}
+
+export async function listConversations(input: {
+  onlyReplied?: boolean;
+  query?: string;
+  limit?: number;
+} = {}): Promise<ConversationSummary[]> {
+  const db = await getDb();
+  const { conditions, params } = conversationWhere(input);
   params.push(Math.min(input.limit ?? 100, 200));
   const result = await db.query<any>(
     `SELECT c.*, p.business_name,
@@ -168,6 +181,29 @@ export async function listConversations(input: {
     params,
   );
   return result.rows.map(mapConversation);
+}
+
+/**
+ * How many conversations the Inbox currently admits, and how many unread replies they hold.
+ *
+ * Uncapped on purpose: this is the total for the filter, not the size of the window the list loads.
+ */
+export async function getConversationCounts(
+  input: { onlyReplied?: boolean; query?: string } = {},
+): Promise<{ total: number; unread: number }> {
+  const db = await getDb();
+  const { conditions, params } = conversationWhere(input);
+  const result = await db.query<{ total: number; unread: number }>(
+    `SELECT count(*)::int AS total, coalesce(sum(c.unread_count), 0)::int AS unread
+     FROM conversations c
+     JOIN prospects p ON p.id = c.prospect_id
+     WHERE ${conditions.join(" AND ")}`,
+    params,
+  );
+  return {
+    total: Number(result.rows[0].total),
+    unread: Number(result.rows[0].unread),
+  };
 }
 
 export interface ConversationDetail {
