@@ -205,3 +205,24 @@ After deployment:
 ## Cost shape
 
 The intended production setup is one Vercel project, one small Supabase database, two cron entries (daily follow-ups at 07:00 UTC and the research worker every 5 minutes), and IONOS mail. No containers, queues, separate workers, Redis or paid enrichment API are required. DeepSeek usage is pay-per-call and hard-capped by each target's recorded budget.
+
+## Restoring production safely
+
+`scripts/legacy-import/restore-safe.sh` is the only supported way to put a dump back. It never writes into the
+live database, and its order matters:
+
+1. **Prove the dump before anything is created** — it must exist, be non-empty, and `pg_restore --list` must
+   count table data. A restore with no usable dump is how a rollback destroys what it meant to protect.
+2. **Restore into a NEW database** (`<target>__restore_<utc>`), owned by the app's role.
+3. **Abort if `pg_restore` reports any error.** Never `--clean`, never ignore errors: a restore that prints
+   `errors ignored: N` and carries on leaves a database nobody can trust.
+4. **Verify before swapping** — read the counts from the new database and refuse to continue if it came back
+   empty.
+5. **Swap by renaming** — stop `growth.service`, terminate the remaining connections to the target, rename the
+   live database aside to `<target>__old_<utc>`, then rename the restored one into its place. The previous
+   database is kept, not dropped, so a bad restore is reversible by swapping back.
+6. **Start the service and verify the counts.** Drop the `__old_` database only when you are satisfied.
+
+Rehearse it against a throwaway database (`--target growth_restoretest --rehearsal`, which skips the service
+changes) before trusting it, and note that `import-window.sh` is a one-off record of the 2026-11-05 migration,
+not a tool to run again.

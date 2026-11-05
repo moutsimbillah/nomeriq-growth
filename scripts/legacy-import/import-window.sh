@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# ONE-OFF, NOT FOR REUSE: this is the script that ran the migration on 2026-11-05, kept for the record.
+# Its rollback was not safe (it restored into the live database and ignored errors) and must not be run again.
+# For restoring production, use scripts/legacy-import/restore-safe.sh, documented in docs/DEPLOYMENT.md.
 # The import window. One file, three modes:
 #   --target growth --live             the live window
 #   --target growth_rehearsal          rehearsal: the deploy, the b511f13 redeploy and the timer changes are
