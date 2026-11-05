@@ -1,0 +1,4 @@
+# Bash scripts must keep LF endings, whatever the platform.
+# With core.autocrlf=true a fresh checkout would otherwise give them CRLF and
+# 'bash: bad interpreter' / stray \r failures.
+*.sh text eol=lf
