@@ -29,6 +29,7 @@ import {
 } from "@/lib/services/drafts";
 import { getConversationForProspect } from "@/lib/services/conversations";
 import { SendingProfileControl } from "@/components/sending-profile-control";
+import { FollowUpExclusionControl } from "@/components/follow-up-exclusion-control";
 import {
   getDefaultEmailAccount,
   getEmailAccountRecord,
@@ -189,6 +190,10 @@ export default async function LeadDetailPage({
                 profiles={profileOptions}
               />
             )}
+            <FollowUpExclusionControl
+              prospectId={prospect.id}
+              excluded={prospect.followUpExcluded}
+            />
             {prospect.sourceChannel ? (
               <span className="text-13 font-medium text-muted">
                 via {CHANNEL_LABELS[prospect.sourceChannel]}

@@ -988,6 +988,29 @@ export async function updateProspect(
   return updated;
 }
 
+/**
+ * Keeps a lead out of the automatic follow-up job, without banning contact.
+ *
+ * Exclusion is not suppression: nothing is written to `suppressions`, and the founder can still write
+ * to the lead deliberately from the editor. `do_not_contact` is a different promise — no contact at
+ * all — so this never touches that column, only `follow_up_excluded`.
+ */
+export async function setFollowUpExclusion(
+  prospectId: string,
+  excluded: boolean,
+): Promise<boolean> {
+  const db = await getDb();
+  const result = await db.query<{ follow_up_excluded: boolean }>(
+    `UPDATE prospects SET follow_up_excluded = $2, updated_at = now()
+     WHERE id = $1 AND archived_at IS NULL
+     RETURNING follow_up_excluded`,
+    [prospectId, excluded],
+  );
+  const row = result.rows[0];
+  if (!row) throw new AppError("Prospect not found.", 404, "prospect_not_found");
+  return Boolean(row.follow_up_excluded);
+}
+
 export async function addProspectSource(
   prospectId: string,
   input: { url: string; label: string; notes?: string | null },

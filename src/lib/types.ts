@@ -139,6 +139,8 @@ export interface ProspectDetail extends ProspectSummary {
   linkedinUrl: string | null;
   otherSocials: { label: string; url: string }[];
   doNotContact: boolean;
+  /** Kept out of the automatic follow-up job only; deliberate contact is still allowed. */
+  followUpExcluded: boolean;
   sources: ProspectSource[];
   emails: ProspectEmail[];
   aliases: string[];

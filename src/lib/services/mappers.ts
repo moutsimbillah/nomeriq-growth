@@ -75,6 +75,7 @@ export function mapProspectDetail(
     linkedinUrl: row.linkedin_url,
     otherSocials: json(row.other_socials, []),
     doNotContact: Boolean(row.do_not_contact),
+    followUpExcluded: Boolean(row.follow_up_excluded),
     sources,
     emails,
     aliases,

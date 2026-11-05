@@ -128,4 +128,64 @@ describe("automatic follow-ups", () => {
     expect(more).toHaveLength(1);
     expect(await followUps()).toHaveLength(4);
   });
+
+  it("leaves an excluded lead out without marking it do not contact", async () => {
+    const db = await getDb();
+    // The same shape as the leads above — contacted, unanswered, due — but kept out of the job.
+    const prospect = await db.query<{ id: string }>(
+      `INSERT INTO prospects (id, business_name, name_key, status, created_by_type,
+                              do_not_contact, follow_up_excluded)
+       VALUES (gen_random_uuid(), 'Switch Excluded Lead', 'switch-excluded-lead', 'contacted',
+               'legacy', false, true)
+       RETURNING id`,
+    );
+    const excludedId = prospect.rows[0].id;
+    leads.push(excludedId);
+    const email = "switchexcluded@example.test";
+    await db.query(
+      `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary)
+       VALUES (gen_random_uuid(), $1, $2, $2, 'https://example.test', 'official_website', true)`,
+      [excludedId, email],
+    );
+    const sentAt = new Date(Date.now() - 12 * 86_400_000).toISOString();
+    await db.query(
+      `INSERT INTO conversations (id, prospect_id, subject, last_outbound_at, unread_count)
+       VALUES (gen_random_uuid(), $1, 'Subject', $2::timestamptz, 0)`,
+      [excludedId, sentAt],
+    );
+    await db.query(
+      `INSERT INTO drafts (id, prospect_id, kind, sequence, status, subject, body, recipient_email,
+                           ai_generated, created_by_type, sent_at, created_at, updated_at)
+       VALUES (gen_random_uuid(), $1, 'first_contact', 1, 'sent', 'Subject', 'Body', $2, false, 'legacy',
+               $3::timestamptz, now(), now())`,
+      [excludedId, email, sentAt],
+    );
+    await db.query(
+      `UPDATE workspace_settings SET follow_up_auto_enabled = true, follow_up_daily_limit = 50 WHERE id = 'default'`,
+    );
+
+    const before = await followUps();
+    expect(await prepareFollowUpDrafts({ userId })).toHaveLength(0);
+    expect(await followUps()).toEqual(before);
+    expect(before).not.toContain(excludedId);
+
+    // The pairing that matters: excluded from the job, still contactable by hand.
+    const flags = await db.query<{ follow_up_excluded: boolean; do_not_contact: boolean }>(
+      `SELECT follow_up_excluded, do_not_contact FROM prospects WHERE id = $1`,
+      [excludedId],
+    );
+    expect(flags.rows[0]).toEqual({ follow_up_excluded: true, do_not_contact: false });
+
+    // So it was not skipped for the do_not_contact reason: lift only the exclusion and the same lead
+    // is picked up on the very next run, with do_not_contact still false throughout.
+    await db.query(`UPDATE prospects SET follow_up_excluded = false WHERE id = $1`, [excludedId]);
+    const created = await prepareFollowUpDrafts({ userId });
+    expect(created.map((draft) => draft.prospectId)).toEqual([excludedId]);
+    expect(await followUps()).toContain(excludedId);
+    const after = await db.query<{ do_not_contact: boolean }>(
+      `SELECT do_not_contact FROM prospects WHERE id = $1`,
+      [excludedId],
+    );
+    expect(after.rows[0].do_not_contact).toBe(false);
+  });
 });
