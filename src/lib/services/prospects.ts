@@ -604,6 +604,7 @@ export async function getProspectOriginFacets(
   channels: Record<string, number>;
   senders: Record<string, number>;
   added: Record<string, number>;
+  hasEmail: { yes: number; no: number };
 }> {
   const db = await getDb();
   const conditions = ["p.archived_at IS NULL"];
@@ -740,11 +741,22 @@ export async function getProspectOriginFacets(
   );
   const toMap = (rows: Record<string, unknown>[], field: string) =>
     Object.fromEntries(rows.map((row) => [String(row[field] ?? "unknown"), Number(row.n)]));
+  const emailFilter = prospectWhere({ ...filters, hasEmail: undefined });
+  const emailResult = await db.query<{ yes: number; no: number }>(
+    `SELECT count(*) FILTER (WHERE EXISTS(SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id))::int AS yes,
+            count(*) FILTER (WHERE NOT EXISTS(SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id))::int AS no
+       FROM prospects p WHERE ${emailFilter.conditions.join(" AND ")}`,
+    emailFilter.params,
+  );
   return {
     agents: toMap(agents.rows, "source_agent"),
     channels: toMap(channels.rows, "source_channel"),
     senders: toMap(senders.rows, "sender"),
     added,
+    hasEmail: {
+      yes: Number(emailResult.rows[0]?.yes ?? 0),
+      no: Number(emailResult.rows[0]?.no ?? 0),
+    },
   };
 }
 

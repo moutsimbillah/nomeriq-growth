@@ -24,6 +24,7 @@ export interface LeadFilters {
   /** Only meaningful with `added: "custom"`, as YYYY-MM-DD in Asia/Karachi. */
   addedFrom?: string;
   addedTo?: string;
+  hasEmail?: boolean;
 }
 
 export type LeadFilterParams = Record<string, string | undefined>;
@@ -64,6 +65,7 @@ export function readLeadFilters(params: LeadFilterParams): LeadFilters {
     added,
     addedFrom: added === "custom" ? addedFrom : undefined,
     addedTo: added === "custom" ? addedTo : undefined,
+    hasEmail: params.hasEmail === "yes" ? true : params.hasEmail === "no" ? false : undefined,
   };
 }
 
@@ -79,6 +81,7 @@ export function leadFilterQuery(filters: LeadFilters): string {
   if (filters.channel) search.set("channel", filters.channel);
   if (filters.added) search.set("added", filters.added);
   if (filters.sender) search.set("sender", filters.sender);
+  if (filters.hasEmail !== undefined) search.set("hasEmail", filters.hasEmail ? "yes" : "no");
   if (filters.added === "custom") {
     if (filters.addedFrom) search.set("from", filters.addedFrom);
     if (filters.addedTo) search.set("to", filters.addedTo);
@@ -98,5 +101,6 @@ export function countActiveFilters(filters: LeadFilters): number {
     filters.channel,
     filters.added,
     filters.sender,
+    filters.hasEmail !== undefined ? "hasEmail" : undefined,
   ].filter(Boolean).length;
 }

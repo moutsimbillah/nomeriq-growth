@@ -148,6 +148,16 @@ export default async function LeadsPage({
             <option value="rejected">Rejected</option>
           </select>
           <select
+            name="hasEmail"
+            aria-label="Has email"
+            defaultValue={params.hasEmail || ""}
+            className="select w-auto min-w-[145px]"
+          >
+            <option value="">Has email: Any</option>
+            <option value="yes">Yes ({facets.hasEmail.yes})</option>
+            <option value="no">No ({facets.hasEmail.no})</option>
+          </select>
+          <select
             name="job"
             defaultValue={params.job || ""}
             className="select w-auto min-w-[160px]"
