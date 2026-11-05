@@ -65,7 +65,7 @@ if staged.returncode:
 
 done = psql(open(sys.argv[1], encoding="utf-8").read(), tuples=False) if False else \
        subprocess.run(["psql", "-d", DB, "-X", "-q", "-v", "ON_ERROR_STOP=1", "-c", "\\set VERBOSITY terse",
-                       "-f", sys.argv[1]], capture_output=True, text=True)
+                       "-v", "expected_db=" + DB, "-f", sys.argv[1]], capture_output=True, text=True)
 if done.returncode:
     print("PASS A FAILED")
     print(SCRUB.sub("<redacted>", done.stderr or done.stdout).strip()[:700])

@@ -57,7 +57,7 @@ if staged.returncode:
     print("STAGING THE SENDERS INDEX FAILED"); print(SCRUB.sub("<redacted>", staged.stderr).strip()[:300]); sys.exit(2)
 
 done = subprocess.run(["psql", "-d", DB, "-X", "-q", "-v", "ON_ERROR_STOP=1", "-c", "\\set VERBOSITY terse",
-                       "-f", sys.argv[1]], capture_output=True, text=True)
+                       "-v", "expected_db=" + DB, "-f", sys.argv[1]], capture_output=True, text=True)
 if done.returncode:
     print("PASS B FAILED"); print(SCRUB.sub("<redacted>", done.stderr or done.stdout).strip()[:700]); sys.exit(1)
 

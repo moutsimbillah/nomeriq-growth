@@ -1,3 +1,8 @@
+\set ON_ERROR_STOP on
+-- The expected database is asserted in THIS session, before any work: a runner that resolves the wrong
+-- target cannot get past this line, because the check and the work share one connection.
+SELECT current_database() AS connected_to, :'expected_db' AS expected;
+SELECT 1 / (CASE WHEN current_database() = :'expected_db' THEN 1 ELSE 0 END) AS target_guard;
 -- Pass A: suppressions, the 6 merge groups, leads, emails, sources, aliases, sender pins.
 -- Reads stg.rows and stg.decisions; writes the portal's own tables. Counts, names and codes only in the log.
 BEGIN;

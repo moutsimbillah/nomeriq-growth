@@ -28,13 +28,14 @@ if _got != DB:
 print("target database: " + DB)
 SCRUB = re.compile(r"^\s*(DETAIL|CONTEXT|HINT|QUERY):.*$", re.M)
 def q(sql):
-    a = ["psql","-d","growth_import_dryrun","-X","-q","-v","ON_ERROR_STOP=1","-c","\\set VERBOSITY terse","-A","-t","-F","|","-c",sql]
+    a = ["psql", "-d", DB,"-X","-q","-v","ON_ERROR_STOP=1","-c","\\set VERBOSITY terse","-A","-t","-F","|","-c",sql]
     r = subprocess.run(a, capture_output=True, text=True)
     return "ERR " + SCRUB.sub("<redacted>", r.stderr).strip()[:110] if r.returncode else r.stdout.strip()
-done = subprocess.run(["psql","-d","growth_import_dryrun","-X","-q","-v","ON_ERROR_STOP=1","-c","\\set VERBOSITY terse","-f",sys.argv[1]], capture_output=True, text=True)
+done = subprocess.run(["psql", "-d", DB,"-X","-q","-v","ON_ERROR_STOP=1","-c","\\set VERBOSITY terse","-f",sys.argv[1]], capture_output=True, text=True)
 if done.returncode:
     print("PASS D FAILED"); print(SCRUB.sub("<redacted>", done.stderr or done.stdout).strip()[:600]); sys.exit(1)
 print("PASS D RAN")
+print("verified after commit, from a new connection:")
 for label, sql in [
   ("suppressions with a lead",   "SELECT count(*) FROM suppressions WHERE prospect_id IS NOT NULL"),
   ("suppressions without",       "SELECT count(*) FROM suppressions WHERE prospect_id IS NULL"),

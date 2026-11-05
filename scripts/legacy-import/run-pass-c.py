@@ -27,8 +27,8 @@ if _got != DB:
     raise SystemExit("refusing: asked for '" + DB + "' but the server says '" + _got + "'")
 print("target database: " + DB)
 SCRUB = re.compile(r"^\s*(DETAIL|CONTEXT|HINT|QUERY):.*$", re.M)
-r = subprocess.run(["psql","-d","growth_import_dryrun","-X","-q","-v","ON_ERROR_STOP=1","-c","\\set VERBOSITY terse",
-                    "-f", sys.argv[1]], capture_output=True, text=True)
+r = subprocess.run(["psql", "-d", DB,"-X","-q","-v","ON_ERROR_STOP=1","-c","\\set VERBOSITY terse",
+                    "-v", "expected_db=" + DB, "-f", sys.argv[1]], capture_output=True, text=True)
 print(SCRUB.sub("<redacted>", (r.stdout or "") + (r.stderr or "")).strip()[:4000])
 if r.returncode:
     print("\nPASS C FAILED"); sys.exit(1)

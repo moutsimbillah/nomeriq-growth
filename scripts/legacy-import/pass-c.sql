@@ -1,3 +1,8 @@
+\set ON_ERROR_STOP on
+-- The expected database is asserted in THIS session, before any work: a runner that resolves the wrong
+-- target cannot get past this line, because the check and the work share one connection.
+SELECT current_database() AS connected_to, :'expected_db' AS expected;
+SELECT 1 / (CASE WHEN current_database() = :'expected_db' THEN 1 ELSE 0 END) AS target_guard;
 -- Pass C: read-only checks. The only write is inside a transaction that is rolled back, so the copy is
 -- unchanged when this finishes. Counts and table names only.
 CREATE TABLE IF NOT EXISTS stg.recon (source_table text, in_export int, archived int, mapped int, category text, reason text);
