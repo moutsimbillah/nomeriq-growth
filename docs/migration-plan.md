@@ -265,3 +265,19 @@ the same reason: they are not usable as keys.
 
 Non-email contact routes are not identity keys: the 11 contact forms, 7 Telegram DMs and 3 WhatsApp routes
 go to `other_socials`, or into research notes where they carry context a key cannot hold.
+
+## The live import window (approved 5 Nov 2026)
+
+One window, in this order, with no step skipped:
+
+1. `pg_dump` the live database into `/var/backups/growth` and report the file and its size.
+2. **Deploy `master` to the server** — before the import, in the same window, after the backup. The portal
+   code and the schema it expects must be live before rows are written into it, so the import runs against
+   the same build that will read the data afterwards.
+3. Migrations 017, 018 and 019, applied explicitly and verified in the copy's order.
+4. Pass A, then pass B, then `archive-read-only.sql` — the lock goes last and is proven by attempting each
+   write as the application's role, because a fresh restore has no lock until that step runs.
+5. Pass C as the acceptance report, read-only apart from one transaction that is rolled back.
+
+`moutsim@nomeriq.com` stays unconnected for the whole window, so nothing can send while history is written.
+Connecting it afterwards is what fills the 19 excerpt-only bodies and matches the 8 unmatched inbound rows.
