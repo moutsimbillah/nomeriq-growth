@@ -18,7 +18,7 @@ describe("folder model", () => {
       "To approve",
       "In conversation",
       "Waiting",
-      "New leads",
+      "Not contacted",
     ]);
   });
 
@@ -83,7 +83,7 @@ describe("folder model", () => {
     expect(folderFor({ status: "contacted", lastOutboundAt: T1 })).toBe("waiting");
   });
 
-  it("falls back to New leads for a verified or new provider", () => {
+  it("falls back to Not contacted for a verified or new provider", () => {
     expect(folderFor({ status: "verified" })).toBe("new_leads");
     expect(folderFor({ status: "new" })).toBe("new_leads");
     expect(folderFor({ status: "draft_prepared" })).toBe("new_leads");

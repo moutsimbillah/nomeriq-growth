@@ -98,7 +98,7 @@ export const FOLDERS: readonly FolderDefinition[] = [
   },
   {
     key: "new_leads",
-    label: "New leads",
+    label: "Not contacted",
     group: "Active",
     rule: "Verified, no draft yet.",
   },

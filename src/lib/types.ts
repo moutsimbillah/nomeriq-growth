@@ -33,7 +33,7 @@ export const PIPELINE = [
 export type PipelineStatus = (typeof PIPELINE)[number];
 
 export const PIPELINE_LABELS: Record<PipelineStatus, string> = {
-  new: "New lead",
+  new: "Not contacted",
   verified: "Verified",
   draft_prepared: "Draft prepared",
   contacted: "Contacted",
