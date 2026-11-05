@@ -218,7 +218,8 @@ export function PrepareFollowUpsButton() {
       setMessage(
         result.prepared
           ? `${result.prepared} follow-up draft${result.prepared === 1 ? "" : "s"} prepared for review. Nothing was sent.`
-          : "No follow-ups are due right now.",
+          : // The route names the real cause; "nothing is due" is only one of three possible ones.
+            result.reason || "Nothing is due right now.",
       );
       router.refresh();
     } catch (caught) {

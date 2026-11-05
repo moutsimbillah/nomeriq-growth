@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireEditor } from "@/lib/auth/session";
 import { assertSameOrigin } from "@/lib/auth/request";
-import { prepareFollowUpDrafts } from "@/lib/services/followups";
+import { prepareFollowUpDraftOutcome } from "@/lib/services/followups";
 import { fail, readJson } from "@/lib/api";
 
 export const runtime = "nodejs";
@@ -17,15 +17,18 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const user = await requireEditor();
     const input = schema.parse(await readJson(request).catch(() => ({})));
-    const drafts = await prepareFollowUpDrafts({
+    const outcome = await prepareFollowUpDraftOutcome({
       userId: user.id,
       prospectIds: input.prospectIds,
     });
+    // `reason` is null when drafts were created; otherwise it names the real cause (the switch, the
+    // day's cap, or nothing due) so the button never reports a timing problem that is not one.
     return NextResponse.json({
       ok: true,
       data: {
-        prepared: drafts.length,
-        drafts,
+        prepared: outcome.drafts.length,
+        reason: outcome.reason,
+        drafts: outcome.drafts,
       },
     });
   } catch (error) {

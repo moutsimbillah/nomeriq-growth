@@ -4,14 +4,9 @@ import {
   ArrowLeft,
   ArrowRight,
   Building2,
-  CheckCircle2,
   Clock3,
-  FileText,
   Globe2,
-  Mail,
   MessageSquare,
-  Paperclip,
-  Reply,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
@@ -33,7 +28,8 @@ import {
   ReplyComposer,
   SimulateReplyButton,
 } from "@/components/conversation-actions";
-import { MessageTranslation } from "@/components/message-translation";
+import { ConversationMessage } from "@/components/conversation-message";
+import { translationOffered } from "@/lib/ai/language-detect";
 import { formatDateTime, relativeTime } from "@/lib/utils";
 import { CLASSIFICATION_LABELS } from "@/lib/types";
 
@@ -130,126 +126,31 @@ export default async function ConversationPage({
             const inbound = message.direction === "inbound";
             const body = messageBodyForDisplay(message);
             return (
-              <article
+              <ConversationMessage
                 key={message.id}
-                className={`relative rounded-[18px] border p-5 ${
-                  inbound
-                    ? "border-amber/15 bg-[#fffaf0]"
-                    : "border-line bg-panel"
-                }`}
-              >
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`grid h-7 w-7 place-items-center rounded-full ${
-                        inbound
-                          ? "bg-amber/15 text-amber"
-                          : "bg-forest text-lime"
-                      }`}
-                    >
-                      {inbound ? <Reply size={12} /> : <Mail size={12} />}
-                    </span>
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2 text-12 font-bold uppercase tracking-[0.1em] text-faint">
-                        {inbound ? "Received" : "Sent"}
-                        {message.isSandbox && (
-                          <span className="rounded-full bg-amber/10 px-1.5 py-0.5 text-12 text-amber">
-                            sandbox
-                          </span>
-                        )}
-                        {message.external && (
-                          <span className="rounded-full bg-ink/[0.05] px-1.5 py-0.5 text-12">
-                            synced from IONOS
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-0.5 text-12 text-ink">
-                        {message.fromName ? `${message.fromName} · ` : ""}
-                        {message.fromEmail}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-right text-12 text-faint">
-                    {formatDateTime(message.receivedAt || message.sentAt, settings.timezone)}
-                    {!inbound && (
-                      <div className="mt-0.5">
-                        {message.isSandbox
-                          ? "not delivered"
-                          : message.deliveryStatus}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-4 border-t border-line/60 pt-3">
-                  <div className="mb-2 text-12 font-semibold text-ink">
-                    {message.subject}
-                  </div>
-                  <div
-                    className={
-                      inbound && body.kind !== "pending"
-                        ? "grid gap-4 lg:grid-cols-2"
-                        : undefined
-                    }
-                  >
-                    <div>
-                      {inbound && (
-                        <p className="mb-1.5 text-12 font-semibold text-ink">
-                          Original
-                        </p>
-                      )}
-                      <div
-                        className={
-                          body.kind === "body"
-                            ? "email-body"
-                            : "email-body text-muted"
-                        }
-                      >
-                        {body.text}
-                      </div>
-                      {body.kind === "excerpt" && (
-                        <p className="mt-1 text-12 text-faint">
-                          Excerpt only — the full message appears when the mailbox
-                          is connected.
-                        </p>
-                      )}
-                    </div>
-                    {inbound && body.kind !== "pending" && (
-                      <MessageTranslation
-                        messageId={message.id}
-                        initialTranslation={message.translation}
-                        excerpt={body.kind === "excerpt"}
-                      />
-                    )}
-                  </div>
-                  {message.attachments.length > 0 && (
-                    <div className="mt-4 flex flex-wrap gap-1.5 border-t border-line/60 pt-3">
-                      {message.attachments.map((attachment, attachmentIndex) =>
-                        attachment.id ? (
-                          <a
-                            key={attachment.id}
-                            href={`/api/email/attachments/${attachment.id}`}
-                            className="badge hover:border-ink/25 hover:text-ink"
-                          >
-                            <Paperclip size={9} /> {attachment.filename}
-                          </a>
-                        ) : (
-                          <span key={attachmentIndex} className="badge">
-                            <Paperclip size={9} /> {attachment.filename}
-                          </span>
-                        ),
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Newest first: the first card is the latest message in the thread. */}
-                {index === 0 && inbound && (
-                  <div className="absolute -bottom-2.5 left-5 rounded-full border border-amber/20 bg-[#fffaf0] px-2 py-0.5 text-12 font-semibold uppercase tracking-[0.1em] text-amber">
-                    Latest
-                  </div>
+                messageId={message.id}
+                inbound={inbound}
+                fromName={message.fromName}
+                fromEmail={message.fromEmail}
+                subject={message.subject}
+                bodyKind={body.kind}
+                originalText={body.text}
+                isSandbox={message.isSandbox}
+                external={message.external}
+                deliveryStatus={message.deliveryStatus}
+                timeLabel={formatDateTime(
+                  message.receivedAt || message.sentAt,
+                  settings.timezone,
                 )}
-              </article>
+                attachments={message.attachments}
+                translation={message.translation ?? null}
+                offersTranslation={translationOffered({
+                  direction: message.direction,
+                  text: body.kind === "pending" ? "" : body.text,
+                  cachedStatus: message.translation?.status ?? null,
+                })}
+                latest={index === 0 && inbound}
+              />
             );
           })}
         </div>

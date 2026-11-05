@@ -830,31 +830,80 @@ export async function simulateInboundReply(input: {
   );
 }
 
-export async function listSentMessages(limit = 100) {
+/** How many sent messages the Sent tab loads per step. */
+export const SENT_PAGE_SIZE = 100;
+
+export interface SentMessageRow {
+  id: string;
+  conversationId: string | null;
+  prospectId: string | null;
+  prospectName: string | null;
+  accountEmail: string | null;
+  to: string;
+  subject: string;
+  snippet: string | null;
+  sentAt: string | null;
+  isSandbox: boolean;
+  deliveryStatus: string;
+  external: boolean;
+}
+
+export interface SentMessagePage {
+  rows: SentMessageRow[];
+  /** Every outbound message, never just the window — the Sent tab prints this as the total. */
+  total: number;
+  limit: number;
+  hasMore: boolean;
+}
+
+/**
+ * The Sent tab's window, with the whole filtered total beside it.
+ *
+ * The tab used to load a flat 100 rows and print `sent.length` as its count, which read "100" on a
+ * mailbox holding 454. The window is now the `limit` in the URL (so "Load more" only has to raise
+ * it), the total is counted over every outbound message, and the window is clamped to that total so
+ * repeated steps always reach the last row.
+ */
+export async function listSentMessagesPage(limit = SENT_PAGE_SIZE): Promise<SentMessagePage> {
   const db = await getDb();
+  const counted = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM messages WHERE direction = 'outbound'`,
+  );
+  const total = Number(counted.rows[0]?.n ?? 0);
+  const requested = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : SENT_PAGE_SIZE;
+  const window = Math.min(requested, total);
   const result = await db.query<any>(
     `SELECT m.*, p.business_name, a.email_address AS account_email
      FROM messages m
      LEFT JOIN prospects p ON p.id = m.prospect_id
      LEFT JOIN email_accounts a ON a.id = m.account_id
      WHERE m.direction = 'outbound'
-     ORDER BY COALESCE(m.sent_at, m.created_at) DESC LIMIT $1`,
-    [Math.min(limit, 200)],
+     ORDER BY COALESCE(m.sent_at, m.created_at) DESC, m.id DESC LIMIT $1`,
+    [window],
   );
-  return result.rows.map((row) => ({
-    id: row.id,
-    conversationId: row.conversation_id,
-    prospectId: row.prospect_id,
-    prospectName: row.business_name,
-    accountEmail: row.account_email,
-    to: json<string[]>(row.to_emails, [])[0] ?? "",
-    subject: row.subject,
-    snippet: row.snippet,
-    sentAt: iso(row.sent_at) ?? iso(row.created_at),
-    isSandbox: Boolean(row.is_sandbox),
-    deliveryStatus: row.delivery_status,
-    external: Boolean(row.external),
-  }));
+  return {
+    rows: result.rows.map((row) => ({
+      id: row.id,
+      conversationId: row.conversation_id,
+      prospectId: row.prospect_id,
+      prospectName: row.business_name,
+      accountEmail: row.account_email,
+      to: json<string[]>(row.to_emails, [])[0] ?? "",
+      subject: row.subject,
+      snippet: row.snippet,
+      sentAt: iso(row.sent_at) ?? iso(row.created_at),
+      isSandbox: Boolean(row.is_sandbox),
+      deliveryStatus: row.delivery_status,
+      external: Boolean(row.external),
+    })),
+    total,
+    limit: window,
+    hasMore: window < total,
+  };
+}
+
+export async function listSentMessages(limit = SENT_PAGE_SIZE): Promise<SentMessageRow[]> {
+  return (await listSentMessagesPage(limit)).rows;
 }
 
 export async function listUnknownInbound(limit = 30) {

@@ -103,10 +103,26 @@ export async function listFollowUpCandidates(): Promise<FollowUpCandidate[]> {
   return candidates;
 }
 
-export async function prepareFollowUpDrafts(input: {
+/**
+ * The result of a preparation run, and a plain reason whenever it produced nothing.
+ *
+ * The button used to report "No follow-ups are due right now" for every empty outcome, including the
+ * two that are not about timing at all: automatic follow-ups switched off in Settings, and the day's
+ * preparation cap already used up. Those are the two most likely answers on a fresh workspace, so the
+ * caller now gets the real reason and can say it.
+ */
+export interface PrepareFollowUpOutcome {
+  drafts: Draft[];
+  /** Why nothing was prepared, or null when at least one draft was created. */
+  reason: string | null;
+  /** How many drafts the day's cap still allowed when this run started. */
+  room: number;
+}
+
+export async function prepareFollowUpDraftOutcome(input: {
   userId: string;
   prospectIds?: string[];
-}): Promise<Draft[]> {
+}): Promise<PrepareFollowUpOutcome> {
   const settings = await getWorkspaceSettings();
   if (settings.followUpMax <= 0) {
     throw new AppError(
@@ -117,7 +133,14 @@ export async function prepareFollowUpDrafts(input: {
   if (!settings.followUpAutoEnabled) {
     // Off by default, so an import of hundreds of contacted leads cannot turn into hundreds of drafts
     // on the first night. The founder switches this on in Settings when the backlog should start moving.
-    return [];
+    const candidates = await listFollowUpCandidates();
+    return {
+      drafts: [],
+      room: 0,
+      reason: candidates.some((candidate) => candidate.due)
+        ? `Automatic follow-ups are switched off in Settings, so nothing was prepared. ${candidates.filter((candidate) => candidate.due).length} conversation${candidates.filter((candidate) => candidate.due).length === 1 ? " is" : "s are"} due and waiting.`
+        : "Automatic follow-ups are switched off in Settings, so nothing was prepared. Nothing is due yet either.",
+    };
   }
   const db0 = await getDb();
   const window = addedWindow(
@@ -134,7 +157,13 @@ export async function prepareFollowUpDrafts(input: {
     [window.from.toISOString(), window.to.toISOString()],
   );
   const room = Math.max(0, settings.followUpDailyLimit - Number(madeToday.rows[0]?.n ?? 0));
-  if (room === 0) return [];
+  if (room === 0) {
+    return {
+      drafts: [],
+      room: 0,
+      reason: `Today's preparation limit of ${settings.followUpDailyLimit} follow-up drafts is already used. It resets with the workspace day.`,
+    };
+  }
   const candidates = (await listFollowUpCandidates())
     .filter(
       (candidate) =>
@@ -222,11 +251,46 @@ export async function prepareFollowUpDrafts(input: {
       throw error;
     }
   }
-  return created;
+  return { drafts: created, room, reason: created.length === 0 ? "No conversation is due for a follow-up right now." : null };
 }
 
-export async function listFollowUpDrafts(): Promise<Draft[]> {
+/** Backwards-compatible entry point: the drafts only. */
+export async function prepareFollowUpDrafts(input: {
+  userId: string;
+  prospectIds?: string[];
+}): Promise<Draft[]> {
+  return (await prepareFollowUpDraftOutcome(input)).drafts;
+}
+
+/** How many follow-up drafts the review list loads per step. */
+export const FOLLOW_UP_DRAFT_PAGE_SIZE = 100;
+
+export interface FollowUpDraftPage {
+  rows: Draft[];
+  /** Every follow-up draft in a reviewable state — the list prints this as its total. */
+  total: number;
+  limit: number;
+  hasMore: boolean;
+}
+
+/**
+ * The follow-up drafts shown for review, with the true total beside them.
+ *
+ * This list was capped at 100 rows and its length was presented as the count, which is the same
+ * "capped page reads as the total" fault the Leads page had. The window comes from the caller (the
+ * `limit` in the URL, raised by "Load more") and is clamped to the counted total.
+ */
+export async function listFollowUpDraftsPage(
+  limit = FOLLOW_UP_DRAFT_PAGE_SIZE,
+): Promise<FollowUpDraftPage> {
   const db = await getDb();
+  const counted = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM drafts
+      WHERE kind = 'follow_up' AND status IN ('draft', 'approved', 'sent', 'cancelled')`,
+  );
+  const total = Number(counted.rows[0]?.n ?? 0);
+  const requested = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : FOLLOW_UP_DRAFT_PAGE_SIZE;
+  const window = Math.min(requested, total);
   const result = await db.query<any>(
     `SELECT d.*, p.business_name AS prospect_name,
       (SELECT email FROM prospect_emails pe WHERE pe.prospect_id = p.id
@@ -234,21 +298,53 @@ export async function listFollowUpDrafts(): Promise<Draft[]> {
      FROM drafts d JOIN prospects p ON p.id = d.prospect_id
      WHERE d.kind = 'follow_up' AND d.status IN ('draft', 'approved', 'sent', 'cancelled')
      ORDER BY CASE d.status WHEN 'draft' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END,
-       d.updated_at DESC LIMIT 100`,
+       d.updated_at DESC LIMIT $1`,
+    [window],
   );
-  return result.rows.map(mapDraft);
+  return {
+    rows: result.rows.map(mapDraft),
+    total,
+    limit: window,
+    hasMore: window < total,
+  };
 }
 
+export async function listFollowUpDrafts(): Promise<Draft[]> {
+  return (await listFollowUpDraftsPage()).rows;
+}
+
+/**
+ * The four counters above the Follow-ups tab.
+ *
+ * The draft counters are counted in SQL rather than derived from the loaded list: the list is a
+ * window, so counting its rows would report "100 drafts ready" on a backlog of 300. The candidate
+ * counters come from the candidate list itself, which is already uncapped (every contacted thread is
+ * considered, and the list is filtered in code by reply state and suppression).
+ */
 export async function getFollowUpOverview() {
   const candidates = await listFollowUpCandidates();
-  const drafts = await listFollowUpDrafts();
+  const db = await getDb();
+  const counted = await db.query<{
+    ready: number;
+    approved: number;
+    sent: number;
+    cancelled: number;
+  }>(
+    `SELECT
+       count(*) FILTER (WHERE status = 'draft')::int AS ready,
+       count(*) FILTER (WHERE status = 'approved')::int AS approved,
+       count(*) FILTER (WHERE status = 'sent')::int AS sent,
+       count(*) FILTER (WHERE status = 'cancelled')::int AS cancelled
+     FROM drafts WHERE kind = 'follow_up'`,
+  );
+  const row = counted.rows[0];
   return {
     waiting: candidates.length,
     due: candidates.filter((candidate) => candidate.due).length,
-    readyDrafts: drafts.filter((draft) => draft.status === "draft").length,
-    approvedDrafts: drafts.filter((draft) => draft.status === "approved").length,
-    sent: drafts.filter((draft) => draft.status === "sent").length,
-    cancelled: drafts.filter((draft) => draft.status === "cancelled").length,
+    readyDrafts: Number(row?.ready ?? 0),
+    approvedDrafts: Number(row?.approved ?? 0),
+    sent: Number(row?.sent ?? 0),
+    cancelled: Number(row?.cancelled ?? 0),
   };
 }
 

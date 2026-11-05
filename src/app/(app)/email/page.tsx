@@ -16,8 +16,9 @@ import {
   getConversation,
   getConversationCounts,
   listConversations,
-  listSentMessages,
+  listSentMessagesPage,
   listUnknownInbound,
+  SENT_PAGE_SIZE,
 } from "@/lib/services/conversations";
 import { defaultSenderLabel, NO_SENDER_LABEL, senderLabels, senderShortName } from "@/lib/email/senderPill";
 import {
@@ -30,9 +31,10 @@ import { ADDED_LABELS, COUNTED_ADDED_RANGES } from "@/lib/dates/pakistan";
 import { readLeadFilters } from "@/lib/leads/leadFilters";
 import { AGENT_LABELS, AGENT_TAGS } from "@/lib/agent/agentTag";
 import {
+  FOLLOW_UP_DRAFT_PAGE_SIZE,
   getFollowUpOverview,
   listFollowUpCandidates,
-  listFollowUpDrafts,
+  listFollowUpDraftsPage,
 } from "@/lib/services/followups";
 import { listCampaigns } from "@/lib/services/campaigns";
 import { listEmailAccounts } from "@/lib/email/accounts";
@@ -95,29 +97,31 @@ export default async function EmailPage({
   };
   const active = tabMap[(params.tab || "inbox").toLowerCase()] || "Inbox";
 
-  // The Drafts window is the query string's `limit`, so "Load more" only has to raise it. The service
-  // clamps it to the true filtered total, which the Drafts header prints.
-  const requestedDraftLimit = Number.parseInt(params.limit ?? "", 10);
-  const draftWindow =
-    Number.isFinite(requestedDraftLimit) && requestedDraftLimit > 0
-      ? requestedDraftLimit
-      : DRAFT_PAGE_SIZE;
+  // Each tab's window is the query string's `limit`, so "Load more" only has to raise it. Every
+  // service below clamps the window to the true counted total, and the page prints that total, so a
+  // capped page is never presented as the count.
+  const requestedLimit = Number.parseInt(params.limit ?? "", 10);
+  const windowFromUrl = (fallback: number) =>
+    Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : fallback;
+  const draftWindow = windowFromUrl(DRAFT_PAGE_SIZE);
+  const sentWindow = windowFromUrl(SENT_PAGE_SIZE);
+  const followUpDraftWindow = windowFromUrl(FOLLOW_UP_DRAFT_PAGE_SIZE);
 
   const [
     conversations,
-    sent,
+    sentPage,
     draftPage,
     campaigns,
     followOverview,
     followCandidates,
-    followDrafts,
+    followDraftPage,
     accounts,
     unknown,
     inboxCounts,
     openDraftTotal,
   ] = await Promise.all([
     listConversations({ onlyReplied: true, limit: 100 }),
-    listSentMessages(100),
+    listSentMessagesPage(sentWindow),
     listDraftsPage(undefined, draftWindow, filters.agent, {
       agent: filters.agent,
       sender: filters.sender,
@@ -130,7 +134,7 @@ export default async function EmailPage({
     listCampaigns(),
     getFollowUpOverview(),
     listFollowUpCandidates(),
-    listFollowUpDrafts(),
+    listFollowUpDraftsPage(followUpDraftWindow),
     listEmailAccounts(),
     listUnknownInbound(20),
     getConversationCounts({ onlyReplied: true }),
@@ -144,19 +148,28 @@ export default async function EmailPage({
       now: filters.now,
     }),
   ]);
+  const sent = sentPage.rows;
+  const followDrafts = followDraftPage.rows;
   const drafts = draftPage.rows;
   const draftsTotal = draftPage.total;
-  // "Load more" for Drafts keeps every filter in the address bar and only raises the window.
-  const draftMoreParams = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value && key !== "limit") draftMoreParams.set(key, value);
-  }
-  draftMoreParams.set("tab", "drafts");
-  draftMoreParams.set(
-    "limit",
-    String(Math.min(draftPage.limit + DRAFT_PAGE_SIZE, draftsTotal)),
+  /** A "Load more" href that keeps every active parameter and only raises the window. */
+  const loadMoreHref = (tab: string, current: number, step: number, total: number) => {
+    const next = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value && key !== "limit") next.set(key, value);
+    }
+    next.set("tab", tab);
+    next.set("limit", String(Math.min(current + step, total)));
+    return `/email?${next.toString()}`;
+  };
+  const draftLoadMoreHref = loadMoreHref("drafts", draftPage.limit, DRAFT_PAGE_SIZE, draftsTotal);
+  const sentLoadMoreHref = loadMoreHref("sent", sentPage.limit, SENT_PAGE_SIZE, sentPage.total);
+  const followUpLoadMoreHref = loadMoreHref(
+    "followups",
+    followDraftPage.limit,
+    FOLLOW_UP_DRAFT_PAGE_SIZE,
+    followDraftPage.total,
   );
-  const draftLoadMoreHref = `/email?${draftMoreParams.toString()}`;
   const senderLabelById = senderLabels(accounts);
   const defaultProfile = accounts.find((account) => account.isDefault) ?? accounts[0] ?? null;
   const defaultLabel = defaultSenderLabel(defaultProfile);
@@ -203,7 +216,7 @@ export default async function EmailPage({
       // The unread total for the whole filter, not the sum over the loaded window.
       count: inboxCounts.unread,
     },
-    { href: "/email?tab=sent", label: "Sent", count: sent.length },
+    { href: "/email?tab=sent", label: "Sent", count: sentPage.total },
     {
       href: "/email?tab=drafts",
       label: "Drafts",
@@ -387,6 +400,23 @@ export default async function EmailPage({
 
       {active === "Sent" && (
         <Card className="mt-4 overflow-hidden">
+          {/* The whole outbound set is counted, never the loaded window: this tab printed the size
+              of its own page as the count, so a mailbox holding 454 read "100". */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5 text-12 text-muted">
+            <span className="flex items-center gap-2">
+              <Send size={13} />
+              {sentPage.total === 0 ? (
+                <span>0 sent messages</span>
+              ) : (
+                <span>
+                  Showing <strong className="font-bold text-ink">{sent.length}</strong> of{" "}
+                  <strong className="font-bold text-ink">{sentPage.total}</strong>{" "}
+                  {sentPage.total === 1 ? "sent message" : "sent messages"}
+                </span>
+              )}
+            </span>
+            <span className="text-faint">Newest first</span>
+          </div>
           {sent.length === 0 ? (
             <EmptyState
               icon="sparkles"
@@ -453,6 +483,16 @@ export default async function EmailPage({
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {sentPage.hasMore && (
+            <div className="flex flex-wrap items-center justify-center gap-3 border-t border-line px-4 py-3 text-12">
+              <Link href={sentLoadMoreHref} className="btn-secondary btn-sm">
+                Load more
+              </Link>
+              <span className="text-faint">
+                {sentPage.total - sent.length} more not shown yet.
+              </span>
             </div>
           )}
         </Card>
@@ -751,6 +791,22 @@ export default async function EmailPage({
               />
               <PrepareFollowUpsButton />
             </div>
+            {/* The true total, never the window: the same fault the Leads page had. */}
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-12 text-muted">
+              <span className="flex items-center gap-2">
+                <MessageSquare size={13} />
+                {followDraftPage.total === 0 ? (
+                  <span>0 follow-up drafts</span>
+                ) : (
+                  <span>
+                    Showing <strong className="font-bold text-ink">{followDrafts.length}</strong> of{" "}
+                    <strong className="font-bold text-ink">{followDraftPage.total}</strong>{" "}
+                    {followDraftPage.total === 1 ? "follow-up draft" : "follow-up drafts"}
+                  </span>
+                )}
+              </span>
+              <span className="text-faint">Drafts first, then approved</span>
+            </div>
             {followDrafts.length === 0 ? (
               <EmptyState
                 icon="inbox"
@@ -784,6 +840,16 @@ export default async function EmailPage({
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+            {followDraftPage.hasMore && (
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-3 text-12">
+                <Link href={followUpLoadMoreHref} className="btn-secondary btn-sm">
+                  Load more
+                </Link>
+                <span className="text-faint">
+                  {followDraftPage.total - followDrafts.length} more not shown yet.
+                </span>
               </div>
             )}
           </Card>
