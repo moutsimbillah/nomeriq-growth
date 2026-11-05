@@ -46,6 +46,8 @@ export async function listFollowUpCandidates(): Promise<FollowUpCandidate[]> {
      JOIN prospects p ON p.id = c.prospect_id
      WHERE c.last_outbound_at IS NOT NULL AND p.archived_at IS NULL
        AND p.do_not_contact = false
+       -- a lead excluded from automatic follow-ups is not suppressed, only left out of the job
+       AND p.follow_up_excluded = false
      ORDER BY c.last_outbound_at DESC`,
   );
   const candidates: FollowUpCandidate[] = [];

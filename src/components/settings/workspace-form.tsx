@@ -171,7 +171,7 @@ export function WorkspaceSettingsForm({
             </p>
           </div>
           <div>
-            <label className="label">Followers per day</label>
+            <label className="label">Follow-ups per day</label>
             <input
               type="number"
               min={0}

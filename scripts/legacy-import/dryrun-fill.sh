@@ -24,8 +24,9 @@ pg_dump -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$LIVE_DB" --no-owner --no-pri
 echo "restore_exit=$?"
 
 echo "=== 3. apply 017, 018, 019 to the copy (live has up to 016) ==="
-for f in 017_legacy_origin.sql 018_legacy_archive.sql 019_legacy_message_source.sql; do
-  printf "  %-32s " "$f"
+# every migration in the directory, in order: the list is not hardcoded, so a new one cannot be forgotten
+for f in $(ls "$MIGRATIONS"/*.sql | xargs -n1 basename | sort); do
+  printf "  %-34s " "$f"
   if psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$DRY" -q -v ON_ERROR_STOP=1 \
        -f "$MIGRATIONS/$f" >/dev/null 2>&1; then echo APPLIED; else echo FAILED; fi
 done

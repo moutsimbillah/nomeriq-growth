@@ -125,8 +125,15 @@ UPDATE conversations c SET
        updated_at = now();
 
 -- B5b. the reply classification the follow-up job reads, in the case it compares against
-UPDATE conversations c SET classification = sub.classification, classification_source = 'legacy_import'
-  FROM (SELECT om.prospect_id, lower(r.data->>'classification') AS classification
+UPDATE conversations c SET classification = sub.classification, classification_source = 'rules'
+  FROM (SELECT om.prospect_id,
+               CASE upper(coalesce(r.data->>'classification', ''))
+                 WHEN 'NOT_INTERESTED' THEN 'not_interested'
+                 WHEN 'ASKS_TECHNICAL_QUESTION' THEN 'technical'
+                 WHEN 'ASKS_PRICING_QUESTION' THEN 'pricing'
+                 WHEN 'INTERESTED' THEN 'interested'
+                 WHEN 'UNSUBSCRIBE' THEN 'unsubscribe'
+                 ELSE 'other' END AS classification
           FROM stg.rows r JOIN stg.old_to_new om ON om.old_prospect_id = r.data->>'prospect_id'
          WHERE r.source_table = 'marketing_outreach_replies') sub
  WHERE sub.prospect_id = c.prospect_id;
