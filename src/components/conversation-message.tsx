@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Languages, Mail, Paperclip, Reply } from "lucide-react";
 import { apiRequest } from "@/components/client-ui";
+import { TextWithLinks } from "@/components/message-links";
 import { translationViewState } from "@/lib/email/translation-view";
 import type { CachedTranslation } from "@/lib/services/message-translations";
 
@@ -171,8 +172,9 @@ export function ConversationMessage(props: ConversationMessageProps) {
           <p className="mb-1.5 text-12 font-semibold text-ink">Original</p>
         )}
 
-        <div className={bodyKind === "body" ? "email-body" : "email-body text-muted"}>
-          {view.text}
+        {/* min-w-0 + anywhere: a long unbroken URL wraps inside this column instead of widening it. */}
+        <div className="email-body min-w-0 break-anywhere text-muted">
+          <TextWithLinks text={view.text} />
         </div>
 
         {bodyKind === "excerpt" && (

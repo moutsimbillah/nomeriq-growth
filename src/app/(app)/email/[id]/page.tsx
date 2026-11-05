@@ -120,8 +120,10 @@ export default async function ConversationPage({
         </div>
       )}
 
-      <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
-        <div className="space-y-3">
+      {/* minmax(0,…) rather than 1.5fr/1fr: a bare fr track is minmax(auto,fr), so one long
+          unbroken URL would widen the message column and push the reply panel off-screen. */}
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+        <div className="min-w-0 space-y-3">
           {conversation.messages.map((message, index) => {
             const inbound = message.direction === "inbound";
             const body = messageBodyForDisplay(message);
@@ -155,7 +157,7 @@ export default async function ConversationPage({
           })}
         </div>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           {hasInbound ? (
             <ReplyComposer
               conversationId={conversation.id}

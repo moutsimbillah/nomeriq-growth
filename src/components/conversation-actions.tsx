@@ -259,7 +259,7 @@ export function ReplyComposer({
   }
 
   return (
-    <div className="card overflow-hidden">
+    <div className="card min-w-0 overflow-hidden">
       <div className="border-b border-line px-5 py-4">
         {/* The row wraps rather than the label: at narrow widths the button takes its own line
             (`w-full`, reset at `sm`) instead of breaking "Suggest with AI" across two lines. */}
@@ -269,7 +269,7 @@ export function ReplyComposer({
               <Send size={14} className="text-muted" />
               <h2 className="text-13 font-bold text-ink">Write reply</h2>
             </div>
-            <p className="mt-0.5 break-words text-12 text-faint">
+            <p className="mt-0.5 break-anywhere text-12 text-faint">
               To {recipient} · your click sends the reviewed version
             </p>
           </div>

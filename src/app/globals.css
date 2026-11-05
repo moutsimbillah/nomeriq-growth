@@ -244,7 +244,10 @@ a {
   }
 
   .email-body {
-    @apply whitespace-pre-wrap break-words text-14 leading-7 text-ink;
+    /* `anywhere` rather than `break-word`: only `anywhere` counts the break opportunities when the
+       element's min-content width is calculated, which is what stops a 2,000-character URL from
+       widening the grid column instead of wrapping inside it. */
+    @apply whitespace-pre-wrap break-anywhere text-14 leading-7 text-ink;
   }
 
   .field-hint {
@@ -254,6 +257,17 @@ a {
   .border-dashed-line {
     border-style: dashed;
   }
+}
+
+/* A long unbroken URL (a 2,000-character tracking link) must not be able to widen its column.
+   `break-anywhere` sets `overflow-wrap: anywhere`, which — unlike `break-word` — counts the break
+   opportunities when the box's min-content width is calculated; without that, a grid track sized
+   `auto` grows to fit the whole URL and pushes its neighbour off-screen. Defined outside
+   `@layer components` on purpose, so the utility layer keeps winning over a layered `break-words`. */
+@utility break-anywhere {
+  overflow-wrap: anywhere;
+  -webkit-line-break: anywhere;
+  -webkit-overflow-wrap: anywhere;
 }
 
 /* Fade only — deliberately no transform. A running (or fill-mode: both) animation that carries a
