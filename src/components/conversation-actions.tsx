@@ -261,20 +261,22 @@ export function ReplyComposer({
   return (
     <div className="card overflow-hidden">
       <div className="border-b border-line px-5 py-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
+        {/* The row wraps rather than the label: at narrow widths the button takes its own line
+            (`w-full`, reset at `sm`) instead of breaking "Suggest with AI" across two lines. */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Send size={14} className="text-muted" />
               <h2 className="text-13 font-bold text-ink">Write reply</h2>
             </div>
-            <p className="mt-0.5 text-12 text-faint">
+            <p className="mt-0.5 break-words text-12 text-faint">
               To {recipient} · your click sends the reviewed version
             </p>
           </div>
           <button
             type="button"
             onClick={suggest}
-            className="btn-secondary btn-xs"
+            className="btn-secondary btn-xs w-full whitespace-nowrap sm:w-auto"
             disabled={!!pending}
           >
             {pending === "suggest" ? (
@@ -282,7 +284,9 @@ export function ReplyComposer({
             ) : (
               <WandSparkles size={10} />
             )}
-            {body ? "Suggest again" : "Suggest with AI"}
+            <span className="whitespace-nowrap">
+              {body ? "Suggest again" : "Suggest with AI"}
+            </span>
           </button>
         </div>
       </div>

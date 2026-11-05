@@ -15,7 +15,10 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { getConversation } from "@/lib/services/conversations";
+import {
+  getConversation,
+  messageBodyForDisplay,
+} from "@/lib/services/conversations";
 import { getDefaultEmailAccount } from "@/lib/email/accounts";
 import {
   Card,
@@ -60,9 +63,9 @@ export default async function ConversationPage({
   const hasInbound = conversation.messages.some(
     (message) => message.direction === "inbound",
   );
-  const lastInbound = [...conversation.messages]
-    .reverse()
-    .find((message) => message.direction === "inbound");
+  const lastInbound = conversation.messages.find(
+    (message) => message.direction === "inbound",
+  );
   const defaultSubject = lastInbound?.subject?.toLowerCase().startsWith("re:")
     ? lastInbound.subject
     : `Re: ${lastInbound?.subject || conversation.subject}`;
@@ -122,6 +125,7 @@ export default async function ConversationPage({
         <div className="space-y-3">
           {conversation.messages.map((message, index) => {
             const inbound = message.direction === "inbound";
+            const body = messageBodyForDisplay(message);
             return (
               <article
                 key={message.id}
@@ -178,7 +182,19 @@ export default async function ConversationPage({
                   <div className="mb-2 text-12 font-semibold text-ink">
                     {message.subject}
                   </div>
-                  <div className="email-body">{message.bodyText}</div>
+                  <div
+                    className={
+                      body.kind === "body" ? "email-body" : "email-body text-muted"
+                    }
+                  >
+                    {body.text}
+                  </div>
+                  {body.kind === "excerpt" && (
+                    <p className="mt-1 text-12 text-faint">
+                      Excerpt only — the full message appears when the mailbox is
+                      connected.
+                    </p>
+                  )}
                   {message.attachments.length > 0 && (
                     <div className="mt-4 flex flex-wrap gap-1.5 border-t border-line/60 pt-3">
                       {message.attachments.map((attachment, attachmentIndex) =>
@@ -200,7 +216,8 @@ export default async function ConversationPage({
                   )}
                 </div>
 
-                {index === conversation.messages.length - 1 && inbound && (
+                {/* Newest first: the first card is the latest message in the thread. */}
+                {index === 0 && inbound && (
                   <div className="absolute -bottom-2.5 left-5 rounded-full border border-amber/20 bg-[#fffaf0] px-2 py-0.5 text-12 font-semibold uppercase tracking-[0.1em] text-amber">
                     Latest
                   </div>

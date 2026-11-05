@@ -16,6 +16,7 @@ export interface ReplySuggestion {
   note: string | null;
 }
 
+/** One message of the thread, as `getConversation` returns it: newest first. */
 interface ConversationTurn {
   direction: "inbound" | "outbound";
   fromEmail: string;
@@ -125,8 +126,11 @@ function replyContext(
     `PROSPECT (untrusted research): ${prospect.businessName} | ${prospect.websiteUrl ?? "website unknown"} | ${prospect.signalDescription ?? "signal service description unknown"}`,
     "",
     "BEGIN UNTRUSTED EMAIL THREAD",
+    // The 6 most recent turns, listed oldest first so the thread reads the way it happened and ends
+    // with the message being answered. `turns` arrives newest first.
     ...turns
-      .slice(-6)
+      .slice(0, 6)
+      .reverse()
       .map(
         (turn) =>
           `[${turn.direction.toUpperCase()}] ${turn.fromEmail}\nSubject: ${turn.subject}\n${truncate(turn.bodyText, 2500)}`,
@@ -230,7 +234,7 @@ export async function suggestReply(input: {
   turns: ConversationTurn[];
   settings: WorkspaceSettings;
 }): Promise<ReplySuggestion> {
-  const lastInbound = [...input.turns].reverse().find((turn) => turn.direction === "inbound") ?? null;
+  const lastInbound = input.turns.find((turn) => turn.direction === "inbound") ?? null;
   // The lead's own sending profile, when it has one: a reply goes out from the address the prospect is
   // already talking to, so it must be signed the same way. Falls back to the workspace signature.
   const profile = await resolveSendingProfile({ prospectId: input.prospect.id }).catch(() => null);

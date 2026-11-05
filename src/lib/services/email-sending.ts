@@ -245,9 +245,11 @@ async function latestConversationMessage(conversationId: string) {
     references_json: unknown;
     subject: string;
   }>(
+    // The same "newest by its real time" order as the conversation page: `created_at` is the import
+    // time for imported rows, so it cannot say which message really came last.
     `SELECT message_id, references_json, subject FROM messages
      WHERE conversation_id = $1
-     ORDER BY created_at DESC LIMIT 1`,
+     ORDER BY COALESCE(sent_at, received_at, created_at) DESC, created_at DESC, id DESC LIMIT 1`,
     [conversationId],
   );
   return result.rows[0] ?? null;

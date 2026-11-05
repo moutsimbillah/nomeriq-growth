@@ -455,7 +455,8 @@ describe("Nomeriq Growth end-to-end workflow", () => {
 
     const detail = await getConversation(conversation!.id);
     expect(detail?.messages.filter((message) => message.direction === "outbound")).toHaveLength(2);
-    expect(detail?.messages.at(-1)?.bodyText).toContain("Tuesday at 3pm");
+    // the thread is newest first: the reply just recorded is the first message
+    expect(detail?.messages.at(0)?.bodyText).toContain("Tuesday at 3pm");
   });
 
   it("creates and completes a founder-authorized sandbox campaign without duplicates", async () => {

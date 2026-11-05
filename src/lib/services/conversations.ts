@@ -30,7 +30,57 @@ import {
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+/**
+ * The instant a message really happened, newest first.
+ *
+ * `created_at` is the row's insert time, and for an imported row that is the import time — identical
+ * for every row of that import, so it says nothing about the order the conversation happened in.
+ * The real time is `sent_at`, falling back to `received_at`, and only then `created_at`; that is the
+ * same convention `listSentMessages` and `listUnknownInbound` already use. `id` breaks a tie, so two
+ * messages with the same instant never swap places between renders.
+ */
+function newestMessageFirst(alias = ""): string {
+  const column = (name: string) => (alias ? `${alias}.${name}` : name);
+  return [
+    `COALESCE(${column("sent_at")}, ${column("received_at")}, ${column("created_at")}) DESC`,
+    `${column("created_at")} DESC`,
+    `${column("id")} DESC`,
+  ].join(", ");
+}
+
+/** What an imported message with no full body shows instead of an empty card. */
+export const MESSAGE_BODY_PENDING_TEXT =
+  "Full text not imported yet. It appears when the mailbox is connected.";
+
+export type MessageBodyKind = "body" | "excerpt" | "pending";
+
+export interface MessageBodyDisplay {
+  kind: MessageBodyKind;
+  text: string;
+}
+
+/**
+ * What to show where a message's body goes.
+ *
+ * Imported rows can arrive with `body_text = ''` and only the excerpt the old portal kept in
+ * `snippet`. The human-readable reason why the body is missing lives in `error` — that is importer
+ * bookkeeping and is never shown to the founder. So: the body when there is one, the excerpt when
+ * that is all there is, and a plain notice when neither exists.
+ */
+export function messageBodyForDisplay(
+  message: Pick<Message, "bodyText" | "snippet">,
+): MessageBodyDisplay {
+  if (message.bodyText?.trim()) {
+    return { kind: "body", text: message.bodyText };
+  }
+  const excerpt = message.snippet?.trim();
+  if (excerpt) return { kind: "excerpt", text: excerpt };
+  return { kind: "pending", text: MESSAGE_BODY_PENDING_TEXT };
+}
+
 function mapMessage(row: any): Message {
+  // `error` is deliberately not mapped: it carries importer bookkeeping such as
+  // "excerpt only, full body pending mailbox sync", which is not something to show a founder.
   return {
     id: row.id,
     conversationId: row.conversation_id,
@@ -105,7 +155,7 @@ export async function listConversations(input: {
          ORDER BY pe.is_primary DESC LIMIT 1) AS contact_email,
        (SELECT m.snippet FROM messages m WHERE m.conversation_id = c.id
          AND m.direction = 'inbound'
-         ORDER BY m.created_at DESC LIMIT 1) AS snippet
+         ORDER BY ${newestMessageFirst("m")} LIMIT 1) AS snippet
      FROM conversations c
      JOIN prospects p ON p.id = c.prospect_id
      WHERE ${conditions.join(" AND ")}
@@ -146,13 +196,15 @@ export async function getConversation(
   if (!row) return null;
   const prospect = await getProspect(row.prospect_id);
   if (!prospect) return null;
+  // Newest first, by the time each message really happened: for imported rows `created_at` is the
+  // import time and identical across the import, so it cannot order the thread.
   const messages = await db.query<any>(
-    `SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC`,
+    `SELECT * FROM messages WHERE conversation_id = $1 ORDER BY ${newestMessageFirst()}`,
     [id],
   );
-  const lastInbound = [...messages.rows]
-    .reverse()
-    .find((message) => message.direction === "inbound");
+  const lastInbound = messages.rows.find(
+    (message) => message.direction === "inbound",
+  );
   const addresses = [prospect.contactEmail, lastInbound?.from_email]
     .filter((value): value is string => Boolean(value))
     .map(normalizeEmail);
@@ -410,13 +462,13 @@ export async function sendReply(input: SendReplyInput) {
   }
   await assertAccountCanSend(account.id);
 
-  const lastInbound = [...conversation.messages]
-    .reverse()
-    .find((message) => message.direction === "inbound");
+  const lastInbound = conversation.messages.find(
+    (message) => message.direction === "inbound",
+  );
   if (!lastInbound) throw new AppError("No inbound message to reply to.", 409);
   const previousMessage = await db.query<{ message_id: string | null; references_json: unknown }>(
     `SELECT message_id, references_json FROM messages
-     WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1`,
+     WHERE conversation_id = $1 ORDER BY ${newestMessageFirst()} LIMIT 1`,
     [conversation.id],
   );
   const references = [
@@ -656,7 +708,7 @@ export async function simulateInboundReply(input: {
     `SELECT m.*, a.provider FROM messages m
      LEFT JOIN email_accounts a ON a.id = m.account_id
      WHERE m.conversation_id = $1 AND m.direction = 'outbound'
-     ORDER BY m.created_at DESC LIMIT 1`,
+     ORDER BY ${newestMessageFirst("m")} LIMIT 1`,
     [input.conversationId],
   );
   if (!lastOutbound.rows[0] || lastOutbound.rows[0].provider !== "sandbox") {
