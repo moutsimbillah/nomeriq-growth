@@ -153,7 +153,7 @@ export default async function LeadDetailPage({
       </div>
 
       <PageHeader
-        eyebrow={`${prospect.country || "Country unknown"} · discovered ${formatDate(prospect.createdAt)}`}
+        eyebrow={`${prospect.country || "Country unknown"} · discovered ${formatDate(prospect.createdAt, undefined, settings.timezone)}`}
         title={prospect.businessName}
         titleAside={
           <span className="flex flex-wrap items-center gap-x-2.5 gap-y-2">
@@ -273,7 +273,7 @@ export default async function LeadDetailPage({
                   <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-12 text-muted">
                     <span className="inline-flex items-center gap-1">
                       <ShieldCheck size={10} className="text-forest" />
-                      Verified {prospect.verifiedAt ? formatDate(prospect.verifiedAt) : "date unknown"}
+                      Verified {prospect.verifiedAt ? formatDate(prospect.verifiedAt, undefined, settings.timezone) : "date unknown"}
                         {prospect.sourceAgent
                           ? ` · Found by ${AGENT_LABELS[prospect.sourceAgent]}${
                               prospect.sourceChannel ? ` via ${CHANNEL_LABELS[prospect.sourceChannel]}` : ""
@@ -372,7 +372,7 @@ export default async function LeadDetailPage({
                           className="text-faint group-hover:text-ink"
                         />
                         <div className="mt-1 text-12 text-faint">
-                          {formatDate(source.observedAt)}
+                          {formatDate(source.observedAt, undefined, settings.timezone)}
                         </div>
                       </div>
                     </a>
@@ -567,7 +567,7 @@ export default async function LeadDetailPage({
                   <span className="font-semibold text-ink">Observed</span>
                   <br />
                   {prospect.verifiedAt
-                    ? formatDateTime(prospect.verifiedAt)
+                    ? formatDateTime(prospect.verifiedAt, settings.timezone)
                     : "Not verified"}
                 </div>
               </div>
@@ -585,7 +585,7 @@ export default async function LeadDetailPage({
                 <div className="text-12 leading-5 text-muted">
                   <span className="font-semibold text-ink">Last updated</span>
                   <br />
-                  {formatDateTime(prospect.updatedAt)}
+                  {formatDateTime(prospect.updatedAt, settings.timezone)}
                 </div>
               </div>
             </div>

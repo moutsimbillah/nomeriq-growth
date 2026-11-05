@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db/client";
 import { AppError, asStringArray, iso, json, number } from "@/lib/utils";
 import type { ProductTruth } from "@/lib/types";
+import { DEFAULT_TIMEZONE, isValidTimezone } from "@/lib/dates/timezone";
 import { mapProductTruth } from "./mappers";
 
 export interface WorkspaceSettings {
@@ -79,7 +80,7 @@ export async function getWorkspaceSettings(): Promise<WorkspaceSettings> {
     followUpDelay1Days: number(row.follow_up_delay_1_days, 4),
     followUpDelay2Days: number(row.follow_up_delay_2_days, 7),
     syncStaleHours: number(row.sync_stale_hours, 24),
-    timezone: row.timezone,
+    timezone: isValidTimezone(row.timezone) ? row.timezone : DEFAULT_TIMEZONE,
     researchDefaultBudgetUsd: number(row.research_default_budget_usd, 5),
     researchDefaultConcurrency: number(row.research_default_concurrency, 1),
     deepseekSearchQps: number(row.deepseek_search_qps, 2),
@@ -91,6 +92,13 @@ export async function updateWorkspaceSettings(
   input: Partial<WorkspaceSettings>,
   userId: string,
 ): Promise<WorkspaceSettings> {
+  if (input.timezone !== undefined && !isValidTimezone(input.timezone)) {
+    throw new AppError(
+      "Choose a valid IANA timezone.",
+      400,
+      "invalid_timezone",
+    );
+  }
   await ensureWorkspaceDefaults();
   const current = await getWorkspaceSettings();
   const next = { ...current, ...input };

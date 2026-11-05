@@ -13,6 +13,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { getDashboardData } from "@/lib/services/dashboard";
+import { getWorkspaceSettings } from "@/lib/services/settings";
 import {
   Card,
   CategoryList,
@@ -31,12 +32,12 @@ import { CLASSIFICATION_LABELS } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-function greeting(): string {
+function greeting(timezone: string): string {
   const hour = Number(
     new Intl.DateTimeFormat("en-GB", {
       hour: "numeric",
       hour12: false,
-      timeZone: "Asia/Karachi",
+      timeZone: timezone,
     }).format(new Date()),
   );
   if (hour < 12) return "Good morning";
@@ -46,21 +47,26 @@ function greeting(): string {
 
 export default async function DashboardPage() {
   const data = await getDashboardData();
+  const { timezone } = await getWorkspaceSettings();
   const { metrics, activeJob, truth, account } = data;
   const sendMode = (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase();
 
   return (
     <div className="animate-fade-up">
       <PageHeader
-        eyebrow={formatDate(new Date(), {
-          weekday: "long",
-          day: "numeric",
-          month: "long",
-          year: "numeric",
-        })}
+        eyebrow={formatDate(
+          new Date(),
+          {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+          },
+          timezone,
+        )}
         title={
           <span>
-            {greeting()}, founder.
+            {greeting(timezone)}, founder.
             <span className="ml-3 inline-block align-middle font-sans text-12 font-semibold uppercase tracking-[0.14em] text-muted">
               {metrics.newWeek} new this week
             </span>

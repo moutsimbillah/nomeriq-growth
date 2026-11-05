@@ -4,6 +4,7 @@ import { requireEditor } from "@/lib/auth/session";
 import { assertSameOrigin } from "@/lib/auth/request";
 import { updateWorkspaceSettings } from "@/lib/services/settings";
 import { fail, readJson } from "@/lib/api";
+import { isValidTimezone } from "@/lib/dates/timezone";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,7 +21,12 @@ const schema = z.object({
   followUpDelay1Days: z.number().int().min(1).max(60).optional(),
   followUpDelay2Days: z.number().int().min(1).max(60).optional(),
   syncStaleHours: z.number().int().min(1).max(720).optional(),
-  timezone: z.string().min(1).max(100).optional(),
+  timezone: z
+    .string()
+    .min(1)
+    .max(100)
+    .refine(isValidTimezone, "Choose a valid IANA timezone.")
+    .optional(),
   // Autonomous research defaults. Bounded to match the workspace_settings
   // CHECK constraints so an invalid value fails here with a clear message.
   researchDefaultBudgetUsd: z.number().positive().max(1000).optional(),

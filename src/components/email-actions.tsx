@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { apiRequest, InlineError, Modal, SubmitBar } from "./client-ui";
 import { Notice } from "./ui";
+import { useWorkspaceTimezone } from "./workspace-timezone";
 import type { Draft } from "@/lib/types";
 
 export function FollowUpReview({
@@ -265,9 +266,14 @@ export function NewCampaignButton({
   accounts: AccountOption[];
 }) {
   const router = useRouter();
+  const timezone = useWorkspaceTimezone();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(
-    `First contact — ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`,
+    `First contact — ${new Date().toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      timeZone: timezone,
+    })}`,
   );
   const [selected, setSelected] = useState<string[]>(drafts.map((draft) => draft.id));
   const [accountId, setAccountId] = useState(
@@ -538,7 +544,7 @@ export function CampaignActions({
           break;
         }
         if (result.error && !result.sent) {
-          if (result.error.includes("rolling 24 hours")) {
+          if (result.error.includes("workspace day")) {
             setError(result.error);
             break;
           }

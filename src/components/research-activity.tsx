@@ -17,6 +17,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { apiRequest, InlineError } from "./client-ui";
+import { useWorkspaceTimezone } from "./workspace-timezone";
 
 type Tone = "neutral" | "progress" | "good" | "warn" | "bad";
 
@@ -70,13 +71,14 @@ function KindIcon({ kind }: { kind: ActivityItem["kind"] }) {
   return <TriangleAlert size={size} />;
 }
 
-function clockTime(value: string): string {
+function clockTime(value: string, timezone: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+    timeZone: timezone,
   });
 }
 
@@ -95,7 +97,9 @@ export function ResearchActivityFeed({
   jobId: string;
   active: boolean;
   onBudgetChange?: () => void;
-}) {  const [items, setItems] = useState<ActivityItem[]>([]);
+}) {
+  const timezone = useWorkspaceTimezone();
+  const [items, setItems] = useState<ActivityItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -192,7 +196,7 @@ export function ResearchActivityFeed({
                     </span>
                   ) : null}
                   <span className="shrink-0 font-mono text-12 text-faint">
-                    {clockTime(item.at)}
+                    {clockTime(item.at, timezone)}
                   </span>
                 </div>
                 {item.detail && (

@@ -20,6 +20,7 @@ import {
   messageBodyForDisplay,
 } from "@/lib/services/conversations";
 import { getDefaultEmailAccount } from "@/lib/email/accounts";
+import { getWorkspaceSettings } from "@/lib/services/settings";
 import {
   Card,
   ExternalLink,
@@ -56,6 +57,7 @@ export default async function ConversationPage({
   const { id } = await params;
   const conversation = await getConversation(id);
   if (!conversation) notFound();
+  const settings = await getWorkspaceSettings();
   const account = await getDefaultEmailAccount().catch(() => null);
   const envSandbox =
     (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() !== "live";
@@ -167,7 +169,7 @@ export default async function ConversationPage({
                     </div>
                   </div>
                   <div className="text-right text-12 text-faint">
-                    {formatDateTime(message.receivedAt || message.sentAt)}
+                    {formatDateTime(message.receivedAt || message.sentAt, settings.timezone)}
                     {!inbound && (
                       <div className="mt-0.5">
                         {message.isSandbox

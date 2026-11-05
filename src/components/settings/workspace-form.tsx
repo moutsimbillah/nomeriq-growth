@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LoaderCircle, Save } from "lucide-react";
+import { listTimezones } from "@/lib/dates/timezone";
 import type { WorkspaceSettings } from "@/lib/services/settings";
 import { apiRequest, InlineError } from "../client-ui";
 import { Notice } from "../ui";
@@ -29,6 +30,10 @@ export function WorkspaceSettingsForm({
     settings.followUpDailyLimit,
   );
   const [followUpsDue, setFollowUpsDue] = useState<number | null>(null);
+  const [timezone, setTimezone] = useState(settings.timezone);
+  const [timezoneOptions] = useState(() =>
+    Array.from(new Set([...listTimezones(), settings.timezone])).sort(),
+  );
 
   // How many leads the job would draft for right now. Read once: the number is context for the switch,
   // not something this form changes.
@@ -80,7 +85,7 @@ export function WorkspaceSettingsForm({
           followUpDelay1Days: delay1,
           followUpDelay2Days: delay2,
           syncStaleHours,
-          timezone: settings.timezone,
+          timezone,
           researchDefaultBudgetUsd: researchBudget,
           researchDefaultConcurrency: researchConcurrency,
           deepseekSearchQps: searchQps,
@@ -104,6 +109,28 @@ export function WorkspaceSettingsForm({
           email footer. Sandbox sends can still be tested without it.
         </Notice>
       )}
+      <div>
+        <label className="label" htmlFor="workspace-timezone">
+          Workspace timezone
+        </label>
+        <input
+          id="workspace-timezone"
+          className="input"
+          list="workspace-timezones"
+          value={timezone}
+          onChange={(event) => setTimezone(event.target.value)}
+          required
+        />
+        <datalist id="workspace-timezones">
+          {timezoneOptions.map((option) => (
+            <option key={option} value={option} />
+          ))}
+        </datalist>
+        <p className="field-hint">
+          Stored in UTC. This timezone controls displayed dates, Added day
+          filters, follow-up timing and daily sending limits.
+        </p>
+      </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
           <label className="label">Legal business name</label>

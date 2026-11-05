@@ -1,3 +1,5 @@
+import { DEFAULT_TIMEZONE } from "@/lib/dates/timezone";
+
 export class AppError extends Error {
   constructor(
     message: string,
@@ -171,18 +173,26 @@ export function iso(value: unknown): string | null {
 export function formatDate(
   value: string | Date | null | undefined,
   options: Intl.DateTimeFormatOptions = { dateStyle: "medium" },
+  timezone: string = DEFAULT_TIMEZONE,
 ): string {
   if (!value) return "Unknown";
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown";
   return new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
     ...options,
-    timeZone: process.env.APP_TIMEZONE || "Asia/Karachi",
   }).format(date);
 }
 
-export function formatDateTime(value: string | Date | null | undefined): string {
-  return formatDate(value, { dateStyle: "medium", timeStyle: "short" });
+export function formatDateTime(
+  value: string | Date | null | undefined,
+  timezone: string = DEFAULT_TIMEZONE,
+): string {
+  return formatDate(
+    value,
+    { dateStyle: "medium", timeStyle: "short" },
+    timezone,
+  );
 }
 
 export function relativeTime(value: string | Date | null | undefined): string {

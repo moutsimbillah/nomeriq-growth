@@ -2,6 +2,7 @@ import { requirePageUser } from "@/lib/auth/session";
 import { getDefaultEmailAccount } from "@/lib/email/accounts";
 import { getProductTruth, getWorkspaceSettings } from "@/lib/services/settings";
 import { AppChrome } from "@/components/app-chrome";
+import { WorkspaceTimezoneProvider } from "@/components/workspace-timezone";
 
 export const dynamic = "force-dynamic";
 
@@ -22,17 +23,19 @@ export default async function GrowthLayout({
       : "sandbox";
 
   return (
-    <AppChrome
-      user={{ name: user.name, email: user.email, role: user.role }}
-      sendMode={sendMode}
-      mailboxLabel={
-        account
-          ? `${account.emailAddress}${account.provider === "sandbox" ? " · sandbox" : ""}`
-          : null
-      }
-      productTruthReady={truth.status === "approved"}
-    >
-      {children}
-    </AppChrome>
+    <WorkspaceTimezoneProvider timezone={settings.timezone}>
+      <AppChrome
+        user={{ name: user.name, email: user.email, role: user.role }}
+        sendMode={sendMode}
+        mailboxLabel={
+          account
+            ? `${account.emailAddress}${account.provider === "sandbox" ? " · sandbox" : ""}`
+            : null
+        }
+        productTruthReady={truth.status === "approved"}
+      >
+        {children}
+      </AppChrome>
+    </WorkspaceTimezoneProvider>
   );
 }

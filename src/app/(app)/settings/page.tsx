@@ -99,7 +99,7 @@ export default async function SettingsPage() {
   > = {};
   for (const account of accounts) {
     usages[account.id] = await getSendUsage(account.id).catch(() => ({
-      sentLast24h: 0,
+      sentToday: 0,
       dailyLimit: account.dailySendLimit,
       minIntervalSeconds: account.minIntervalSeconds,
       nextAllowedAt: null,

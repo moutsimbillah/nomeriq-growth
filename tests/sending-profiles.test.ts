@@ -230,7 +230,7 @@ describe("sending profiles", () => {
     } catch (error) {
       refusal = error as Error;
     }
-    expect(refusal?.message).toContain(`${WARMUP_DAILY_STEP} sends per rolling 24 hours`);
+    expect(refusal?.message).toContain(`${WARMUP_DAILY_STEP} sends per workspace day`);
     expect(refusal?.message).toContain("warming up");
 
     // the same profile, four days in, allows its full limit again

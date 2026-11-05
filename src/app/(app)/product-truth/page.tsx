@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import {
   getProductTruth,
+  getWorkspaceSettings,
   listProductTruthRevisions,
 } from "@/lib/services/settings";
 import {
@@ -24,6 +25,7 @@ export default async function ProductTruthPage() {
     getProductTruth(),
     listProductTruthRevisions(),
   ]);
+  const { timezone } = await getWorkspaceSettings();
 
   return (
     <div className="animate-fade-up">
@@ -142,7 +144,7 @@ export default async function ProductTruthPage() {
 
           {truth.approvedAt && (
             <div className="px-1 text-12 text-faint">
-              Last approved {formatDateTime(truth.approvedAt)}
+              Last approved {formatDateTime(truth.approvedAt, timezone)}
             </div>
           )}
         </div>

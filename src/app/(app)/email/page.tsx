@@ -31,6 +31,7 @@ import {
 import { listCampaigns } from "@/lib/services/campaigns";
 import { listEmailAccounts } from "@/lib/email/accounts";
 import { getSyncHealth } from "@/lib/email/sync";
+import { getWorkspaceSettings } from "@/lib/services/settings";
 import {
   AgentPill,
   SenderPill,
@@ -71,8 +72,13 @@ export default async function EmailPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
+  const settings = await getWorkspaceSettings();
   // the same reader the leads page uses, so ?added= and the date inputs mean the same thing here
-  const filters = readLeadFilters(params);
+  const filters = {
+    ...readLeadFilters(params),
+    timezone: settings.timezone,
+    now: new Date(),
+  };
   const tabMap: Record<string, string> = {
     inbox: "Inbox",
     sent: "Sent",
@@ -110,6 +116,8 @@ export default async function EmailPage({
       added: filters.added,
       addedFrom: filters.addedFrom,
       addedTo: filters.addedTo,
+      timezone: filters.timezone,
+      now: filters.now,
     }),
     listCampaigns(),
     getFollowUpOverview(),
@@ -154,6 +162,8 @@ export default async function EmailPage({
     added: filters.added,
     addedFrom: filters.addedFrom,
     addedTo: filters.addedTo,
+    timezone: filters.timezone,
+    now: filters.now,
   });
   const account = accounts[0] ?? null;
   const syncHealth =
@@ -402,7 +412,7 @@ export default async function EmailPage({
                         </span>
                       </td>
                       <td className="text-right text-12 text-faint">
-                        {formatDateTime(message.sentAt)}
+                        {formatDateTime(message.sentAt, settings.timezone)}
                       </td>
                     </tr>
                   ))}
@@ -452,7 +462,7 @@ export default async function EmailPage({
               name="added"
               defaultValue={params.added || ""}
               className="select w-auto min-w-[150px]"
-              title="Saved on — days are Asia/Karachi days"
+              title={`Saved on — days are ${settings.timezone} days`}
             >
               <option value="">Any date</option>
               {COUNTED_ADDED_RANGES.map((range) => (
@@ -469,7 +479,7 @@ export default async function EmailPage({
                 type="date"
                 name="from"
                 defaultValue={params.from || ""}
-                aria-label="Saved from, Asia/Karachi"
+                aria-label={`Saved from, ${settings.timezone}`}
                 className="input h-10 w-auto px-3 text-13"
               />
               <span className="text-12 text-muted">to</span>
@@ -477,7 +487,7 @@ export default async function EmailPage({
                 type="date"
                 name="to"
                 defaultValue={params.to || ""}
-                aria-label="Saved to, Asia/Karachi"
+                aria-label={`Saved to, ${settings.timezone}`}
                 className="input h-10 w-auto px-3 text-13"
               />
             </span>

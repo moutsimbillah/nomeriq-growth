@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { addedWindow } from "@/lib/dates/timezone";
 import { getDb } from "@/lib/db/client";
 import {
   getDefaultEmailAccount,
@@ -137,21 +138,30 @@ export async function assertAccountCanSend(accountId: string): Promise<void> {
     );
   }
   const db = await getDb();
+  const settings = await getWorkspaceSettings();
+  const now = new Date();
+  const window = addedWindow("today", now, undefined, undefined, settings.timezone)!;
   const counts = await db.query<{ count: string | number; last_sent: string | null }>(
     `SELECT count(*) AS count, max(completed_at) AS last_sent
      FROM outbound_sends
      WHERE account_id = $1
        AND status IN ('accepted', 'sandbox')
-       AND completed_at >= now() - interval '24 hours'`,
-    [accountId],
+       AND completed_at >= $2
+       AND completed_at < $3`,
+    [accountId, window.from.toISOString(), window.to.toISOString()],
   );
   const count = Number(counts.rows[0]?.count ?? 0);
   const warmupStartedAt = account.warmupStartedAt ? new Date(account.warmupStartedAt) : null;
-  const allowedToday = warmupDailyLimit(account.dailySendLimit, warmupStartedAt, new Date());
+  const allowedToday = warmupDailyLimit(
+    account.dailySendLimit,
+    warmupStartedAt,
+    now,
+    settings.timezone,
+  );
   if (count >= allowedToday) {
     const rampNote = warmupStartedAt ? " This profile is warming up, so the figure rises daily." : "";
     throw new AppError(
-      `The configured safety limit of ${allowedToday} sends per rolling 24 hours has been reached. This is your app-configured limit, not a claim about your provider's limit.${rampNote}`,
+      `The configured safety limit of ${allowedToday} sends per workspace day has been reached. This is your app-configured limit, not a claim about your provider's limit.${rampNote}`,
       429,
       "daily_limit_reached",
     );
@@ -870,7 +880,7 @@ export async function processQueuedSends(
 }
 
 export async function getSendUsage(accountId: string): Promise<{
-  sentLast24h: number;
+  sentToday: number;
   dailyLimit: number;
   minIntervalSeconds: number;
   nextAllowedAt: string | null;
@@ -878,12 +888,16 @@ export async function getSendUsage(accountId: string): Promise<{
   const account = await getEmailAccountRecord(accountId);
   if (!account) throw new AppError("Email account not found.", 404);
   const db = await getDb();
+  const settings = await getWorkspaceSettings();
+  const now = new Date();
+  const window = addedWindow("today", now, undefined, undefined, settings.timezone)!;
   const result = await db.query<{ count: string | number; last_sent: string | null }>(
     `SELECT count(*) AS count, max(completed_at) AS last_sent
      FROM outbound_sends
      WHERE account_id = $1 AND status IN ('accepted', 'sandbox')
-       AND completed_at >= now() - interval '24 hours'`,
-    [accountId],
+       AND completed_at >= $2
+       AND completed_at < $3`,
+    [accountId, window.from.toISOString(), window.to.toISOString()],
   );
   const lastSent = result.rows[0]?.last_sent
     ? new Date(result.rows[0].last_sent as string)
@@ -892,7 +906,7 @@ export async function getSendUsage(accountId: string): Promise<{
     ? new Date(lastSent.getTime() + account.minIntervalSeconds * 1000).toISOString()
     : null;
   return {
-    sentLast24h: Number(result.rows[0]?.count ?? 0),
+    sentToday: Number(result.rows[0]?.count ?? 0),
     dailyLimit: account.dailySendLimit,
     minIntervalSeconds: account.minIntervalSeconds,
     nextAllowedAt: nextAllowed && new Date(nextAllowed) > new Date() ? nextAllowed : null,

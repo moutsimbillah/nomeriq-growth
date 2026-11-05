@@ -19,6 +19,7 @@ import { AGENT_LABELS, AGENT_TAGS, CHANNEL_LABELS, CHANNEL_TAGS } from "@/lib/ag
 import { countActiveFilters, leadFilterQuery, readLeadFilters } from "@/lib/leads/leadFilters";
 import { ADDED_LABELS, COUNTED_ADDED_RANGES } from "@/lib/dates/pakistan";
 import { listResearchJobs } from "@/lib/services/research";
+import { getWorkspaceSettings } from "@/lib/services/settings";
 import {
   AgentPill,
   Card,
@@ -40,7 +41,12 @@ export default async function LeadsPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
-  const filters = readLeadFilters(params as Record<string, string | undefined>);
+  const settings = await getWorkspaceSettings();
+  const filters = {
+    ...readLeadFilters(params as Record<string, string | undefined>),
+    timezone: settings.timezone,
+    now: new Date(),
+  };
   // The window is the query string's `limit`, so "Load more" only has to raise it. The service clamps
   // it to the true filtered total, which the header prints, so the loaded rows are never the total.
   const requestedLimit = Number.parseInt(params.limit ?? "", 10);
@@ -215,7 +221,7 @@ export default async function LeadsPage({
             name="added"
             defaultValue={params.added || ""}
             className="select w-auto min-w-[150px]"
-            title="Added on — days are Asia/Karachi days"
+            title={`Added on — days are ${settings.timezone} days`}
           >
             <option value="">Any date</option>
             {COUNTED_ADDED_RANGES.map((range) => {
@@ -226,7 +232,7 @@ export default async function LeadsPage({
                 </option>
               );
             })}
-            <option value="custom" disabled={params.added !== "custom"}>
+            <option value="custom">
               {ADDED_LABELS.custom}
             </option>
           </select>
@@ -235,7 +241,7 @@ export default async function LeadsPage({
               type="date"
               name="from"
               defaultValue={params.from || ""}
-              aria-label="Added from, Asia/Karachi"
+              aria-label={`Added from, ${settings.timezone}`}
               className="input h-10 w-auto px-3 text-13"
             />
             <span className="text-12 text-muted">to</span>
@@ -243,7 +249,7 @@ export default async function LeadsPage({
               type="date"
               name="to"
               defaultValue={params.to || ""}
-              aria-label="Added to, Asia/Karachi"
+              aria-label={`Added to, ${settings.timezone}`}
               className="input h-10 w-auto px-3 text-13"
             />
           </span>
@@ -262,6 +268,12 @@ export default async function LeadsPage({
                 </option>
               );
             })}
+            <option
+              value="unknown"
+              disabled={(facets.channels.unknown ?? 0) === 0 && params.channel !== "unknown"}
+            >
+              Unknown ({facets.channels.unknown ?? 0})
+            </option>
           </select>
           <button type="submit" className="btn-secondary">
             <Filter size={13} />
@@ -454,7 +466,7 @@ export default async function LeadsPage({
               ? `Load more to see the remaining ${total - prospects.length}.`
               : `All ${total} ${total === 1 ? "prospect" : "prospects"} shown.`}
           </span>
-          <span>Updated {formatDate(new Date())}</span>
+          <span>Updated {formatDate(new Date(), undefined, settings.timezone)}</span>
         </div>
       )}
     </div>

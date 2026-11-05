@@ -1,4 +1,5 @@
 import { getDb } from "@/lib/db/client";
+import { DEFAULT_TIMEZONE, calendarDaysBetween } from "@/lib/dates/timezone";
 import { getDefaultEmailAccount, getEmailAccountRecord, type EmailAccountRecord } from "@/lib/email/accounts";
 import { AppError } from "@/lib/utils";
 
@@ -33,11 +34,11 @@ export function warmupDailyLimit(
   limit: number,
   warmupStartedAt: Date | null,
   now: Date,
+  timezone: string = DEFAULT_TIMEZONE,
 ): number {
   if (!warmupStartedAt) return limit;
-  const elapsedMs = now.getTime() - warmupStartedAt.getTime();
   // A start in the future would otherwise produce a negative day count.
-  const wholeDaysElapsed = elapsedMs <= 0 ? 0 : Math.floor(elapsedMs / 86_400_000);
+  const wholeDaysElapsed = Math.max(0, calendarDaysBetween(warmupStartedAt, now, timezone));
   const ramped = WARMUP_DAILY_STEP * (1 + wholeDaysElapsed);
   return Math.max(1, Math.min(limit, ramped));
 }

@@ -31,6 +31,7 @@ import type {
 import { mapEmail, mapProspect, mapProspectDetail, mapSource } from "./mappers";
 import { newestMessageFirst } from "./message-order";
 import { refreshResearchJobStatus } from "./research";
+import { getWorkspaceSettings } from "./settings";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -569,24 +570,32 @@ export interface ProspectFilters {
   channel?: string;
   /** A sending profile id, or "default" for leads not tied to one yet. */
   sender?: string;
-  /** Which Asia/Karachi day window the row was added in. */
+  /** Which day window the row was added in, in the workspace timezone. */
   added?: AddedRange;
   addedFrom?: string;
   addedTo?: string;
   /** Injectable clock, so the day boundaries can be tested without waiting for midnight. */
   now?: Date;
+  /** The IANA zone the day windows resolve in; defaults to the workspace setting. */
+  timezone?: string;
   limit?: number;
   offset?: number;
 }
 
-/** The SQL for an Asia/Karachi day window on a timestamp column, pushing its two instants as params. */
+/** The SQL for a workspace-day window on a timestamp column, pushing its two instants as params. */
 function addedCondition(
   filters: ProspectFilters,
   column: string,
   params: unknown[],
 ): string | null {
   if (!filters.added) return null;
-  const window = addedWindow(filters.added, filters.now ?? new Date(), filters.addedFrom, filters.addedTo);
+  const window = addedWindow(
+    filters.added,
+    filters.now ?? new Date(),
+    filters.addedFrom,
+    filters.addedTo,
+    filters.timezone,
+  );
   if (!window) return null;
   params.push(window.from.toISOString(), window.to.toISOString());
   return `${column} >= $${params.length - 1} AND ${column} < $${params.length}`;
@@ -606,6 +615,12 @@ export async function getProspectOriginFacets(
   added: Record<string, number>;
   hasEmail: { yes: number; no: number };
 }> {
+  // One captured clock and one resolved zone for the whole call, so every axis counts the same window.
+  filters = {
+    ...filters,
+    timezone: filters.timezone ?? (await getWorkspaceSettings()).timezone,
+    now: filters.now ?? new Date(),
+  };
   const db = await getDb();
   const conditions = ["p.archived_at IS NULL"];
   const params: unknown[] = [];
@@ -851,6 +866,11 @@ export interface ProspectListPage {
 export async function listProspects(
   filters: ProspectFilters = {},
 ): Promise<ProspectSummary[]> {
+  filters = {
+    ...filters,
+    timezone: filters.timezone ?? (await getWorkspaceSettings()).timezone,
+    now: filters.now ?? new Date(),
+  };
   const db = await getDb();
   const { conditions, params } = prospectWhere(filters);
   const limit = Math.min(Math.max(filters.limit ?? 100, 1), MAX_PROSPECT_LIMIT);
@@ -871,6 +891,11 @@ export async function listProspects(
  * it is safe to print beside a capped window as its true total.
  */
 export async function countProspects(filters: ProspectFilters = {}): Promise<number> {
+  filters = {
+    ...filters,
+    timezone: filters.timezone ?? (await getWorkspaceSettings()).timezone,
+    now: filters.now ?? new Date(),
+  };
   const db = await getDb();
   const { conditions, params } = prospectWhere(filters);
   const result = await db.query<{ n: number }>(
@@ -888,6 +913,11 @@ export async function countProspects(filters: ProspectFilters = {}): Promise<num
 export async function listProspectsPage(
   filters: ProspectFilters = {},
 ): Promise<ProspectListPage> {
+  filters = {
+    ...filters,
+    timezone: filters.timezone ?? (await getWorkspaceSettings()).timezone,
+    now: filters.now ?? new Date(),
+  };
   const db = await getDb();
   const { conditions, params } = prospectWhere(filters);
   const offset = Math.max(filters.offset ?? 0, 0);

@@ -19,9 +19,10 @@ import {
 import type { PublicEmailAccount } from "@/lib/email/accounts";
 import { apiRequest, InlineError, Modal, SubmitBar } from "../client-ui";
 import { Notice } from "../ui";
+import { useWorkspaceTimezone } from "@/components/workspace-timezone";
 
 type Usage = {
-  sentLast24h: number;
+  sentToday: number;
   dailyLimit: number;
   minIntervalSeconds: number;
   nextAllowedAt: string | null;
@@ -114,6 +115,7 @@ export function EmailAccountsManager({
   sendMode: "sandbox" | "live";
 }) {
   const router = useRouter();
+  const timezone = useWorkspaceTimezone();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<PublicEmailAccount | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -383,8 +385,8 @@ export function EmailAccountsManager({
                     Configured safety cap
                   </div>
                   <div className="mt-0.5 text-12 text-muted">
-                    {usage?.sentLast24h ?? 0} / {account.dailySendLimit} in rolling
-                    24h
+                    {usage?.sentToday ?? 0} / {account.dailySendLimit} per workspace
+                    day
                   </div>
                 </div>
                 <div>
@@ -401,7 +403,7 @@ export function EmailAccountsManager({
                   </div>
                   <div className="mt-0.5 text-12 text-muted">
                     {account.lastSyncAt
-                      ? new Date(account.lastSyncAt).toLocaleString("en-GB")
+                      ? new Date(account.lastSyncAt).toLocaleString("en-GB", { timeZone: timezone })
                       : "Never"}
                   </div>
                 </div>

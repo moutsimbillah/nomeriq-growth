@@ -2,6 +2,7 @@ import { getDb } from "@/lib/db/client";
 import { buildFollowUp } from "@/lib/ai/writer";
 import { validateDraft } from "@/lib/ai/claims";
 import { AppError, iso, normalizeEmail, truncate } from "@/lib/utils";
+import { addedWindow, calendarDaysBetween } from "@/lib/dates/timezone";
 import type { Draft } from "@/lib/types";
 import { getDraft, listDrafts } from "./drafts";
 import { getProspect } from "./prospects";
@@ -51,6 +52,7 @@ export async function listFollowUpCandidates(): Promise<FollowUpCandidate[]> {
      ORDER BY c.last_outbound_at DESC`,
   );
   const candidates: FollowUpCandidate[] = [];
+  const now = new Date();
   for (const row of result.rows) {
     if (
       row.last_inbound_at &&
@@ -77,8 +79,11 @@ export async function listFollowUpCandidates(): Promise<FollowUpCandidate[]> {
       nextSequence === 1
         ? settings.followUpDelay1Days
         : settings.followUpDelay2Days;
-    const daysSince =
-      (Date.now() - new Date(row.last_outbound_at).getTime()) / 86_400_000;
+    const daysSince = calendarDaysBetween(
+      new Date(row.last_outbound_at),
+      now,
+      settings.timezone,
+    );
     candidates.push({
       conversationId: row.conversation_id,
       prospectId: row.prospect_id,
@@ -115,10 +120,18 @@ export async function prepareFollowUpDrafts(input: {
     return [];
   }
   const db0 = await getDb();
+  const window = addedWindow(
+    "today",
+    new Date(),
+    undefined,
+    undefined,
+    settings.timezone,
+  )!;
   const madeToday = await db0.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM drafts
       WHERE kind = 'follow_up' AND created_by_type = 'founder'
-        AND created_at >= date_trunc('day', now())`,
+        AND created_at >= $1 AND created_at < $2`,
+    [window.from.toISOString(), window.to.toISOString()],
   );
   const room = Math.max(0, settings.followUpDailyLimit - Number(madeToday.rows[0]?.n ?? 0));
   if (room === 0) return [];

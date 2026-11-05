@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { apiRequest, InlineError, Modal, SubmitBar } from "../client-ui";
 import { Notice } from "../ui";
+import { useWorkspaceTimezone } from "@/components/workspace-timezone";
+import { formatDate } from "@/lib/utils";
 
 type UserRow = {
   id: string;
@@ -26,6 +28,7 @@ type UserRow = {
 
 export function TeamManager({ users }: { users: UserRow[] }) {
   const router = useRouter();
+  const timezone = useWorkspaceTimezone();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -87,7 +90,7 @@ export function TeamManager({ users }: { users: UserRow[] }) {
               <span className="badge capitalize">{user.role}</span>
               <span className="text-12 text-faint">
                 {user.lastLoginAt
-                  ? `last in ${new Date(user.lastLoginAt).toLocaleDateString("en-GB")}`
+                  ? `last in ${formatDate(user.lastLoginAt, undefined, timezone)}`
                   : "never signed in"}
               </span>
             </div>

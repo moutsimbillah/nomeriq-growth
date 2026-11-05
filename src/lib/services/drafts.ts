@@ -65,18 +65,26 @@ export interface DraftFilters {
   agent?: string;
   /** The lead's sending profile: a profile id, or "default" for a lead not tied to one yet. */
   sender?: string;
-  /** Which Asia/Karachi day window it was saved in. */
+  /** Which workspace-zone day window it was saved in. */
   added?: AddedRange;
   addedFrom?: string;
   addedTo?: string;
+  /** The workspace's IANA zone; resolved from settings when the caller omits it. */
+  timezone?: string;
   /** Injectable clock, so day boundaries are testable. */
   now?: Date;
 }
 
-/** The SQL for an Asia/Karachi day window, pushing its two instants as params. */
+/** The SQL for a workspace-zone day window, pushing its two instants as params. */
 function addedCondition(filters: DraftFilters, params: unknown[]): string | null {
   if (!filters.added) return null;
-  const window = addedWindow(filters.added, filters.now ?? new Date(), filters.addedFrom, filters.addedTo);
+  const window = addedWindow(
+    filters.added,
+    filters.now ?? new Date(),
+    filters.addedFrom,
+    filters.addedTo,
+    filters.timezone,
+  );
   if (!window) return null;
   params.push(window.from.toISOString(), window.to.toISOString());
   return `d.created_at >= $${params.length - 1} AND d.created_at < $${params.length}`;
@@ -124,6 +132,11 @@ export async function listDrafts(
   agent?: string,
   filters: DraftFilters = {},
 ): Promise<Draft[]> {
+  filters = {
+    ...filters,
+    timezone: filters.timezone ?? (await getWorkspaceSettings()).timezone,
+    now: filters.now ?? new Date(),
+  };
   const db = await getDb();
   const { conditions, params } = draftWhere(status, agent, filters);
   const queryParams = [...params, Math.min(Math.max(limit, 1), MAX_DRAFT_LIMIT)];
@@ -145,6 +158,11 @@ export async function countDrafts(
   agent?: string,
   filters: DraftFilters = {},
 ): Promise<number> {
+  filters = {
+    ...filters,
+    timezone: filters.timezone ?? (await getWorkspaceSettings()).timezone,
+    now: filters.now ?? new Date(),
+  };
   const db = await getDb();
   const { conditions, params } = draftWhere(status, agent, filters);
   const result = await db.query<{ n: number }>(
@@ -176,6 +194,11 @@ export async function listDraftsPage(
   agent?: string,
   filters: DraftFilters = {},
 ): Promise<DraftListPage> {
+  filters = {
+    ...filters,
+    timezone: filters.timezone ?? (await getWorkspaceSettings()).timezone,
+    now: filters.now ?? new Date(),
+  };
   const db = await getDb();
   const { conditions, params } = draftWhere(status, agent, filters);
   const total = await countDrafts(status, agent, filters);
@@ -664,6 +687,11 @@ export async function getDraftOriginFacets(
   senders: Record<string, number>;
   added: Record<string, number>;
 }> {
+  filters = {
+    ...filters,
+    timezone: filters.timezone ?? (await getWorkspaceSettings()).timezone,
+    now: filters.now ?? new Date(),
+  };
   const db = await getDb();
   const base: string[] = [];
   const baseParams: unknown[] = [];

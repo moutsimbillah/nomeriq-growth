@@ -17,6 +17,7 @@ import { CopyButton, apiRequest, InlineError, Modal, SubmitBar } from "../client
 import { Notice } from "../ui";
 import { DEFAULT_SCOPES } from "@/lib/agent/scopes";
 import { formatDate } from "@/lib/utils";
+import { useWorkspaceTimezone } from "@/components/workspace-timezone";
 
 const SCOPES = [
   ["research:read", "Search leads, jobs and duplicate checks"],
@@ -66,6 +67,7 @@ export function IntegrationsManager({
   hasAnthropic: boolean;
 }) {
   const router = useRouter();
+  const timezone = useWorkspaceTimezone();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [assistant, setAssistant] = useState<
@@ -220,9 +222,9 @@ export function IntegrationsManager({
                     ))}
                   </div>
                   <div className="mt-1 text-12 text-faint">
-                    Created {key.createdAt ? new Date(key.createdAt).toLocaleDateString("en-GB") : "unknown"}
+                    Created {key.createdAt ? formatDate(key.createdAt, undefined, timezone) : "unknown"}
                     {key.lastUsedAt
-                      ? ` · last used ${new Date(key.lastUsedAt).toLocaleString("en-GB")}`
+                      ? ` · last used ${new Date(key.lastUsedAt).toLocaleString("en-GB", { timeZone: timezone })}`
                       : " · never used"}
                   </div>
                   {!key.revokedAt && key.expiresAt && (
@@ -236,8 +238,8 @@ export function IntegrationsManager({
                       }`}
                     >
                       {expired
-                        ? `Expired ${formatDate(key.expiresAt)}`
-                        : `Expires ${formatDate(key.expiresAt)}${
+                        ? `Expired ${formatDate(key.expiresAt, undefined, timezone)}`
+                        : `Expires ${formatDate(key.expiresAt, undefined, timezone)}${
                             days === null ? "" : ` (in ${days} ${days === 1 ? "day" : "days"})`
                           }`}
                     </div>
