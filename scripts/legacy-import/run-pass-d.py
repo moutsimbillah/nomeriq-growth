@@ -31,7 +31,7 @@ def q(sql):
     a = ["psql", "-d", DB,"-X","-q","-v","ON_ERROR_STOP=1","-c","\\set VERBOSITY terse","-A","-t","-F","|","-c",sql]
     r = subprocess.run(a, capture_output=True, text=True)
     return "ERR " + SCRUB.sub("<redacted>", r.stderr).strip()[:110] if r.returncode else r.stdout.strip()
-done = subprocess.run(["psql", "-d", DB,"-X","-q","-v","ON_ERROR_STOP=1","-c","\\set VERBOSITY terse","-f",sys.argv[1]], capture_output=True, text=True)
+done = subprocess.run(["psql", "-d", DB,"-X","-q","-v","ON_ERROR_STOP=1","-c","\\set VERBOSITY terse","-v","expected_db="+DB,"-f",sys.argv[1]], capture_output=True, text=True)
 if done.returncode:
     print("PASS D FAILED"); print(SCRUB.sub("<redacted>", done.stderr or done.stdout).strip()[:600]); sys.exit(1)
 print("PASS D RAN")
