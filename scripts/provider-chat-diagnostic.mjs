@@ -5,14 +5,21 @@ import pg from 'pg';
 
 process.loadEnvFile('/home/growth/.env.production');
 const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
-const fields = ['max_tokens', 'max_completion_tokens', 'response_format', 'messages', 'model', 'temperature', 'thinking'];
+const fields = ['max_tokens', 'max_completion_tokens', 'response_format', 'messages', 'model', 'temperature', 'thinking', 'stream'];
 function safeError(payload, status) {
   const error = payload?.error ?? payload;
   const message = typeof error?.message === 'string' ? error.message : '';
   const code = typeof error?.code === 'string' && /^[a-z_][a-z0-9_]{0,63}$/i.test(error.code) ? error.code : null;
   const type = typeof error?.type === 'string' && /^[a-z_][a-z0-9_]{0,63}$/i.test(error.type) ? error.type : null;
   const param = fields.includes(error?.param) ? error.param : null;
-  return { status, code, type, fields: fields.filter(field => field === param || message.includes(field)) };
+  const reasonCodes = [
+    [/stream|流式/i, 'stream_requirement'], [/unsupported|not.support|不支持/i, 'unsupported_request'],
+    [/required|missing|必须|缺少/i, 'required_field'], [/invalid.*key|unauthor|permission|权限/i, 'credential_or_permission'],
+    [/model|模型/i, 'model_rejected'], [/quota|balance|credit|余额/i, 'quota'],
+    [/token|令牌/i, 'token_constraint'], [/json|format|格式/i, 'format_constraint'],
+    [/bad.request|invalid.request|请求无效/i, 'invalid_request'],
+  ].filter(([pattern]) => pattern.test(message)).map(([, code]) => code);
+  return { status, code, type, fields: fields.filter(field => field === param || message.includes(field)), reasonCodes, errorFields: error && typeof error === 'object' ? Object.keys(error).filter(key => /^[a-z_]{1,40}$/i.test(key)) : [] };
 }
 await client.connect();
 try {
@@ -37,12 +44,18 @@ try {
   if (!modelsResponse.ok || !ids.includes(row.model)) process.exitCode = 2;
   else {
     const common = { model: row.model, messages: [{ role: 'system', content: 'Return JSON only.' }, { role: 'user', content: 'Return {"ok":true}.' }], response_format: { type: 'json_object' } };
-    for (const variant of ['current_request', 'standard_max_tokens', 'without_response_format']) {
-      const body = { ...common, ...(variant === 'current_request' ? { max_completion_tokens: 64 } : { max_tokens: 64 }) };
-      if (variant === 'without_response_format') delete body.response_format;
+    for (const variant of ['current_request', 'standard_stream']) {
+      const body = { ...common, ...(variant === 'current_request' ? { max_completion_tokens: 64 } : { max_tokens: 64, stream: true }) };
       const response = await fetch(`${base}/v1/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(60000), redirect: 'error' });
-      const payload = await response.json().catch(() => ({}));
-      const content = payload?.choices?.[0]?.message?.content;
+      const raw = await response.text();
+      let payload = {};
+      try { payload = JSON.parse(raw); } catch { /* SSE is parsed below, never printed. */ }
+      let content = payload?.choices?.[0]?.message?.content;
+      if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
+        content = raw.split(/\r?\n/).filter(line => line.startsWith('data:') && !line.includes('[DONE]')).map(line => {
+          try { return JSON.parse(line.slice(5)).choices?.[0]?.delta?.content ?? ''; } catch { return ''; }
+        }).join('');
+      }
       console.log(JSON.stringify({ step: variant, url: `${base}/v1/chat/completions`, requestFields: Object.keys(body), ...safeError(payload, response.status), nonempty: typeof content === 'string' && content.trim().length > 0 }));
       if (response.ok && typeof content === 'string' && content.trim()) break;
       if (response.status !== 400 && response.status !== 422) break;
