@@ -18,7 +18,7 @@ done
 [ -n "$DUMP" ] || { echo "refusing: --dump is required"; exit 2; }
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 NEW="${TARGET}__restore_${TS}"; OLD="${TARGET}__old_${TS}"
-pgx() { sudo -u growth python3 /tmp/pgx.py "$@"; }
+pgx() { sudo -u growth python3 /home/growth/app/scripts/pgx.py "$@"; }
 pg() { sudo -u postgres psql -X -A -t -c "$1"; }
 die() { echo "ABORT: $*"; exit 1; }
 step() { echo; echo "=== $* ==="; }

@@ -2,7 +2,7 @@
 # Rehearse the window twice on growth_rehearsal, each time from a fresh dump of live. Live is only read.
 set -uo pipefail
 SRC=/var/backups/growth/rehearsal-src-$(date -u +%Y%m%dT%H%M%SZ).dump
-pgx() { sudo -u growth python3 /tmp/pgx.py "$@"; }
+pgx() { sudo -u growth python3 /home/growth/app/scripts/pgx.py "$@"; }
 fresh() {
   echo "--- fresh dump of live (read-only) and a clean growth_rehearsal ---"
   pgx pg_dump -Fc -d growth -f "$SRC" || { echo "ABORT: could not dump live"; exit 1; }

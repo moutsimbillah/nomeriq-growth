@@ -30,7 +30,7 @@ DUMP=/var/backups/growth/preimport-$TARGET-$TS.dump
 BACKUP_OK=0
 step() { echo; echo "=== $* ==="; }
 as_growth() { run sudo -u growth bash -c "$1"; }
-pgx() { sudo -u growth python3 /tmp/pgx.py "$@"; }
+pgx() { sudo -u growth python3 /home/growth/app/scripts/pgx.py "$@"; }
 run() {
   if [ "$PRINT" = "1" ]; then echo "WOULD RUN: $*"; return 0; fi
   "$@"
@@ -51,7 +51,7 @@ rollback() {
   assert_target
   run sudo -u postgres dropdb --if-exists "$TARGET"
   run sudo -u postgres createdb -O growth_app "$TARGET"
-  run sudo -u growth python3 /tmp/pgx.py pg_restore -d "$TARGET" --no-owner --no-privileges "$DUMP"
+  run sudo -u growth python3 /home/growth/app/scripts/pgx.py pg_restore -d "$TARGET" --no-owner --no-privileges "$DUMP"
   if [ "$MODE" = "live" ]; then
     run sudo -u growth bash -c "git -C $APP reset --hard $PREV"
     run sudo -u growth bash -c "cd $APP && npm run build"
@@ -76,7 +76,7 @@ fi
 
 step "1. backup of $TARGET, written as growth, verified before anything else"
 [ "$PRINT" = "1" ] || assert_target
-run sudo -u growth python3 /tmp/pgx.py pg_dump -Fc -d "$TARGET" -f "$DUMP" || { echo "ABORT: backup failed"; exit 1; }
+run sudo -u growth python3 /home/growth/app/scripts/pgx.py pg_dump -Fc -d "$TARGET" -f "$DUMP" || { echo "ABORT: backup failed"; exit 1; }
 if [ "$PRINT" != "1" ]; then
   run sudo ls -l "$DUMP" | awk '{print "dump bytes: " $5}'
   ENTRIES=$(pgx pg_restore --list "$DUMP" | grep -c "TABLE DATA")
@@ -111,7 +111,7 @@ fi
 
 step "3. migrations against $TARGET from $CODE_DIR"
 for f in 017_legacy_origin.sql 018_legacy_archive.sql 019_legacy_message_source.sql 020_follow_up_switch.sql 021_follow_up_exclusion.sql; do
-  run sudo -u growth python3 /tmp/pgx.py psql -d "$TARGET" -q -v ON_ERROR_STOP=1 -f "$CODE_DIR/src/db/migrations/$f" || { echo "ABORT: migration $f failed"; exit 1; }
+  run sudo -u growth python3 /home/growth/app/scripts/pgx.py psql -d "$TARGET" -q -v ON_ERROR_STOP=1 -f "$CODE_DIR/src/db/migrations/$f" || { echo "ABORT: migration $f failed"; exit 1; }
   echo "  $f applied"
 done
 
@@ -126,7 +126,7 @@ for pair in run-pass.py:pass-a.sql run-pass-b.py:pass-b.sql run-pass-d.py:pass-d
 done
 
 step "5. the archive lock"
-run sudo -u growth python3 /tmp/pgx.py psql -d "$TARGET" -q -v ON_ERROR_STOP=1 -f "$CODE_DIR/scripts/legacy-import/archive-read-only.sql" || { echo "ABORT: lock failed"; exit 1; }
+run sudo -u growth python3 /home/growth/app/scripts/pgx.py psql -d "$TARGET" -q -v ON_ERROR_STOP=1 -f "$CODE_DIR/scripts/legacy-import/archive-read-only.sql" || { echo "ABORT: lock failed"; exit 1; }
 echo "lock applied"
 
 step "6. pass C, the acceptance"
