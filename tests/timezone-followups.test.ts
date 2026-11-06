@@ -14,6 +14,11 @@ beforeAll(async () => {
     "INSERT INTO prospects (id, business_name, name_key, created_by_type, status) VALUES (gen_random_uuid(), 'FollowZone', 'followzonefixture', 'api', 'contacted') RETURNING id"
   );
   prospectId = rows.rows[0].id;
+  // Eligibility needs a stored contact; this test varies the day boundary, not recipient safety.
+  await db.query(
+    "INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary) VALUES (gen_random_uuid(), $1, 'followzone@example.test', 'followzone@example.test', 'https://example.test/contact', 'official_website', true)",
+    [prospectId]
+  );
   await db.query(
     "INSERT INTO conversations (id, prospect_id, subject, last_outbound_at) VALUES (gen_random_uuid(), $1, 'Fixture', '2026-11-05T18:59:00Z')",
     [prospectId]

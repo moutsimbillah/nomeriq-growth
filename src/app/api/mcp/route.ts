@@ -76,7 +76,8 @@ async function handleRpc(request: Request, message: Record<string, unknown>) {
     key = await authenticateApiKey(request);
   } catch (error) {
     const appError = error instanceof AppError ? error : null;
-    return rpcError(request, id, -32001, appError?.message || "Unauthorized", 401);
+    const limited = appError?.status === 429;
+    return rpcError(request, id, limited ? -32029 : -32001, appError?.message || "Unauthorized", limited ? 429 : 401);
   }
 
   if (method === "initialize") {
@@ -130,6 +131,9 @@ async function handleRpc(request: Request, message: Record<string, unknown>) {
   }
   if (method === "tools/call") {
     const name = String(params.name || "");
+    if (params.arguments !== undefined && (!params.arguments || typeof params.arguments !== "object" || Array.isArray(params.arguments))) {
+      return rpcError(request, id, -32602, "Tool arguments must be a JSON object.");
+    }
     const args =
       params.arguments && typeof params.arguments === "object"
         ? (params.arguments as Record<string, unknown>)

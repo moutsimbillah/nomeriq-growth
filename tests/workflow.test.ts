@@ -385,6 +385,14 @@ describe("Nomeriq Growth end-to-end workflow", () => {
        WHERE prospect_id = $1`,
       [state.alphaId],
     );
+    // Age the recorded send as well as its conversation cache. Actual message/draft timestamps
+    // govern eligibility; changing only the cache must not make a just-sent email overdue.
+    await db.query(`UPDATE messages SET sent_at = now() - interval '10 days'
+      WHERE prospect_id = $1 AND direction = 'outbound'`, [state.alphaId]);
+    await db.query(`UPDATE drafts SET sent_at = now() - interval '10 days'
+      WHERE prospect_id = $1 AND status = 'sent'`, [state.alphaId]);
+    await db.query(`UPDATE outbound_sends SET completed_at = now() - interval '10 days'
+      WHERE prospect_id = $1 AND status = 'sandbox'`, [state.alphaId]);
     // automatic follow-ups are off by default (migration 020): this test is about what happens once the
     // founder has switched them on
     await db.query(

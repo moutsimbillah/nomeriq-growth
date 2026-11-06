@@ -13,6 +13,9 @@ export const ALLOWED_SCOPES = [
   "drafts:write",
   "product_truth:read",
   "conversations:read",
+  "folders:read",
+  "followups:read",
+  "followups:write",
   "progress:read",
 ] as const;
 
@@ -20,8 +23,8 @@ export type ApiScope = (typeof ALLOWED_SCOPES)[number];
 
 /**
  * The minimum a research agent needs to do its job. New keys get exactly these
- * unless the founder deliberately opts into more. `conversations:read` is
- * intentionally NOT included: it exposes prospect email content, so it stays
+ * unless the founder deliberately opts into more. Email scopes (conversations,
+ * folders and follow-ups) are intentionally NOT included: email access stays
  * opt-in rather than being granted by default.
  */
 export const DEFAULT_SCOPES = [

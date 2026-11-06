@@ -23,6 +23,8 @@ export async function POST(
         const parsed = JSON.parse(text);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
           args = parsed as Record<string, unknown>;
+        } else {
+          throw new AppError("Request body must be a JSON object.", 400);
         }
       } catch {
         throw new AppError("Request body must be a JSON object.", 400);

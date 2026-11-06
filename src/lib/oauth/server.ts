@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { DEFAULT_SCOPES } from "@/lib/agent/scopes";
+import { ALLOWED_SCOPES, DEFAULT_SCOPES } from "@/lib/agent/scopes";
 import { getDb } from "@/lib/db/client";
 import { AppError } from "@/lib/utils";
 
@@ -11,13 +11,14 @@ import { AppError } from "@/lib/utils";
  * register themselves (dynamic client registration), send the founder through an
  * authorization-code flow, and then call the MCP with the token they received. Everything
  * here exists so that a connector ends up with an opaque token bound to one user and a
- * scope list no wider than the default API-key scopes — never send or delete.
+ * scope list limited to the founder's consent — email permissions are opt-in,
+ * never send, approve, queue, delete, settings or job controls.
  */
 
 export const ACCESS_TOKEN_TTL_SECONDS = 60 * 60 * 8;
 export const REFRESH_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 30;
 export const AUTH_CODE_TTL_SECONDS = 60 * 10;
-export const SUPPORTED_SCOPES = [...DEFAULT_SCOPES] as string[];
+export const SUPPORTED_SCOPES = [...ALLOWED_SCOPES] as string[];
 
 function randomToken(bytes = 32): string {
   return crypto.randomBytes(bytes).toString("base64url");
@@ -134,11 +135,22 @@ export async function clientAllowsRedirect(clientId: string, redirectUri: string
   return uris.includes(redirectUri);
 }
 
+/** Parse an explicit grant without EVER replacing an empty grant with defaults. */
+function explicitScopes(scope: string): string[] {
+  const requested = [...new Set(scope.split(/\s+/).filter(Boolean))];
+  if (requested.some((entry) => !SUPPORTED_SCOPES.includes(entry))) {
+    throw new AppError("Unsupported scope requested.", 400, "invalid_scope");
+  }
+  return requested;
+}
+
+/** Defaults apply only at authorization-request ingress, not to stored grants. */
 export function scopesFromRequest(scope: unknown): string[] {
-  if (typeof scope !== "string" || !scope.trim()) return [...SUPPORTED_SCOPES];
-  const requested = scope.split(/\s+/).filter(Boolean);
-  const allowed = requested.filter((entry) => SUPPORTED_SCOPES.includes(entry));
-  return allowed.length ? allowed : [...SUPPORTED_SCOPES];
+  if (scope == null || scope === "") return [...DEFAULT_SCOPES];
+  if (typeof scope !== "string") {
+    throw new AppError("scope must be a string.", 400, "invalid_scope");
+  }
+  return explicitScopes(scope);
 }
 
 export async function createAuthorizationCode(input: {
@@ -150,6 +162,7 @@ export async function createAuthorizationCode(input: {
   codeChallengeMethod?: string | null;
 }): Promise<string> {
   const db = await getDb();
+  const scope = explicitScopes(input.scope).join(" ");
   const code = randomToken(32);
 
   await db.query(
@@ -160,7 +173,7 @@ export async function createAuthorizationCode(input: {
       code,
       input.clientId,
       input.redirectUri,
-      input.scope,
+      scope,
       input.codeChallenge ?? null,
       input.codeChallengeMethod ?? null,
       input.userId,
@@ -248,31 +261,32 @@ export async function exchangeAuthorizationCode(input: {
     }
   }
 
-  await db.query(`UPDATE oauth_codes SET used_at = now() WHERE code = $1`, [input.code]);
-
+  // A code carries the consent grant, not a fresh authorization request. Empty
+  // grants remain empty, and concurrent exchanges can claim the code only once.
+  const scopes = explicitScopes(code.scope);
   const accessToken = randomToken(32);
-  const scopes = scopesFromRequest(code.scope);
-
-  await db.query(
-    `INSERT INTO oauth_tokens (token_hash, client_id, user_id, scopes, expires_at)
-     VALUES ($1, $2, $3, $4::jsonb, now() + ($5 || ' seconds')::interval)`,
-    [hashToken(accessToken), input.clientId, code.user_id, JSON.stringify(scopes), String(ACCESS_TOKEN_TTL_SECONDS)],
-  );
-
-  await db.query(`UPDATE oauth_clients SET last_used_at = now() WHERE client_id = $1`, [input.clientId]);
-
   const refreshToken = randomToken(32);
-  await db.query(
-    `INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scopes, expires_at)
-     VALUES ($1, $2, $3, $4::jsonb, now() + ($5 || ' seconds')::interval)`,
-    [
-      hashToken(refreshToken),
-      input.clientId,
-      code.user_id,
-      JSON.stringify(scopes),
-      String(REFRESH_TOKEN_TTL_SECONDS),
-    ],
-  );
+  await db.transaction(async (tx) => {
+    const claimed = await tx.query(
+      `UPDATE oauth_codes SET used_at = now()
+       WHERE code = $1 AND used_at IS NULL AND expires_at > now() RETURNING code`,
+      [input.code],
+    );
+    if (!claimed.rowCount) {
+      throw new AppError("This authorization code was already used or expired.", 400, "invalid_grant");
+    }
+    await tx.query(
+      `INSERT INTO oauth_tokens (token_hash, client_id, user_id, scopes, expires_at)
+       VALUES ($1, $2, $3, $4::jsonb, now() + ($5 || ' seconds')::interval)`,
+      [hashToken(accessToken), input.clientId, code.user_id, JSON.stringify(scopes), String(ACCESS_TOKEN_TTL_SECONDS)],
+    );
+    await tx.query(`UPDATE oauth_clients SET last_used_at = now() WHERE client_id = $1`, [input.clientId]);
+    await tx.query(
+      `INSERT INTO oauth_refresh_tokens (token_hash, client_id, user_id, scopes, expires_at)
+       VALUES ($1, $2, $3, $4::jsonb, now() + ($5 || ' seconds')::interval)`,
+      [hashToken(refreshToken), input.clientId, code.user_id, JSON.stringify(scopes), String(REFRESH_TOKEN_TTL_SECONDS)],
+    );
+  });
 
   return {
     accessToken,
@@ -338,14 +352,20 @@ export async function refreshAccessToken(input: {
     throw new AppError("The refresh token was issued to a different client.", 400, "invalid_grant");
   }
 
-  const scopes = input.scope ? scopesFromRequest(input.scope) : scopesFromRequest(row.scopes.join(" "));
+  const granted = explicitScopes(row.scopes.join(" "));
+  const scopes = input.scope == null ? granted : explicitScopes(input.scope);
+  if (scopes.some((scope) => !granted.includes(scope))) {
+    throw new AppError("Refresh scope must be a subset of the original grant.", 400, "invalid_scope");
+  }
   const accessToken = randomToken(32);
   const refreshToken = randomToken(32);
 
   await db.transaction(async (tx) => {
-    await tx.query(`UPDATE oauth_refresh_tokens SET revoked_at = now(), last_used_at = now() WHERE token_hash = $1`, [
+    const claimed = await tx.query(`UPDATE oauth_refresh_tokens SET revoked_at = now(), last_used_at = now()
+      WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now() RETURNING token_hash`, [
       hashToken(input.refreshToken),
     ]);
+    if (!claimed.rowCount) throw new AppError("This refresh token was already used or expired.", 400, "invalid_grant");
     await tx.query(
       `INSERT INTO oauth_tokens (token_hash, client_id, user_id, scopes, expires_at)
        VALUES ($1, $2, $3, $4::jsonb, now() + ($5 || ' seconds')::interval)`,

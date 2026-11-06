@@ -1,13 +1,13 @@
 import { getDb } from "@/lib/db/client";
 import { generateFollowUp } from "@/lib/ai/writer";
-import { validateDraft } from "@/lib/ai/claims";
-import { AppError, iso, normalizeEmail, truncate } from "@/lib/utils";
-import { addedWindow, calendarDaysBetween } from "@/lib/dates/timezone";
+import { AppError } from "@/lib/utils";
 import type { Draft } from "@/lib/types";
-import { getDraft, listDrafts } from "./drafts";
+import { listDrafts } from "./drafts";
 import { getProspect } from "./prospects";
-import { getProductTruth, getWorkspaceSettings } from "./settings";
+import { getWorkspaceSettings } from "./settings";
 import { mapDraft } from "./mappers";
+import { FOLLOW_UP_BATCH_MAX, followUpRoom, persistPreparedFollowUp, readFollowUpCandidates } from "./agent-followups";
+export { FOLLOW_UP_BATCH_MAX } from "./agent-followups";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -28,79 +28,9 @@ export interface FollowUpCandidate {
 }
 
 export async function listFollowUpCandidates(): Promise<FollowUpCandidate[]> {
-  const settings = await getWorkspaceSettings();
   const db = await getDb();
-  const result = await db.query<any>(
-    `SELECT c.id AS conversation_id, c.prospect_id, c.last_outbound_at, c.status,
-       c.classification, p.business_name, p.status AS prospect_status,
-       p.do_not_contact,
-       (SELECT pe.email FROM prospect_emails pe WHERE pe.prospect_id = p.id
-         ORDER BY pe.is_primary DESC LIMIT 1) AS contact_email,
-       (SELECT count(*) FROM drafts d WHERE d.prospect_id = p.id
-         AND d.kind = 'follow_up' AND d.status = 'sent') AS sent_follow_ups,
-       (SELECT d.id FROM drafts d WHERE d.prospect_id = p.id
-         AND d.kind = 'follow_up' AND d.status IN ('draft', 'approved')
-         ORDER BY d.sequence DESC LIMIT 1) AS active_draft_id,
-       (SELECT max(m.created_at) FROM messages m
-         WHERE m.conversation_id = c.id AND m.direction = 'inbound') AS last_inbound_at
-     FROM conversations c
-     JOIN prospects p ON p.id = c.prospect_id
-     WHERE c.last_outbound_at IS NOT NULL AND p.archived_at IS NULL
-       AND p.do_not_contact = false
-       -- a lead excluded from automatic follow-ups is not suppressed, only left out of the job
-       AND p.follow_up_excluded = false
-     ORDER BY c.last_outbound_at DESC`,
-  );
-  const candidates: FollowUpCandidate[] = [];
-  const now = new Date();
-  for (const row of result.rows) {
-    if (
-      row.last_inbound_at &&
-      new Date(row.last_inbound_at).getTime() >=
-        new Date(row.last_outbound_at).getTime()
-    ) {
-      continue;
-    }
-    if (["unsubscribe", "not_interested"].includes(row.classification)) continue;
-    if (["interested", "demo", "proposal", "won", "lost"].includes(row.prospect_status)) {
-      continue;
-    }
-    const suppressed = row.contact_email
-      ? await db.query(
-          `SELECT 1 FROM suppressions WHERE normalized_email = $1 AND active = true`,
-          [normalizeEmail(row.contact_email)],
-        )
-      : { rows: [] };
-    if (suppressed.rows.length) continue;
-    const sentFollowUps = Number(row.sent_follow_ups ?? 0);
-    if (sentFollowUps >= settings.followUpMax) continue;
-    const nextSequence = sentFollowUps + 1;
-    const delayDays =
-      nextSequence === 1
-        ? settings.followUpDelay1Days
-        : settings.followUpDelay2Days;
-    const daysSince = calendarDaysBetween(
-      new Date(row.last_outbound_at),
-      now,
-      settings.timezone,
-    );
-    candidates.push({
-      conversationId: row.conversation_id,
-      prospectId: row.prospect_id,
-      businessName: row.business_name,
-      contactEmail: row.contact_email,
-      lastOutboundAt: iso(row.last_outbound_at),
-      daysSinceLastOutbound: Math.floor(daysSince),
-      sentFollowUps,
-      nextSequence,
-      delayDays,
-      due: daysSince >= delayDays,
-      activeDraftId: row.active_draft_id,
-      status: row.prospect_status,
-      classification: row.classification,
-    });
-  }
-  return candidates;
+  // Preserve the public reader's bootstrap behavior; transaction guards read through their tx.
+  return readFollowUpCandidates(db, await getWorkspaceSettings());
 }
 
 /**
@@ -119,8 +49,6 @@ export interface PrepareFollowUpOutcome {
   room: number;
 }
 
-/** Most drafts one founder click may prepare (Prepare selected / Prepare next N). */
-export const FOLLOW_UP_BATCH_MAX = 50;
 
 export async function prepareFollowUpDraftOutcome(input: {
   userId: string;
@@ -155,20 +83,7 @@ export async function prepareFollowUpDraftOutcome(input: {
     };
   }
   const db0 = await getDb();
-  const window = addedWindow(
-    "today",
-    new Date(),
-    undefined,
-    undefined,
-    settings.timezone,
-  )!;
-  const madeToday = await db0.query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM drafts
-      WHERE kind = 'follow_up' AND created_by_type = 'founder'
-        AND created_at >= $1 AND created_at < $2`,
-    [window.from.toISOString(), window.to.toISOString()],
-  );
-  const room = Math.max(0, settings.followUpDailyLimit - Number(madeToday.rows[0]?.n ?? 0));
+  const room = await followUpRoom(db0, settings);
   if (room === 0) {
     return {
       drafts: [],
@@ -211,14 +126,7 @@ export async function prepareFollowUpDraftOutcome(input: {
       sequence: candidate.nextSequence,
       settings,
     });
-    const truth = await getProductTruth();
-    const warnings = validateDraft({
-      subject: generated.subject,
-      body: generated.body,
-      recipientEmail: candidate.contactEmail,
-      truth,
-      aiGenerated: generated.usedAi,
-    });
+
     const comparable = generated.body.replace(/\s+/g, " ").trim();
     if (
       previousBodies.rows.some(
@@ -227,44 +135,13 @@ export async function prepareFollowUpDraftOutcome(input: {
     ) {
       continue;
     }
-    const id = crypto.randomUUID();
-    try {
-      await db.query(
-        `INSERT INTO drafts (
-          id, prospect_id, research_job_id, kind, sequence, status, subject, body,
-          recipient_email, ai_generated, ai_model, ai_provider, product_truth_version, warnings,
-          created_by_type, created_by_user_id, created_at, updated_at
-        ) VALUES ($1, $2, $3, 'follow_up', $4, 'draft', $5, $6, $7, $11, $12, $13,
-          $8, $9::jsonb, 'founder', $10, now(), now())`,
-        [
-          id,
-          prospect.id,
-          prospect.researchJobId,
-          candidate.nextSequence,
-          generated.subject,
-          generated.body,
-          candidate.contactEmail,
-          truth.version,
-          JSON.stringify(warnings),
-          input.userId,
-          generated.usedAi,
-          generated.model,
-          generated.provider ?? null,
-        ],
-      );
-      await db.query(
-        `UPDATE prospects SET next_action = $1, updated_at = now() WHERE id = $2`,
-        [
-          `Review follow-up #${candidate.nextSequence} (${truncate(candidate.businessName, 40)})`,
-          prospect.id,
-        ],
-      );
-      const draft = await getDraft(id);
-      if (draft) created.push(draft);
-    } catch (error) {
-      if (String((error as { code?: string }).code) === "23505") continue;
-      throw error;
-    }
+    // Generation is deliberately outside the final guarded transaction. A concurrent agent may
+    // consume room, or a reply/suppression/settings edit may make this candidate ineligible.
+    const result = await persistPreparedFollowUp({ prospectId: prospect.id,
+      expectedSequence: candidate.nextSequence, subject: generated.subject, body: generated.body,
+      actor: { actorType: "founder" }, userId: input.userId, scheduler: trigger === "scheduler",
+      aiGenerated: generated.usedAi, model: generated.model, provider: generated.provider });
+    if (result.status === "saved" && result.draft) created.push(result.draft);
   }
   return { drafts: created, room, reason: created.length === 0 ? "No conversation is due for a follow-up right now." : null };
 }

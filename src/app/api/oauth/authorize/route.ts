@@ -1,8 +1,12 @@
+import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { getSessionUser } from "@/lib/auth/session";
+import { assertSameOrigin } from "@/lib/auth/request";
+import { DEFAULT_SCOPES, type ApiScope } from "@/lib/agent/scopes";
 import { loginRedirectUrl, publicOrigin } from "@/lib/app-url";
 import {
+  AUTH_CODE_TTL_SECONDS,
   clientAllowsRedirect,
   createAuthorizationCode,
   getOAuthClient,
@@ -11,6 +15,33 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const DESCRIPTIONS: Record<ApiScope, string> = {
+  "research:read": "Read research, leads and the research ledger",
+  "research:write": "Save research and leads, and record searches in the research ledger",
+  "drafts:write": "Save outreach drafts for founder review (not approve, queue or send)",
+  "product_truth:read": "Read Product Truth",
+  "progress:read": "Read research progress",
+  "conversations:read": "Read prospect email conversations, including message content",
+  "folders:read": "Read email folder names and counts only (not message content)",
+  "followups:read": "Read follow-ups due (listing lead or conversation details also requires conversations:read)",
+  "followups:write": "Save follow-up drafts for founder review (also requires conversations:read; never approve, queue or send)",
+};
+
+const CONSENT_FIELDS = [
+  "client_id", "redirect_uri", "state", "scope", "code_challenge", "code_challenge_method",
+] as const;
+
+// One-time, user-bound tickets bind POST to exactly what GET displayed, including
+// redirects, PKCE and scopes, and prevent CSRF. Per-process: restart => reopen consent.
+const pendingConsents = new Map<string, { userId: string; expiresAt: number; fields: string[] }>();
+const MAX_PENDING_CONSENTS = 1000;
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[char]!);
+}
 
 /**
  * The consent step. A hosted connector sends the founder here; if they are signed in they
@@ -36,23 +67,25 @@ button.secondary{background:#fff;color:#111;border-color:#d1d5db}
 </style></head><body><div class="card">${body}</div></body></html>`,
     {
       status,
-      headers: { "content-type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+      headers: {
+        "content-type": "text/html; charset=utf-8", "Cache-Control": "no-store",
+        "Content-Security-Policy": "frame-ancestors 'none'; base-uri 'none'",
+        "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
+      },
     },
   );
 }
 
 function errorPage(message: string, status = 400) {
-  return page("Request refused", `<h1>Request refused</h1><p>${message}</p>`, status);
+  return page("Request refused", `<h1>Request refused</h1><p>${escapeHtml(message)}</p>`, status);
 }
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const clientId = url.searchParams.get("client_id") ?? "";
   const redirectUri = url.searchParams.get("redirect_uri") ?? "";
-  const state = url.searchParams.get("state") ?? "";
-  const scope = url.searchParams.get("scope") ?? "";
-  const codeChallenge = url.searchParams.get("code_challenge");
-  const codeChallengeMethod = url.searchParams.get("code_challenge_method");
+  const responseType = url.searchParams.get("response_type");
+  if (responseType && responseType !== "code") return errorPage("Only response_type=code is supported.");
 
   if (!clientId || !redirectUri) return errorPage("client_id and redirect_uri are required.");
 
@@ -68,32 +101,41 @@ export async function GET(request: Request) {
     return NextResponse.redirect(loginRedirectUrl(url.pathname + url.search, request));
   }
 
-  const fields = [
-    ["client_id", clientId],
-    ["redirect_uri", redirectUri],
-    ["state", state],
-    ["scope", scope],
-    ["code_challenge", codeChallenge ?? ""],
-    ["code_challenge_method", codeChallengeMethod ?? ""],
-  ]
-    .map(
-      ([name, value]) =>
-        `<input type="hidden" name="${name}" value="${String(value).replace(/"/g, "&quot;")}">`,
-    )
-    .join("");
+  let requested: string[];
+  try {
+    requested = scopesFromRequest(url.searchParams.get("scope"));
+  } catch {
+    return errorPage("Unsupported scope requested.");
+  }
+  const values = CONSENT_FIELDS.map((name) =>
+    name === "scope" ? requested.join(" ") : url.searchParams.get(name) ?? "",
+  );
+  const now = Date.now();
+  for (const [ticket, consent] of pendingConsents) {
+    if (consent.expiresAt <= now) pendingConsents.delete(ticket);
+  }
+  if (pendingConsents.size >= MAX_PENDING_CONSENTS) {
+    return errorPage("Too many pending consent requests. Try again later.", 429);
+  }
+  const ticket = crypto.randomUUID();
+  pendingConsents.set(ticket, {
+    userId: user.id, expiresAt: now + AUTH_CODE_TTL_SECONDS * 1000, fields: values,
+  });
+  const fields = CONSENT_FIELDS.map((name, index) =>
+    `<input type="hidden" name="${name}" value="${escapeHtml(values[index])}">`,
+  ).join("") + `<input type="hidden" name="consent_ticket" value="${ticket}">`;
+  const optional = requested.filter((scope) => !(DEFAULT_SCOPES as readonly string[]).includes(scope));
+  const standard = requested.filter((scope) => !optional.includes(scope));
+  const describe = (scope: string) => `${DESCRIPTIONS[scope as ApiScope]} <code>${scope}</code>`;
 
   return page(
     "Authorize connector",
-    `<h1>Authorize “${client.client_name.replace(/[<>&]/g, "")}”</h1>
-     <p>This connector is asking to read and write Growth research on your behalf, as <strong>${user.email}</strong>.</p>
-     <p>It will be able to:</p>
-     <ul>
-       <li>read and write research, leads and drafts</li>
-       <li>read progress and Product Truth</li>
-       <li>check and record searches in the research ledger</li>
-     </ul>
-     <p>It can never send email, delete records, change settings or start a research job.</p>
+    `<h1>Authorize “${escapeHtml(client.client_name)}”</h1>
+     <p>This connector is requesting Growth permissions as <strong>${escapeHtml(user.email)}</strong>.</p>
      <form method="post" action="/api/oauth/authorize">${fields}
+       ${standard.length ? `<p>Approving grants these requested research permissions:</p><ul>${standard.map((scope) => `<li>${describe(scope)}</li>`).join("")}</ul>` : ""}
+       ${optional.length ? `<p>Email permissions are optional and off by default. Select only those you approve:</p><ul>${optional.map((scope) => `<li><label><input type="checkbox" name="approved_scope" value="${scope}"> ${describe(scope)}</label></li>`).join("")}</ul>` : ""}
+       <p>It can never approve, queue or send email, delete records, change settings, or start, stop or cancel research jobs.</p>
        <div class="row">
          <button type="submit" name="decision" value="approve">Approve</button>
          <button type="submit" class="secondary" name="decision" value="deny">Deny</button>
@@ -103,15 +145,14 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  try {
+    assertSameOrigin(request);
+  } catch {
+    return errorPage("Consent must be submitted from Growth.", 403);
+  }
   const form = await request.formData();
-  const clientId = String(form.get("client_id") ?? "");
-  const redirectUri = String(form.get("redirect_uri") ?? "");
-  const state = String(form.get("state") ?? "");
-  const scope = scopesFromRequest(form.get("scope")).join(" ");
-  const codeChallenge = form.get("code_challenge") ? String(form.get("code_challenge")) : null;
-  const codeChallengeMethod = form.get("code_challenge_method")
-    ? String(form.get("code_challenge_method"))
-    : null;
+  const values = CONSENT_FIELDS.map((name) => String(form.get(name) ?? ""));
+  const [clientId, redirectUri, state, scope, challenge, method] = values;
   const decision = String(form.get("decision") ?? "");
 
   if (!clientId || !redirectUri) return errorPage("client_id and redirect_uri are required.");
@@ -121,6 +162,20 @@ export async function POST(request: Request) {
 
   const user = await getSessionUser();
   if (!user) return errorPage("Sign in to Growth first, then reopen the connector.", 401);
+  const ticket = String(form.get("consent_ticket") ?? "");
+  const consent = pendingConsents.get(ticket);
+  if (!consent || consent.userId !== user.id || consent.expiresAt <= Date.now() ||
+      consent.fields.some((value, index) => value !== values[index])) {
+    return errorPage("Consent expired or changed. Reopen the connector and review its permissions.", 403);
+  }
+
+  // The bound scope is literal: an empty approved grant must NOT become defaults.
+  const requested = scope.split(/\s+/).filter(Boolean);
+  const selected = [...new Set(form.getAll("approved_scope").map(String))];
+  if (selected.some((entry) => !requested.includes(entry) || (DEFAULT_SCOPES as readonly string[]).includes(entry))) {
+    return errorPage("A permission was not part of this consent request.", 403);
+  }
+  pendingConsents.delete(ticket);
 
   const target = new URL(redirectUri);
 
@@ -135,10 +190,12 @@ export async function POST(request: Request) {
   const code = await createAuthorizationCode({
     clientId,
     redirectUri,
-    scope,
+    scope: requested.filter((entry) =>
+      (DEFAULT_SCOPES as readonly string[]).includes(entry) || selected.includes(entry),
+    ).join(" "),
     userId: user.id,
-    codeChallenge,
-    codeChallengeMethod,
+    codeChallenge: challenge || null,
+    codeChallengeMethod: method || null,
   });
 
   target.searchParams.set("code", code);

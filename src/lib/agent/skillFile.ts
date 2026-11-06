@@ -1,66 +1,132 @@
 import { ASSISTANT_SKILL } from "./instructions";
 
-/**
- * The downloadable Claude skill file.
- *
- * A skill file must begin with YAML frontmatter: `name` in lowercase letters, numbers and hyphens,
- * and a `description` under 1024 characters. Some loaders reject a description that contains angle
- * brackets, so there are none here.
- *
- * There are two downloads. The **loader** holds no research rules — it tells the assistant to read
- * the rules from the server on every session — so it cannot go stale and is uploaded once. The
- * **full copy** is the same frontmatter plus today's skill text, stamped with a version and a date,
- * for reference or for a client that cannot call tools at all.
- *
- * `get_instructions` and the MCP resource keep serving the bare text: no frontmatter there.
- */
-
+/** Tool/resource surfaces keep serving ASSISTANT_SKILL without download wrappers. */
 export const SKILL_NAME = "nomeriq-growth-portal";
+/** Bump when the shared skill changes materially. All platforms share this version. */
+export const SKILL_VERSION = "3.0";
 
-/** Bump when the shared skill text changes materially, so a stale full copy is obvious. */
-export const SKILL_VERSION = "2.0";
+export const SKILL_PLATFORMS = ["claude", "chatgpt", "gemini", "hermes"] as const;
+export type SkillPlatform = (typeof SKILL_PLATFORMS)[number];
+export const SKILL_FORMATS = ["loader", "full"] as const;
+export type SkillFormat = (typeof SKILL_FORMATS)[number];
 
-/** Under 1024 characters, and deliberately free of angle brackets. */
+export function isSkillPlatform(value: string): value is SkillPlatform {
+  return SKILL_PLATFORMS.some((platform) => platform === value);
+}
+
+export function isSkillFormat(value: string): value is SkillFormat {
+  return SKILL_FORMATS.some((format) => format === value);
+}
+
+/** Legacy Claude description; safe as a plain YAML scalar and under 1024 characters. */
 export const SKILL_DESCRIPTION =
-  "Nomeriq Growth is the shared sales database for Nomeriq, the white-label SaaS platform for trading-signal businesses. Use it through the leads-nomeriq MCP connector to read the current instructions, search and save verified trading-signal providers, check for duplicates and prepare first-contact drafts for founder review. It can read Product Truth and save evidence, but it can never send email, delete records or change settings. Read get_instructions first and follow it.";
+  "Nomeriq Growth is the shared sales database for Nomeriq, the white-label SaaS platform for trading-signal businesses. Use it through the leads-nomeriq MCP connector to read the current instructions, search and save verified trading-signal providers, check for duplicates and prepare drafts for founder review. It can read Product Truth and save evidence, but it can never approve, queue or send email, delete records or change settings. Read get_instructions first and follow it.";
 
-export const LOADER_SKILL_BODY = `# Nomeriq Growth — how to work with it
+const NEUTRAL_DESCRIPTION =
+  "Use the configured Nomeriq Growth MCP connection to read current instructions, research trading-signal businesses and save drafts for founder review. Read get_instructions every session. Never approve, queue or send email, delete records or change settings.";
 
-This file is a loader, on purpose. It contains no research rules, so it cannot fall out of date:
-every rule lives on the server and is read at the start of each session.
-
-## Which connector
+/** Only connection guidance differs; business rules always come from ASSISTANT_SKILL. */
+const CONNECTION_GUIDANCE: Record<SkillPlatform, string> = {
+  claude: `## Which connector
 
 Use the \`leads-nomeriq\` connector and nothing else. Do not reach Growth through another connector,
 a remembered URL, or a copy of an older skill.
 
-## Before anything else
+If the \`leads-nomeriq\` connector is not available, stop and ask the founder to connect it.`,
+  chatgpt: `## ChatGPT connection
 
-1. Call \`get_instructions\` and follow it. That is the current, authoritative version of every rule:
-   what qualifies, how to deduplicate, how to research, how to draft, and what you may never do.
-2. Read Product Truth with \`read_product_truth\` before writing anything about Nomeriq — its offer,
-   its pricing, its claims, its integrations. Never state a price or a claim it does not contain.
+Use the founder-configured Nomeriq Growth app/MCP connection if your ChatGPT client supports it.
+For a client using custom actions instead, the founder can configure the Growth OpenAPI schema at
+\`/api/agent/openapi\` on their verified Growth portal, with its own scoped key entered privately in
+the client's authentication settings. These are instructions text, not a Claude skill upload.
+If neither configured connection exposes \`get_instructions\`, stop and ask the founder to connect it.`,
+  gemini: `## Gemini connection
 
-## If the connector is missing
+This is neutral Markdown for a Gemini-based MCP-capable client, not a promise that every Gemini
+app or account supports MCP or skill uploads. The founder must configure that client's Nomeriq
+Growth MCP connection to \`/api/mcp\` on their verified Growth portal with a dedicated scoped key
+entered privately in the client's authentication settings. If the client cannot call
+\`get_instructions\`, stop and ask the founder to use an MCP-capable client.`,
+  hermes: `## Hermes connection
 
-Stop, and tell the founder that the \`leads-nomeriq\` connector is not available and that you cannot
-reach Growth. Ask them to connect it. Do not guess at tool names, do not invent data, and do not fall
-back to an older skill or to another portal.
+Install this as \`SKILL.md\` in the intended Hermes skill directory. Use the founder-configured
+Nomeriq Growth MCP server at \`/api/mcp\` on their verified Growth portal, with a dedicated scoped
+key entered privately in the client's authentication settings. Tool names may have a client prefix;
+use the configured server's \`get_instructions\`, not a guessed connector name.
+If that MCP connection is not available, stop and ask the founder to configure it.`,
+};
+
+function loaderBody(platform: SkillPlatform): string {
+  return `# Nomeriq Growth — how to work with it
+
+This file is a loader, on purpose. It contains no research rules.
+Every rule lives on the server and is read at the start of each session.
+
+${CONNECTION_GUIDANCE[platform]}
+
+## Before anything else — every session
+
+1. Call \`get_instructions\` at the start of each session and follow the returned current rules.
+   Do not substitute chat memory, a cached response or a downloaded full snapshot.
+2. Read Product Truth with \`read_product_truth\` before writing anything about Nomeriq.
+
+If the connection or required tool is missing or fails, stop and tell the founder what is missing.
+Do not invent data or tool names, fall back to old rules, or use another portal.
+Never paste credentials into chat or include them in a skill file.
 `;
+}
 
+/** Legacy exports remain Claude by default. */
+export const LOADER_SKILL_BODY = loaderBody("claude");
+
+/** Claude and Hermes use YAML frontmatter; descriptions are fixed safe YAML scalars. */
 export function buildSkillFile(body: string): string {
-  return `---\nname: ${SKILL_NAME}\ndescription: ${SKILL_DESCRIPTION}\n---\n\n${body}`;
+  return frontmatter(SKILL_DESCRIPTION, body);
 }
 
-/** The recommended download: frontmatter plus the short loader. */
+function frontmatter(description: string, body: string): string {
+  return `---\nname: ${SKILL_NAME}\ndescription: ${description}\n---\n\n${body}`;
+}
+
+/** Build any platform/format without altering the shared instruction core. */
+export function buildPlatformSkillFile(
+  platform: SkillPlatform,
+  format: SkillFormat,
+  now: Date = new Date(),
+): string {
+  let body = loaderBody(platform);
+  if (format === "full") {
+    const date = now.toISOString().slice(0, 10);
+    body = `<!-- Nomeriq Growth skill ${SKILL_VERSION}, generated ${date}. Reference snapshot only; call get_instructions every session for current rules. -->\n\n${body}\n${ASSISTANT_SKILL}`;
+  }
+  if (platform === "claude" || platform === "hermes") {
+    return frontmatter(platform === "claude" ? SKILL_DESCRIPTION : NEUTRAL_DESCRIPTION, body);
+  }
+  return body;
+}
+
+/** The recommended legacy Claude download: frontmatter plus a short fresh-rule loader. */
 export function loaderSkillFile(): string {
-  return buildSkillFile(LOADER_SKILL_BODY);
+  return buildPlatformSkillFile("claude", "loader");
 }
 
-/** Frontmatter plus the complete current skill text, stamped so staleness is visible. */
+/** Legacy signature preserved, including the optional generation date. */
 export function fullSkillFile(now: Date = new Date()): string {
-  const date = now.toISOString().slice(0, 10);
-  return buildSkillFile(
-    `<!-- Nomeriq Growth skill ${SKILL_VERSION}, generated ${date}. If this date is old, download a fresh copy from Settings, AI integrations. -->\n\n${ASSISTANT_SKILL}`,
-  );
+  return buildPlatformSkillFile("claude", "full", now);
+}
+
+/** Fixed filenames only: no request input is interpolated into an attachment header. */
+const DOWNLOAD_FILES: Record<SkillPlatform, { filename: string; contentType: string }> = {
+  claude: { filename: "SKILL.md", contentType: "text/markdown; charset=utf-8" },
+  chatgpt: { filename: "nomeriq-growth-chatgpt-instructions.txt", contentType: "text/plain; charset=utf-8" },
+  gemini: { filename: "nomeriq-growth-gemini.md", contentType: "text/markdown; charset=utf-8" },
+  hermes: { filename: "SKILL.md", contentType: "text/markdown; charset=utf-8" },
+};
+
+export function buildSkillDownload(
+  platform: SkillPlatform,
+  format: SkillFormat,
+  now: Date = new Date(),
+): { filename: string; contentType: string; body: string } {
+  return { ...DOWNLOAD_FILES[platform], body: buildPlatformSkillFile(platform, format, now) };
 }

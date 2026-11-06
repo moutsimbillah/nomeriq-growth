@@ -14,7 +14,7 @@ export async function GET(request: Request) {
         summary: tool.name.replace(/_/g, " "),
         description: tool.description,
         security: [{ bearerAuth: [] }],
-        "x-openai-isConsequential": ["save_prospect", "save_draft"].includes(
+        "x-openai-isConsequential": ["save_prospect", "save_draft", "save_follow_up_drafts"].includes(
           tool.name,
         ),
         requestBody: {

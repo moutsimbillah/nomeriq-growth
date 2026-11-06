@@ -14,9 +14,12 @@ import {
   verifyOAuthToken,
 } from "@/lib/oauth/server";
 import { ensureWorkspaceDefaults } from "@/lib/services/settings";
+import { ALLOWED_SCOPES, DEFAULT_SCOPES } from "@/lib/agent/scopes";
+import { SUPPORTED_SCOPES } from "@/lib/oauth/server";
+import { POST as tokenPost } from "@/app/api/oauth/token/route";
 
 const state = { userId: "" };
-const VERIFIER = "a-very-long-pkce-code-verifier-for-tests-0123456789";
+const VERIFIER = crypto.randomUUID() + crypto.randomUUID();
 
 function challengeFor(verifier: string): string {
   return crypto.createHash("sha256").update(verifier).digest("base64url");
@@ -38,12 +41,14 @@ beforeAll(async () => {
       "oauth@test.nomeriq.com",
       "oauth@test.nomeriq.com",
       "OAuth Test",
-      hashPassword("OAuthTestPassw0rd"),
+      hashPassword(crypto.randomUUID()),
     ],
   );
 });
 
 afterAll(async () => {
+  const db = await getDb();
+  await db.query(`DELETE FROM users WHERE id = $1`, [state.userId]);
   await closeDb();
   const dir = process.env.PGLITE_DIR;
   if (dir && dir.startsWith(".data/test-vitest-")) {
@@ -92,29 +97,90 @@ describe("oauth client registration", () => {
     expect(await clientAllowsRedirect(client.clientId, "https://evil.example/callback")).toBe(false);
   });
 
-  it("never grants more than the default scopes", () => {
-    const scopes = scopesFromRequest("research:read conversations:read send:everything");
-    expect(scopes).toContain("research:read");
-    expect(scopes).not.toContain("conversations:read");
-    expect(scopes.some((scope) => /send|delete/i.test(scope))).toBe(false);
+  it("supports opt-in email permissions but leaves the exact default grants unchanged", () => {
+    expect(DEFAULT_SCOPES).toEqual([
+      "research:read", "research:write", "drafts:write", "progress:read", "product_truth:read",
+    ]);
+    expect(SUPPORTED_SCOPES).toEqual([...ALLOWED_SCOPES]);
+    for (const missing of [undefined, null, ""]) expect(scopesFromRequest(missing)).toEqual([...DEFAULT_SCOPES]);
+    expect(scopesFromRequest("research:read conversations:read folders:read followups:read followups:write")).toEqual([
+      "research:read", "conversations:read", "folders:read", "followups:read", "followups:write",
+    ]);
+    for (const forbidden of ["*", "send:write", "drafts:approve", "drafts:queue", "records:delete", "settings:write", "jobs:write"]) {
+      expect(() => scopesFromRequest(forbidden)).toThrow(/unsupported scope/i);
+      expect(ALLOWED_SCOPES as readonly string[]).not.toContain(forbidden);
+    }
   });
 });
 
 describe("authorization code exchange", () => {
-  async function issue() {
+  async function issue(scope = "research:read research:write") {
     const client = await registerOAuthClient({
       redirectUris: ["https://example.com/callback"],
     });
     const code = await createAuthorizationCode({
       clientId: client.clientId,
       redirectUri: "https://example.com/callback",
-      scope: "research:read research:write",
+      scope,
       userId: state.userId,
       codeChallenge: challengeFor(VERIFIER),
       codeChallengeMethod: "S256",
     });
     return { client, code };
   }
+
+  it.each(["", "research:read", DEFAULT_SCOPES.join(" "), "folders:read conversations:read followups:read followups:write"])(
+    "preserves the exact stored grant through exchange and omitted-scope refresh: %s", async (scope) => {
+      const { client, code } = await issue(scope);
+      const token = await exchangeAuthorizationCode({
+        code, clientId: client.clientId, clientSecret: client.clientSecret, codeVerifier: VERIFIER,
+      });
+      expect(token.scope).toBe(scope);
+      expect((await verifyOAuthToken(token.accessToken))!.scopes).toEqual(scope.split(/\s+/).filter(Boolean));
+      const next = await refreshAccessToken({ refreshToken: token.refreshToken, clientId: client.clientId });
+      expect(next.scope).toBe(scope);
+      expect((await verifyOAuthToken(next.accessToken))!.scopes).toEqual(scope.split(/\s+/).filter(Boolean));
+    },
+  );
+
+  it.each(["followups:write", "research:read conversations:read", "*", "send:write", "research:read unknown:scope"])(
+    "rejects refresh expansion or unknown permissions without consuming the grant: %s", async (scope) => {
+      const { client, code } = await issue("research:read");
+      const token = await exchangeAuthorizationCode({ code, clientId: client.clientId, codeVerifier: VERIFIER });
+      await expect(refreshAccessToken({ refreshToken: token.refreshToken, clientId: client.clientId, scope }))
+        .rejects.toMatchObject({ code: "invalid_scope" });
+      const preserved = await refreshAccessToken({ refreshToken: token.refreshToken, clientId: client.clientId });
+      expect(preserved.scope).toBe("research:read");
+    },
+  );
+
+  it.each(["research:read", ""])("keeps an explicitly narrowed refresh grant narrowed on later omission: %s", async (scope) => {
+    const { client, code } = await issue("research:read conversations:read followups:write");
+    const token = await exchangeAuthorizationCode({ code, clientId: client.clientId, codeVerifier: VERIFIER });
+    const narrowed = await refreshAccessToken({ refreshToken: token.refreshToken, clientId: client.clientId, scope });
+    expect(narrowed.scope).toBe(scope);
+    expect((await verifyOAuthToken(narrowed.accessToken))!.scopes).toEqual(scope.split(/\s+/).filter(Boolean));
+    await expect(refreshAccessToken({
+      refreshToken: narrowed.refreshToken, clientId: client.clientId, scope: "conversations:read",
+    })).rejects.toMatchObject({ code: "invalid_scope" });
+    const later = await refreshAccessToken({ refreshToken: narrowed.refreshToken, clientId: client.clientId });
+    expect(later.scope).toBe(scope);
+  });
+
+  it.each([undefined, "", "research:read", "research:read conversations:read followups:write"])(
+    "ignores forged token-endpoint scope and uses only the authorization code grant: %s", async (scope) => {
+      const { client, code } = await issue("research:read research:write");
+      const body = new URLSearchParams({
+        grant_type: "authorization_code", code, client_id: client.clientId, code_verifier: VERIFIER,
+      });
+      if (scope !== undefined) body.set("scope", scope);
+      const response = await tokenPost(new Request("http://localhost:3100/api/oauth/token", { method: "POST", body }));
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result.scope).toBe("research:read research:write");
+      expect((await verifyOAuthToken(result.access_token))!.scopes).toEqual(["research:read", "research:write"]);
+    },
+  );
 
   it("exchanges a code with PKCE for a token that the MCP accepts", async () => {
     const { client, code } = await issue();
@@ -159,6 +225,23 @@ describe("authorization code exchange", () => {
     ).rejects.toThrow(/already used/i);
   });
 
+  it("allows only one concurrent claim of a code and of its refresh token", async () => {
+    const { client, code } = await issue("research:read");
+    const exchange = () => exchangeAuthorizationCode({ code, clientId: client.clientId, codeVerifier: VERIFIER });
+    const results = await Promise.allSettled([exchange(), exchange()]);
+    expect(results.filter((entry) => entry.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((entry) => entry.status === "rejected")).toHaveLength(1);
+    const token = results.find((entry) => entry.status === "fulfilled")!;
+    if (token.status !== "fulfilled") throw new Error("Expected one exchange");
+    const refresh = () => refreshAccessToken({ refreshToken: token.value.refreshToken, clientId: client.clientId });
+    const refreshed = await Promise.allSettled([refresh(), refresh()]);
+    expect(refreshed.filter((entry) => entry.status === "fulfilled")).toHaveLength(1);
+    expect(refreshed.filter((entry) => entry.status === "rejected")).toHaveLength(1);
+    const success = refreshed.find((entry) => entry.status === "fulfilled")!;
+    if (success.status !== "fulfilled") throw new Error("Expected one refresh");
+    expect(success.value.scope).toBe("research:read");
+  });
+
   it("refuses a wrong PKCE verifier", async () => {
     const { client, code } = await issue();
 
@@ -167,7 +250,7 @@ describe("authorization code exchange", () => {
         code,
         clientId: client.clientId,
         clientSecret: client.clientSecret,
-        codeVerifier: "the-wrong-verifier-0123456789-0123456789",
+        codeVerifier: crypto.randomUUID(),
         redirectUri: "https://example.com/callback",
       }),
     ).rejects.toThrow(/code_verifier/i);
@@ -180,7 +263,7 @@ describe("authorization code exchange", () => {
       exchangeAuthorizationCode({
         code,
         clientId: client.clientId,
-        clientSecret: "not-the-secret",
+        clientSecret: crypto.randomUUID(),
         codeVerifier: VERIFIER,
         redirectUri: "https://example.com/callback",
       }),
@@ -220,7 +303,7 @@ describe("authorization code exchange", () => {
   });
 
   it("does not treat a random string as a token", async () => {
-    expect(await verifyOAuthToken("definitely-not-a-token")).toBeNull();
+    expect(await verifyOAuthToken(crypto.randomUUID())).toBeNull();
   });
 
   it("issues a refresh token and rotates it on use", async () => {

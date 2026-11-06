@@ -40,6 +40,7 @@ import {
   type ApiKeyIdentity,
 } from "./apiKeys";
 import { ASSISTANT_SKILL } from "./instructions";
+import { EMAIL_TOOL_DEFINITIONS, runEmailAction } from "./email-tools";
 
 const categoryEnum = z.enum([
   "forex",
@@ -165,6 +166,9 @@ function outcomeFlags(action: string, result: Record<string, unknown>) {
     // A draft is either saved (created) or handed back because the founder's own version was kept.
     return { created: Boolean(result.saved), preserved: Boolean(result.preservedExisting) };
   }
+  if (action === "save_follow_up_drafts") {
+    return { created: Number(result.saved) > 0, preserved: Number(result.preserved) > 0 };
+  }
   if (action === "check_duplicate") {
     return { duplicate: Boolean(result.duplicate) };
   }
@@ -210,6 +214,13 @@ async function executeAgentAction(
 ): Promise<AgentToolResult> {
   let result: Record<string, unknown>;
   switch (action) {
+    case "get_folder_counts":
+    case "list_folder":
+    case "list_follow_ups_due":
+    case "save_follow_up_drafts": {
+      result = await runEmailAction(key, action, args, actorTypeFor(key));
+      break;
+    }
     case "get_instructions": {
       result = { instructions: ASSISTANT_SKILL };
       break;
@@ -559,7 +570,10 @@ async function executeAgentAction(
     action,
     outcome: "ok",
     flags: outcomeFlags(action, result),
-    metadata: { args: Object.keys(args) },
+    metadata: { args: Object.keys(args), ...(action === "save_follow_up_drafts" ? {
+      batch: { requested: Array.isArray(args.drafts) ? args.drafts.length : 0,
+        saved: result.saved, preserved: result.preserved, refused: result.refused },
+    } : {}) },
   }).catch(() => undefined);
 
   return {
@@ -569,6 +583,7 @@ async function executeAgentAction(
 }
 
 export const TOOL_DEFINITIONS = [
+  ...EMAIL_TOOL_DEFINITIONS,
   {
     name: "get_instructions",
     description:

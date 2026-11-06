@@ -18,13 +18,15 @@ const WRITE_TOOLS = [
   "record_search_query", // a ledger row
   "save_prospect", // a new prospect
   "save_draft", // a draft
+  "save_follow_up_drafts", // follow-up drafts only; never approval, queue or send
   "suggest_reply", // a suggestion, never a send
   "suggest_follow_up", // a suggestion, never a send
 ];
 
 describe("the MCP tool surface", () => {
-  it("exposes the seventeen tools the plan lists", () => {
-    expect(tools.length).toBe(17);
+  it("exposes the research inventory plus four approved narrow email tools", () => {
+    expect(tools.length).toBe(21);
+    for (const name of ["get_folder_counts", "list_folder", "list_follow_ups_due", "save_follow_up_drafts"]) expect(byName.has(name), name).toBe(true);
     expect(new Set(tools.map((tool) => tool.name)).size).toBe(tools.length);
   });
 
@@ -56,13 +58,16 @@ describe("the MCP tool surface", () => {
       "list_conversations",
       "get_conversation",
       "get_conversation_context",
+      "get_folder_counts",
+      "list_folder",
+      "list_follow_ups_due",
     ];
     for (const name of expectedReadOnly) {
       expect(byName.get(name)?.readOnly, name).toBe(true);
     }
   });
 
-  it("allows exactly the five tools that may write", () => {
+  it("allows exactly the six tools that may write", () => {
     const writable = tools.filter((tool) => !tool.readOnly).map((tool) => tool.name).sort();
     expect(writable).toEqual([...WRITE_TOOLS].sort());
   });

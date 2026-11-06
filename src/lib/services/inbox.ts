@@ -30,6 +30,10 @@ export interface InboxFilters {
   /** An agent tag, or "unknown". */
   agent?: string | null;
   limit?: number;
+  /** API traversal uses bounded pages instead of a growing prefix. */
+  offset?: number;
+  /** Counts-only tools must not fetch message snippets or return lead rows. */
+  countsOnly?: boolean;
   /** The open lead: returned even when it is outside the selected folder (e.g. just moved to Won). */
   focus?: string | null;
 }
@@ -108,7 +112,7 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
     params.push(filters.sender);
     conditions.push(`p.sending_profile_id::text = $${params.length}`);
   }
-  if (filters.agent === "unknown") conditions.push("p.source_agent IS NULL");
+  if (filters.agent === "unknown") conditions.push("coalesce(p.source_agent, 'unknown') = 'unknown'");
   else if (filters.agent) {
     params.push(filters.agent);
     conditions.push(`p.source_agent = $${params.length}`);
@@ -128,8 +132,12 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
             WHEN 'bounce' THEN 3 ELSE 4 END LIMIT 1) AS suppression_reason,
         d.id AS draft_id, d.kind AS draft_kind, d.sequence AS draft_sequence, d.status AS draft_status, d.updated_at AS draft_updated_at,
         c.id AS conversation_id, c.subject, c.unread_count, c.last_inbound_at, c.last_outbound_at,
-        (SELECT max(coalesce(m.received_at, m.created_at)) FROM messages m WHERE m.prospect_id = p.id AND m.direction = 'inbound') AS message_inbound_at,
-        (SELECT max(coalesce(m.sent_at, m.created_at)) FROM messages m WHERE m.prospect_id = p.id AND m.direction = 'outbound') AS message_outbound_at,
+        (SELECT max(coalesce(m.received_at, m.created_at)) FROM messages m
+          LEFT JOIN conversations mc ON mc.id = m.conversation_id
+          WHERE coalesce(m.prospect_id, mc.prospect_id) = p.id AND m.direction = 'inbound') AS message_inbound_at,
+        (SELECT max(coalesce(m.sent_at, m.created_at)) FROM messages m
+          LEFT JOIN conversations mc ON mc.id = m.conversation_id
+          WHERE coalesce(m.prospect_id, mc.prospect_id) = p.id AND m.direction = 'outbound') AS message_outbound_at,
         (SELECT max(sd.sent_at) FROM drafts sd WHERE sd.prospect_id = p.id AND sd.status = 'sent') AS draft_sent_at,
         EXISTS (SELECT 1 FROM conversations c2 WHERE c2.prospect_id = p.id AND c2.last_inbound_at IS NOT NULL) AS has_replied
        FROM prospects p
@@ -192,10 +200,11 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
   const requested = isInboxFolder(filters.folder) ? filters.folder : defaultFolder(counts);
   const inFolder = all
     .filter((row) => row.folder === requested)
-    .sort((a, b) => (Date.parse(b.lastActivityAt ?? "") || 0) - (Date.parse(a.lastActivityAt ?? "") || 0));
-  const limit = Math.max(1, Math.min(Math.floor(filters.limit ?? INBOX_PAGE_SIZE) || INBOX_PAGE_SIZE, 500));
-  const rows = inFolder.slice(0, limit);
-  const focused = filters.focus ? all.find((row) => row.prospectId === filters.focus) ?? null : null;
+    .sort((a, b) => (Date.parse(b.lastActivityAt ?? "") || 0) - (Date.parse(a.lastActivityAt ?? "") || 0) || a.prospectId.localeCompare(b.prospectId));
+  const limit = Number.isFinite(filters.limit) && filters.limit! > 0 ? Math.floor(filters.limit!) : INBOX_PAGE_SIZE;
+  const offset = Number.isFinite(filters.offset) && filters.offset! > 0 ? Math.floor(filters.offset!) : 0;
+  const rows = filters.countsOnly ? [] : inFolder.slice(offset, offset + limit);
+  const focused = !filters.countsOnly && filters.focus ? all.find((row) => row.prospectId === filters.focus) ?? null : null;
   const withSnippets = focused && !rows.includes(focused) ? [...rows, focused] : rows;
 
   // The latest message line for the visible rows only.
@@ -217,5 +226,5 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
     }
   }
 
-  return { folder: requested, counts, total: inFolder.length, rows, limit, hasMore: inFolder.length > rows.length, focused };
+  return { folder: requested, counts, total: inFolder.length, rows, limit, hasMore: inFolder.length > offset + rows.length, focused };
 }

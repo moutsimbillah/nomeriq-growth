@@ -22,7 +22,8 @@ function hashKey(key: string): string {
 }
 
 /**
- * Fixed-window, in-memory request limiter keyed by API key id.
+ * Fixed-window, in-memory request limiter keyed by authenticated identity id
+ * (API key id or OAuth client id, shared across that client's rotated tokens).
  *
  * This limiter is per-process, exactly like the existing login limiter in
  * `src/lib/auth/request.ts`: counters live in a module-level Map, so every
@@ -53,7 +54,7 @@ function checkApiKeyRateLimit(keyId: string): void {
   record.count += 1;
   if (record.count > limit) {
     throw new AppError(
-      `Rate limit exceeded: ${limit} requests per minute per API key. Retry in a minute.`,
+      `Rate limit exceeded: ${limit} requests per minute per agent identity. Retry in a minute.`,
       429,
       "rate_limited",
     );
@@ -168,6 +169,7 @@ export async function authenticateApiKey(
     // rather than an API key, so the same header is checked against that store too.
     const oauth = await verifyOAuthToken(key);
     if (oauth) {
+      checkApiKeyRateLimit(`oauth:${oauth.clientId}`);
       return {
         id: `oauth:${oauth.clientId}`,
         name: oauth.clientName || "MCP connector",
