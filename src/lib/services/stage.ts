@@ -18,6 +18,10 @@ export const FOUNDER_STAGE_LABELS: Record<FounderStage, string> = {
   lost: "Lost",
 };
 
+/** Where a move came from, kept in the audit entry. */
+export const STAGE_MOVE_SOURCES = ["stage_buttons", "board_click", "board_drag"] as const;
+export type StageMoveSource = (typeof STAGE_MOVE_SOURCES)[number];
+
 export function isFounderStage(value: unknown): value is FounderStage {
   return typeof value === "string" && (FOUNDER_STAGES as readonly string[]).includes(value);
 }
@@ -26,6 +30,7 @@ export async function setLeadStage(
   prospectId: string,
   stage: FounderStage,
   userId: string,
+  via: StageMoveSource = "stage_buttons",
 ): Promise<{ from: string; to: FounderStage; changed: boolean }> {
   if (!isFounderStage(stage)) throw new AppError("That stage is not one you set by hand.", 400);
   const db = await getDb();
@@ -42,7 +47,7 @@ export async function setLeadStage(
     await tx.query(
       `INSERT INTO audit_log (id, actor_type, actor_id, action, entity_type, entity_id, metadata)
        VALUES ($1, 'founder', $2, 'lead.stage_changed', 'prospect', $3, $4::jsonb)`,
-      [crypto.randomUUID(), userId, prospectId, JSON.stringify({ from: row.status, to: stage, via: "stage_buttons" })],
+      [crypto.randomUUID(), userId, prospectId, JSON.stringify({ from: row.status, to: stage, via })],
     );
     return { from: row.status, to: stage, changed: true };
   });

@@ -48,6 +48,8 @@ export const EMAIL_TOOLS = [
   { href: "/email?tab=drafts", label: "Drafts" },
   { href: "/email?tab=campaigns", label: "Campaigns" },
   { href: "/email?tab=followups", label: "Follow-ups" },
+  { href: "/pipeline", label: "Pipeline" },
+  { href: "/pipeline/analytics", label: "Analytics" },
   { href: "/email?tab=inbox", label: "Mailbox list" },
 ] as const;
 

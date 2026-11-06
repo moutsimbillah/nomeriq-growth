@@ -7,6 +7,7 @@ import {
   BookOpenCheck,
   ChevronRight,
   LayoutDashboard,
+  Columns3,
   LogOut,
   Mail,
   Menu,
@@ -24,6 +25,7 @@ const NAV = [
   { href: "/research", label: "Research", icon: Radar },
   { href: "/leads", label: "Leads", icon: UsersRound },
   { href: "/email", label: "Email", icon: Mail },
+  { href: "/pipeline", label: "Pipeline", icon: Columns3 },
   { href: "/product-truth", label: "Product Truth", icon: BookOpenCheck },
   { href: "/settings", label: "Settings", icon: Settings2 },
 ];
