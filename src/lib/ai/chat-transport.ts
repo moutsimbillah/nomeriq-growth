@@ -69,6 +69,9 @@ function textFromPayload(provider: string, payload: unknown): { text: string; mo
   if (provider === "gemini") return { text: (data.candidates?.[0]?.content?.parts ?? []).filter(part => !part.thought).map(part => part.text ?? "").join("") };
   return { text: data.choices?.[0]?.message?.content ?? data.choices?.[0]?.delta?.content ?? "", model: data.model };
 }
+class StreamProviderError extends Error {
+  constructor(public readonly code: string) { super(code); }
+}
 function completion(provider: string, raw: string): { text: string; model?: string } {
   if (!raw.trimStart().startsWith("data:") && !raw.includes("\ndata:")) {
     return textFromPayload(provider, JSON.parse(raw));
@@ -80,7 +83,7 @@ function completion(provider: string, raw: string): { text: string; model?: stri
     const data = line.slice(5).trim();
     if (!data || data === "[DONE]") continue;
     const payload = JSON.parse(data);
-    if (payload.error) throw new Error("stream_error");
+    if (payload.error) throw new StreamProviderError(`stream_${safeProviderError(payload).code ?? "provider_error"}`);
     const part = textFromPayload(provider, payload);
     text += part.text;
     model = part.model || model;
@@ -164,8 +167,12 @@ export async function requestProviderChat(config: ChatProviderConfig, key: strin
       return { ok: true, text: result.text, model: result.model || config.model };
     }
     return { ok: false, code: "unsupported_fields", reason: "Provider rejected optional fields after the bounded compatibility retries." };
-  } catch {
-    return { ok: false, code: "request_failed", reason: "Provider request failed or returned an invalid response." };
+  } catch (error) {
+    const code = error instanceof StreamProviderError ? error.code
+      : error instanceof SyntaxError ? "invalid_response_json"
+      : error instanceof Error && error.name === "AbortError" ? "request_timeout"
+      : "request_failed";
+    return { ok: false, code, reason: `Provider request failed (code: ${code}).` };
   } finally {
     clearTimeout(timer);
   }

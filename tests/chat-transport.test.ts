@@ -85,7 +85,7 @@ it("fails rather than claiming success for an empty model response", async () =>
 
 it("fails a stream containing a provider error rather than accepting partial text", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response('data: {"error":{"message":"private"}}\n\ndata: [DONE]\n')));
-  expect(await requestProviderChat(config, key, input)).toMatchObject({ ok: false, code: "request_failed" });
+  expect(await requestProviderChat(config, key, input)).toMatchObject({ ok: false, code: "stream_provider_error" });
 });
 
 it("lists exact model IDs without repairing or aliasing them", async () => {
