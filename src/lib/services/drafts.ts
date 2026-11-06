@@ -646,6 +646,30 @@ export async function approveDraft(
   return (await getDraft(id))!;
 }
 
+/**
+ * "Approve selected" / "Approve all": the same approval as one click per draft, for a list. Each
+ * draft goes through approveDraft, so every rule still applies; one refusal does not stop the rest,
+ * and every refusal comes back with its reason. Approving never sends — sending stays a separate,
+ * founder-started step (a campaign, within each profile's daily limit).
+ */
+export async function approveDrafts(
+  ids: string[],
+  userId: string,
+): Promise<{ approved: string[]; refused: { id: string; reason: string }[] }> {
+  const approved: string[] = [];
+  const refused: { id: string; reason: string }[] = [];
+  for (const id of [...new Set(ids)]) {
+    try {
+      const draft = await approveDraft(id, userId);
+      if (draft.status === "approved") approved.push(id);
+      else refused.push({ id, reason: `It is ${draft.status}, not a draft awaiting approval.` });
+    } catch (error) {
+      refused.push({ id, reason: error instanceof Error ? error.message : "Could not approve." });
+    }
+  }
+  return { approved, refused };
+}
+
 export async function discardDraft(id: string): Promise<void> {
   const db = await getDb();
   const result = await db.query(

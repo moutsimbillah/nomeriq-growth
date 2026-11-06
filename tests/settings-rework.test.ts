@@ -27,7 +27,13 @@ beforeAll(async () => {
   await ensureWorkspaceDefaults();
   userId = (await ensureBootstrapUser({ email: "rework@example.test", password: crypto.randomUUID(), name: "Rework" })).id;
 });
-afterAll(async () => { await closeDb(); });
+afterAll(async () => {
+  // Later files (seed-scope) expect no users or keys left behind.
+  const db = await getDb();
+  await db.query(`DELETE FROM api_keys WHERE created_by = $1`, [userId]);
+  await db.query(`DELETE FROM users WHERE id = $1`, [userId]);
+  await closeDb();
+});
 
 describe("part 1 — one provider list", () => {
   it("no longer renders the old DeepSeek form, and names the section 'AI providers' with the founder's line", () => {

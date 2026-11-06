@@ -119,10 +119,22 @@ export interface PrepareFollowUpOutcome {
   room: number;
 }
 
+/** Most drafts one founder click may prepare (Prepare selected / Prepare next N). */
+export const FOLLOW_UP_BATCH_MAX = 50;
+
 export async function prepareFollowUpDraftOutcome(input: {
   userId: string;
   prospectIds?: string[];
+  /** At most this many drafts in this run (still within the day's limit). */
+  limit?: number;
+  /**
+   * Who asked. The scheduled job honours the "Automatic follow-ups" switch; a founder click
+   * (Prepare selected / Prepare next N) is itself the decision, so it works with the switch off.
+   * Both stay within "Follow-ups per day", and preparing never sends anything.
+   */
+  trigger?: "scheduler" | "founder";
 }): Promise<PrepareFollowUpOutcome> {
+  const trigger = input.trigger ?? "scheduler";
   const settings = await getWorkspaceSettings();
   if (settings.followUpMax <= 0) {
     throw new AppError(
@@ -130,7 +142,7 @@ export async function prepareFollowUpDraftOutcome(input: {
       409,
     );
   }
-  if (!settings.followUpAutoEnabled) {
+  if (trigger === "scheduler" && !settings.followUpAutoEnabled) {
     // Off by default, so an import of hundreds of contacted leads cannot turn into hundreds of drafts
     // on the first night. The founder switches this on in Settings when the backlog should start moving.
     const candidates = await listFollowUpCandidates();
@@ -173,7 +185,7 @@ export async function prepareFollowUpDraftOutcome(input: {
           input.prospectIds.includes(candidate.prospectId)),
     )
     // Newest last send first: recent contacts get a timely follow-up and the oldest backlog comes last.
-    .slice(0, room);
+    .slice(0, Math.min(room, input.limit && input.limit > 0 ? Math.floor(input.limit) : room, trigger === "founder" ? FOLLOW_UP_BATCH_MAX : room));
   const created: Draft[] = [];
   const db = await getDb();
   for (const candidate of candidates) {

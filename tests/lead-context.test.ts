@@ -90,6 +90,12 @@ beforeAll(async () => {
 });
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => { await clearAiSettings();
+  // Later files count every lead (report-progress-overall): leave none behind.
+  const db = await getDb();
+  await db.query(`DELETE FROM messages WHERE conversation_id = $1`, [conversationId]);
+  await db.query(`DELETE FROM conversations WHERE id = $1`, [conversationId]);
+  await db.query(`DELETE FROM drafts WHERE prospect_id = $1`, [prospectId]);
+  await db.query(`DELETE FROM prospects WHERE id = $1`, [prospectId]);
   await closeDb(); });
 
 describe("the shared lead context", () => {
@@ -118,6 +124,7 @@ describe("the shared lead context", () => {
     expect(text).toContain("[English translation from es");
     expect(text).toContain("We have 3,100 subscribers.");
     expect(context.prospectLanguage).toBe("es");
+    expect(text).toContain("Prospect's language: Spanish (es), from their latest message");
 
     // Earlier drafts and what was sent, with who wrote them.
     expect(text).toContain("First email · sent · SENT 2026-11-01 09:00 UTC · written by Growth-Chat-Search · deepseek-flash");

@@ -75,6 +75,8 @@ beforeEach(async () => {
   providerId = await createResearchProvider({ name: "Route fixture", provider: "openai", apiKey: "sk-route-fixture" });
 });
 afterAll(async () => { await clearAiSettings();
+  // Later files (seed-scope) expect no users left behind.
+  if (role.userId) await (await getDb()).query(`DELETE FROM users WHERE id = $1`, [role.userId]);
   await closeDb(); });
 
 it("the founder rule admits only the founder role", () => {

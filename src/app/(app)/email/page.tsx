@@ -36,7 +36,7 @@ import {
   listFollowUpCandidates,
   listFollowUpDraftsPage,
 } from "@/lib/services/followups";
-import { draftProvenance } from "@/lib/ai/provenance";
+import { FollowUpDraftList, FollowUpEligibleList } from "@/components/follow-up-bulk";
 import { listCampaigns } from "@/lib/services/campaigns";
 import { listEmailAccounts } from "@/lib/email/accounts";
 import { getSyncHealth } from "@/lib/email/sync";
@@ -54,9 +54,7 @@ import {
 import { SyncMailboxButton } from "@/components/sync-mailbox-button";
 import {
   CampaignActions,
-  FollowUpReview,
   NewCampaignButton,
-  PrepareFollowUpsButton,
 } from "@/components/email-actions";
 import { formatDateTime, relativeTime, truncate } from "@/lib/utils";
 import { CLASSIFICATION_LABELS } from "@/lib/types";
@@ -207,6 +205,8 @@ export default async function EmailPage({
     (draft) => draft.kind === "first_contact" && draft.status === "approved",
   );
   const dueFollowUps = followCandidates.filter((candidate) => candidate.due);
+  // "Eligible but not yet prepared": due, and no draft is already waiting for review.
+  const unpreparedFollowUps = dueFollowUps.filter((candidate) => !candidate.activeDraftId);
   const sandbox =
     (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() !== "live" ||
     account?.provider === "sandbox";
@@ -790,7 +790,6 @@ export default async function EmailPage({
                 title="Unanswered conversations"
                 description="A reply, opt-out, suppression or disqualifying stage stops the sequence. No message is ever sent automatically."
               />
-              <PrepareFollowUpsButton />
             </div>
             {/* The true total, never the window: the same fault the Leads page had. */}
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-12 text-muted">
@@ -815,36 +814,7 @@ export default async function EmailPage({
                 description="Once a contacted thread passes the configured waiting period without a reply, its personalized follow-up can be prepared here."
               />
             ) : (
-              <div className="mt-4 space-y-2">
-                {followDrafts.map((draft) => (
-                  <div
-                    key={draft.id}
-                    className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-white/50 px-3.5 py-3"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-12 font-semibold text-ink">
-                          {draft.prospectName}
-                        </span>
-                        <span className="badge">#{draft.sequence}</span>
-                        <span className="badge capitalize">{draft.status}</span>
-                      </div>
-                      <div className="mt-0.5 truncate text-12 text-muted">
-                        {draft.subject} · {truncate(draft.body.replace(/\n+/g, " "), 130)}
-                      </div>
-                      <div className="mt-0.5 text-12 text-faint" data-draft-provenance>
-                        {draftProvenance(draft)}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <FollowUpReview draft={draft} sandbox={sandbox} />
-                      <Link href={`/leads/${draft.prospectId}`} className="btn-ghost btn-xs">
-                        Lead <ArrowRight size={10} />
-                      </Link>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <FollowUpDraftList drafts={followDrafts} sandbox={sandbox} />
             )}
             {followDraftPage.hasMore && (
               <div className="mt-4 flex flex-wrap items-center justify-center gap-3 text-12">
@@ -860,33 +830,18 @@ export default async function EmailPage({
           <Card className="p-5">
             <SectionHeading
               title="Eligible but not yet prepared"
-              description={`${followOverview.due} due now. Preparing creates drafts only; sending still needs founder review.`}
+              description={`${unpreparedFollowUps.length} due and not yet prepared. Preparing creates drafts only; sending still needs founder review.`}
             />
-            {dueFollowUps.length === 0 ? (
-              <p className="mt-3 text-12 text-faint">Nothing is due.</p>
-            ) : (
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                {dueFollowUps.map((candidate) => (
-                  <div
-                    key={candidate.conversationId}
-                    className="flex items-center justify-between rounded-lg border border-line bg-paper/40 px-3 py-2.5"
-                  >
-                    <div>
-                      <div className="text-12 font-semibold text-ink">
-                        {candidate.businessName}
-                      </div>
-                      <div className="text-12 text-faint">
-                        {candidate.daysSinceLastOutbound} days since contact · next #
-                        {candidate.nextSequence}
-                      </div>
-                    </div>
-                    <Link href={`/email/${candidate.conversationId}`} className="btn-ghost btn-xs">
-                      Thread <ArrowRight size={10} />
-                    </Link>
-                  </div>
-                ))}
-              </div>
-            )}
+            <FollowUpEligibleList
+              dailyLimit={settings.followUpDailyLimit}
+              candidates={unpreparedFollowUps.map((candidate) => ({
+                conversationId: candidate.conversationId,
+                prospectId: candidate.prospectId,
+                businessName: candidate.businessName,
+                daysSinceLastOutbound: candidate.daysSinceLastOutbound,
+                nextSequence: candidate.nextSequence,
+              }))}
+            />
           </Card>
         </div>
       )}

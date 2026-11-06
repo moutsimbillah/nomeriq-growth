@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db/client";
 import { productTruthBlock } from "@/lib/ai/product-truth";
+import { languageName } from "@/lib/email/translation-view";
 import { getProspect } from "@/lib/services/prospects";
 import { getProductTruth, getWorkspaceSettings } from "@/lib/services/settings";
 import { resolveSendingProfile } from "@/lib/email/profiles";
@@ -276,6 +277,7 @@ export async function buildLeadContext(prospectId: string, options: { conversati
     `Stage: ${prospect.status}`,
     `Conversation classification: ${classification ?? "not classified"}`,
     `Contact email: ${orNone(prospect.contactEmail)}`,
+    `Prospect's language: ${prospectLanguage ? `${languageName(prospectLanguage)} (${prospectLanguage}), from their latest message` : "English, or not detected"}`,
     `Sending profile: ${profile ? `${profile.fromName} <${profile.emailAddress}>` : "none configured"}`,
     `Workspace timezone: ${settings.timezone}`,
     "",

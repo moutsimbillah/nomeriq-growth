@@ -25,7 +25,8 @@ describe("draft provenance", () => {
     const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
     expect(read("src/components/lead-actions.tsx")).toContain("draftProvenance(draft, agentPillLabel)");
     expect(read("src/app/(app)/leads/[id]/page.tsx")).toContain("draftProvenance(followUp)");
-    expect(read("src/app/(app)/email/page.tsx")).toContain("draftProvenance(draft)");
+    expect(read("src/components/follow-up-bulk.tsx")).toContain("draftProvenance(draft)");
+    expect(read("src/app/(app)/email/page.tsx")).toContain("<FollowUpDraftList");
   });
 
   it("names the reply language in words for the founder", () => {

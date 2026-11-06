@@ -45,7 +45,12 @@ beforeAll(async () => {
   userId = (await ensureBootstrapUser({ email: "truth@example.test", password: crypto.randomUUID(), name: "Truth" })).id;
 });
 afterEach(() => vi.unstubAllGlobals());
-afterAll(async () => { await clearAiSettings(); await closeDb(); });
+afterAll(async () => {
+  await clearAiSettings();
+  // Later files (seed-scope) expect no users left behind; every users FK is SET NULL or CASCADE.
+  await (await getDb()).query(`DELETE FROM users WHERE id = $1`, [userId]);
+  await closeDb();
+});
 
 describe("the Product Truth block", () => {
   it("carries every part, with version and status in the heading", () => {
@@ -155,6 +160,8 @@ describe("every AI action receives the full block", () => {
     expect(seen[0]).toContain("Must never be claimed:");
     } finally {
       await clearAiSettings();
+      await db.query(`DELETE FROM drafts WHERE prospect_id IN (SELECT id FROM prospects WHERE name_key = 'truth-lead')`);
+      await db.query(`DELETE FROM prospects WHERE name_key = 'truth-lead'`);
     }
   });
 
