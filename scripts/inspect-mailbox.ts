@@ -59,6 +59,7 @@ export async function inspectWithClients(db: AuditDb, createImap: (account: Row)
     limits: LIMITS, invariants: { database: "direct_pg_BEGIN_READ_ONLY_SELECT_ROLLBACK", imap: "EXAMINE_BODY.PEEK", output: "counts_leadnames_only", writes: 0, historicalSkipReasonsReconstructable: false },
     limitations: ["Only retained INBOX and every LIST-discovered Sent candidate are content-scanned; other folders inventoried only.", "No deleted/expunged history; folder changes during scan invalidate completeness.", "Old newest-40 membership and exact historical skip reasons cannot be reconstructed; reason counters are nonexclusive evidence, not causal claims.", "Old 30-day evidence uses sync-state creation as a first-sync proxy and INTERNALDATE with an extra conservative day for IMAP date granularity; near-boundary cases remain unexplained.", "Bounce kind counts are recipient-level report outcomes; reportMessages counts deduplicated DSN/ARF messages.", "Weak address/subject, domain and signature-tail candidates never become links or enter chronology simulation; quoted text can produce weak name candidates.", "Waiting simulation compares exact-thread chronology only, not all portal folder precedence; no live fix.", "Before/after counts detect concurrent changes, not equal-content replacements; no claim that production is quiescent.", "Resource/time/oversize/parse failures are explicit incomplete coverage, never silent caps."] };
   let transaction = false;
+  let phase = "database_snapshot";
   let imap: ReadOnlyImap | undefined;
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; imap?.close(); }, LIMITS.timeoutMs);
@@ -68,9 +69,11 @@ export async function inspectWithClients(db: AuditDb, createImap: (account: Row)
     await db.query("BEGIN READ ONLY ISOLATION LEVEL REPEATABLE READ"); transaction = true;
     if ((await db.query("SELECT current_setting('transaction_read_only') AS read_only")).rows[0]?.read_only !== "on") throw new Error("read_only_not_confirmed");
     report.before = (await db.query(SNAPSHOT_SQL)).rows[0];
+    phase = "account_selection";
     const accounts = (await db.query(`SELECT id, imap_host, imap_port, imap_secure, username, password_encrypted, last_sync_at, created_at FROM email_accounts WHERE provider <> 'sandbox' AND status = 'connected' ORDER BY id`)).rows;
     if (accounts.length !== 1) throw new Error("connected_account_not_unique");
     const account = accounts[0];
+    phase = "database_facts";
     const leads = await pages(db, "prospects", "id, business_name, domain_key, archived_at");
     const conversations = await pages(db, "conversations", "id, prospect_id, last_inbound_at, last_outbound_at");
     const messages = await pages(db, "messages", "id, account_id, prospect_id, conversation_id, direction, source, folder, uidvalidity, uid, message_id, in_reply_to, references_json, from_email, to_emails, subject, body_text, sent_at, received_at");
@@ -92,8 +95,11 @@ export async function inspectWithClients(db: AuditDb, createImap: (account: Row)
         WHERE tm.data->>'source_id' = lk.data->>'source_id' AND tm.data->>'direction' = 'INBOUND'))`)).rows;
     if (legacy.length > LIMITS.maxRows) throw new Error("legacy_resource_limit");
     checkTime();
+    phase = "imap_client";
     imap = createImap(account);
+    phase = "imap_connect";
     await imap.connect();
+    phase = "imap_list";
     const folders = await imap.list();
     const candidates = folders.filter(f => folderKind(f));
     report.inventory = folders.map((f, i) => ({ ordinal: i + 1, folder: folderLabel(f.path, i + 1), kind: folderKind(f) || "inventory_only", selectable: !f.flags?.has("\\Noselect") }));
@@ -168,11 +174,12 @@ export async function inspectWithClients(db: AuditDb, createImap: (account: Row)
       }
     }
     const firstSync = Math.min(...states.filter(s => s.account_id === account.id).map(s => stamp(s.created_at)).filter(Boolean), Infinity);
+    phase = "analysis";
     report.analysis = analyze({ accountId: account.id, leads, conversations, messages, emails, suppressions, bounces, legacy, states, mailbox,
       firstSync: Number.isFinite(firstSync) ? firstSync : 0, primarySent: primarySent?.path || null });
     if (report.analysis.legacy.identifiedExcerptCohort !== 19 || report.analysis.legacy.identifiedNeedsMatchingCohort !== 8) report.errors.push("legacy_cohort_count_mismatch");
     if (report.analysis.needsReply.some((r: Row) => !r.complete)) report.errors.push("needs_reply_cohort_incomplete");
-  } catch { report.errors.push(timedOut ? "audit_timeout" : "audit_failed"); }
+  } catch { report.errors.push(timedOut ? "audit_timeout" : `${phase}_failed`); }
   finally {
     if (imap) { try { await imap.logout(); } catch { imap.close(); report.errors.push("imap_cleanup_failed"); } }
     if (transaction) { try { await db.query("ROLLBACK"); transaction = false; } catch { report.errors.push("database_cleanup_failed"); } }
@@ -195,7 +202,8 @@ export async function main() {
   let connectionError = false;
   try {
     if (process.platform !== "linux" || process.argv.length !== 2) throw new Error("runtime_rejected");
-    const env = config({ path: "/home/growth/.growth.env", quiet: true, debug: false, override: true });
+    // Matches growth.service's verified EnvironmentFiles path, not the backup helper's DB-only file.
+    const env = config({ path: "/home/growth/.env.production", quiet: true, debug: false, override: true });
     if (env.error || !process.env.DATABASE_URL) throw new Error("environment_unavailable");
     assertTarget(process.env.DATABASE_URL);
     db = new Client({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 15_000, query_timeout: 60_000, application_name: "readonly-mailbox-inspector" });

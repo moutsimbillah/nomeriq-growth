@@ -264,6 +264,6 @@ describe("read-only injected runtime; no network or live credentials", () => {
     expect(source).not.toMatch(/getDb|from ["'].*(?:services|sync|accounts|bounce-handling|sent-copy|send-provider|nodemailer)/);
     expect(source + helper).not.toMatch(/\.(?:append|messageFlagsAdd|messageFlagsSet|messageFlagsRemove|messageDelete|mailboxCreate|mailboxDelete|messageMove|messageCopy|writeFile|createWriteStream)\s*\(/);
     expect(source).toContain('logger: false, logRaw: false, emitLogs: false');
-    expect(source).toContain('path: "/home/growth/.growth.env", quiet: true');
+    expect(source).toContain('path: "/home/growth/.env.production", quiet: true');
   });
 });
