@@ -6,7 +6,7 @@ import { ArrowDown, ArrowUp, LoaderCircle, Plus, Trash2 } from "lucide-react";
 
 import { Notice } from "../ui";
 import { apiRequest, InlineError } from "../client-ui";
-import { chatCapability, workingChatProvider, taskRouting, type ChatProviderOption } from "@/lib/ai/routing";
+import { chatCapability, workingChatProvider, taskRouting, RULE_BASED_LABEL, RULE_BASED_TASKS, type ChatProviderOption } from "@/lib/ai/routing";
 
 export interface TaskView {
   task: string;
@@ -107,7 +107,7 @@ export function AiTasksCard({
         body: { allActions: true, providerId: selectedBulkId },
       }) as { tasks?: TaskView[] } | null;
       if (data?.tasks) setTasks(data.tasks);
-      setNotice("Provider and model saved for all six email AI actions. Lead research is unchanged.");
+      setNotice("Provider and model saved for the email AI actions. Lead research is unchanged; Classification is rule-based and uses no AI.");
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "That did not work.");
@@ -137,7 +137,7 @@ export function AiTasksCard({
           Use this provider for all actions
         </button>
       </div>
-      <p className="mt-1 text-12 text-faint">Applies to the six email AI actions. Lead research stays unchanged and may remain not assigned until its part is built.</p>
+      <p className="mt-1 text-12 text-faint">Applies to the email AI actions. Lead research stays unchanged and may remain not assigned until its part is built. Classification is rule-based and uses no AI.</p>
 
       {providers.length === 0 && (
         <p className="mt-3 text-12 text-faint">
@@ -147,6 +147,21 @@ export function AiTasksCard({
 
         <div className="mt-3 space-y-2">
           {tasks.map((task) => {
+            if (RULE_BASED_TASKS.has(task.task)) {
+              // No AI call exists for this action: a plain statement, no provider picker or status.
+              return (
+                <div key={task.task} data-ai-action={task.task} data-status="rule_based" className="min-w-0 rounded-lg border border-line/70 bg-paper/40 px-2.5 py-2">
+                  <div className="flex flex-wrap items-center gap-2 text-12 font-bold text-ink">
+                    {task.label}
+                    <span className="text-muted" data-rule-based>{RULE_BASED_LABEL}</span>
+                  </div>
+                  <div className="break-anywhere text-12 text-muted">
+                    Replies are sorted by fixed rules (interested, not interested, opt-out, out of office and
+                    similar). No provider is called, so there is nothing to assign here.
+                  </div>
+                </div>
+              );
+            }
             const expanded = open === task.task;
             const route = taskRouting(task, providers);
             const replacement = route.replacement;

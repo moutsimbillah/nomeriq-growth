@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { RULE_BASED_TASKS } from "@/lib/ai/routing";
 import type { ReactNode } from "react";
 import {
   BookOpenCheck,
@@ -123,7 +124,9 @@ export default async function SettingsPage() {
       ? "live"
       : "sandbox";
   // AI mode is what the AI actions actually use: assigned actions and working providers from the list.
-  const assignedActions = aiTaskSettings.filter((task) => task.providerId).length;
+  // Classification is rule-based (no AI call), so it is not counted as an AI action here.
+  const aiActions = aiTaskSettings.filter((task) => !RULE_BASED_TASKS.has(task.task));
+  const assignedActions = aiActions.filter((task) => task.providerId).length;
   const workingProviders = aiProviders.filter((provider) => provider.isEnabled && provider.lastTestOk === true && provider.kinds !== "search").length;
 
   return (
@@ -339,7 +342,7 @@ export default async function SettingsPage() {
                   value:
                     assignedActions === 0
                       ? "No AI provider assigned — No-AI fallback"
-                      : `${assignedActions} of 7 actions assigned · ${workingProviders} working ${workingProviders === 1 ? "provider" : "providers"}`,
+                      : `${assignedActions} of ${aiActions.length} AI actions assigned · ${workingProviders} working ${workingProviders === 1 ? "provider" : "providers"}`,
                   icon: Bot,
                 },
                 {

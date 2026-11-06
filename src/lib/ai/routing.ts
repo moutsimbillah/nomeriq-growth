@@ -15,6 +15,14 @@ export const AI_TASK_LABELS: Record<AiTask, string> = {
   lead_research: "Lead research",
 };
 
+/**
+ * Actions listed in Settings that make no AI call today. Replies are classified by fixed rules
+ * (src/lib/email/classify.ts), so a provider stored for "classification" is never used, and Settings
+ * must not present it as an active AI setting.
+ */
+export const RULE_BASED_TASKS: ReadonlySet<string> = new Set<string>(["classification"] satisfies AiTask[]);
+export const RULE_BASED_LABEL = "Rule-based — no AI used yet";
+
 export interface ChatProviderOption {
   id: string;
   name: string;
