@@ -11,7 +11,7 @@ REPO="/d/DeepSeek Nomeirq3.5/Nomeriq Leads"
 P=""
 
 remote() { timeout 90 ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20 "$HOST" "$1" 2>/dev/null; }
-sql()    { remote "sudo -n -u growth python3 /tmp/pgx.py psql -d growth -X -A -t -c \"$1\""; }
+sql()    { remote "sudo -n -u growth python3 /home/growth/app/scripts/pgx.py psql -d growth -X -A -t -c \"$1\""; }
 
 # 1. API health, internal and public.
 IN=$(remote 'curl -s -m 10 -o /dev/null -w "%{http_code}" http://127.0.0.1:3100/api/health')

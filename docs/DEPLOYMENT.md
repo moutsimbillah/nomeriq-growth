@@ -284,7 +284,7 @@ import window's harness - is invisible to it, and the tool will try to apply eve
 order, including ones that rewrite constraints. So before deploying:
 
 ```bash
-sudo -u growth python3 /tmp/pgx.py psql -d growth -X -A -t -c "SELECT id FROM _migrations ORDER BY id"
+sudo -u growth python3 /home/growth/app/scripts/pgx.py psql -d growth -X -A -t -c "SELECT id FROM _migrations ORDER BY id"
 ```
 
 Every file in `src/db/migrations/` must appear there. For a migration whose effect is already present but

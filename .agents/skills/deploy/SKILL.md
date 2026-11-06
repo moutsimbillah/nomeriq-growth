@@ -46,7 +46,7 @@ Report the real numbers. A partial run is not a gate.
 A deploy without a fresh dump is not a deploy.
 
 1. Dump the live database into `/var/backups/growth` and print the path and byte size.
-2. `python3 /tmp/pgx.py pg_restore --list <dump> | grep -c "TABLE DATA"` must count real table data —
+2. `python3 /home/growth/app/scripts/pgx.py pg_restore --list <dump> | grep -c "TABLE DATA"` must count real table data —
    the previous deploy's dump was 7,490,180 bytes with 97 data entries.
 3. Record the byte size in the report. A dump that is empty or unreadable stops the deploy.
 
@@ -64,7 +64,7 @@ runner prints a Postgres target. If it says PGlite, **nothing was applied** — 
 ## 4. Ledger must match the migration files
 
 ```
-ssh host 'sudo -n -u growth python3 /tmp/pgx.py psql -d growth -X -A -t -c "SELECT id FROM _migrations ORDER BY id"'
+ssh host 'sudo -n -u growth python3 /home/growth/app/scripts/pgx.py psql -d growth -X -A -t -c "SELECT id FROM _migrations ORDER BY id"'
 ```
 Every file in `src/db/migrations/` must appear. For a migration whose effect is already
 present but unrecorded, prove the effect (columns, constraints, tables) **and then**

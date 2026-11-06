@@ -64,7 +64,7 @@ runner prints a Postgres target. If it says PGlite, **nothing was applied** — 
 ## 4. Ledger must match the migration files
 
 ```
-ssh host 'sudo -n -u growth python3 /tmp/pgx.py psql -d growth -X -A -t -c "SELECT id FROM _migrations ORDER BY id"'
+ssh host 'sudo -n -u growth python3 /home/growth/app/scripts/pgx.py psql -d growth -X -A -t -c "SELECT id FROM _migrations ORDER BY id"'
 ```
 Every file in `src/db/migrations/` must appear. For a migration whose effect is already
 present but unrecorded, prove the effect (columns, constraints, tables) **and then**

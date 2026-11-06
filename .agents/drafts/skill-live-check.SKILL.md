@@ -38,7 +38,7 @@ Host key is already known — never `StrictHostKeyChecking=no`. Use `-o BatchMod
 3. **Timers** — `growth-backup`, `growth-cron-research`, `growth-cron-follow-ups`,
    `growth-cron-sends` all `enabled` + `active`; `systemctl list-timers` shows a next fire.
 4. **Ledger** — every file in `src/db/migrations/` appears in
-   `sudo -n -u growth python3 /tmp/pgx.py psql -d growth -X -A -t -c "SELECT id FROM _migrations ORDER BY id"`.
+   `sudo -n -u growth python3 /home/growth/app/scripts/pgx.py psql -d growth -X -A -t -c "SELECT id FROM _migrations ORDER BY id"`.
    A repo migration missing from the ledger is the fault that broke a deploy once.
 5. **Counts** — `prospects`, `prospects WHERE qualification_status='verified'`, `drafts`,
    `messages`. Report the numbers; a large unexplained drop is an incident.

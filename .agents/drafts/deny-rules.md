@@ -33,7 +33,7 @@ Blocked as intended: remote `dropdb growth`; `restore-safe.sh`; `cat /home/growt
 `git push --force origin master`; `rm -rf /var/backups/growth`; `systemctl restart growth.service`.
 
 **Still allowed** (proving the rules are not too broad): the read-only ledger query
-`sudo -u growth python3 /tmp/pgx.py psql -d growth …SELECT`; `sudo -n bash /tmp/deploy.sh`;
+`sudo -u growth python3 /home/growth/app/scripts/pgx.py psql -d growth …SELECT`; `sudo -n bash /tmp/deploy.sh`;
 `git push origin master`; `systemctl status growth.service`; `npm run typecheck`;
 `ls -1t /var/backups/growth/*.dump | head -1`.
 

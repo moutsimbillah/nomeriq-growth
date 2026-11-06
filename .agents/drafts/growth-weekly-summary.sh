@@ -8,7 +8,7 @@ HOST="ubuntu@52.66.27.26"
 REPO="/d/DeepSeek Nomeirq3.5/Nomeriq Leads"
 
 remote() { timeout 90 ssh -i "$KEY" -o BatchMode=yes -o ConnectTimeout=20 "$HOST" "$1" 2>/dev/null; }
-sql()    { remote "sudo -n -u growth python3 /tmp/pgx.py psql -d growth -X -A -t -c \"$1\""; }
+sql()    { remote "sudo -n -u growth python3 /home/growth/app/scripts/pgx.py psql -d growth -X -A -t -c \"$1\""; }
 
 echo "GROWTH WEEKLY SUMMARY — $(date -u +%Y-%m-%d)"
 echo ""

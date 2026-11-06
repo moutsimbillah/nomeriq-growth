@@ -58,7 +58,7 @@ the failure mode this procedure bounds; if you are unsure whether it went back, 
 ## Order matters
 
 1. **Prove the dump first, before creating anything.** It must exist, be non-empty, and
-   `python3 /tmp/pgx.py pg_restore --list <dump> | grep -c "TABLE DATA"` must count real table data.
+   `python3 /home/growth/app/scripts/pgx.py pg_restore --list <dump> | grep -c "TABLE DATA"` must count real table data.
    A restore with no usable dump is how a rollback destroys what it meant to protect.
 2. **Restore into a NEW database** named `<target>__restore_<utc>`, owned by `growth_app`.
 3. **Abort on any `pg_restore` error.** Never `--clean`, never ignore errors: a run that
