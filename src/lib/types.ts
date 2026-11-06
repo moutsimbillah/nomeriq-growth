@@ -81,6 +81,8 @@ export interface ProductTruth {
   limitations: string;
   approvedClaims: string[];
   prohibitedClaims: string[];
+  /** "Questions to ask prospects" (migration 029). */
+  discoveryQuestions: string[];
   approvedAt: string | null;
   updatedAt: string;
 }

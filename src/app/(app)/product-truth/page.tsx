@@ -16,6 +16,7 @@ import {
   SectionHeading,
 } from "@/components/ui";
 import { ProductTruthForm } from "@/components/product-truth-form";
+import { productTruthGaps } from "@/lib/ai/product-truth";
 import { formatDateTime, relativeTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +27,7 @@ export default async function ProductTruthPage() {
     listProductTruthRevisions(),
   ]);
   const { timezone } = await getWorkspaceSettings();
+  const gaps = productTruthGaps(truth);
 
   return (
     <div className="animate-fade-up">
@@ -56,6 +58,30 @@ export default async function ProductTruthPage() {
         <ProductTruthForm truth={truth} />
 
         <div className="space-y-4">
+          <div data-product-truth-gaps>
+          <Card className="p-5">
+            <SectionHeading
+              title={gaps.length ? "What's missing" : "Complete"}
+              description={
+                gaps.length
+                  ? `Version ${truth.version} · ${truth.status === "approved" ? "approved" : "not approved"}. Every AI action receives this record in full; these gaps limit what it may say.`
+                  : `Version ${truth.version} is approved and every section has content.`
+              }
+              action={<ShieldAlert size={13} className={gaps.length ? "text-amber" : "text-faint"} />}
+            />
+            {gaps.length > 0 && (
+              <ul className="mt-3 space-y-2 text-12 leading-5">
+                {gaps.map((gap) => (
+                  <li key={gap.field} className="rounded-lg border border-amber/20 bg-amber/[0.05] px-3 py-2">
+                    <span className="font-semibold text-ink">{gap.field}</span>
+                    <span className="text-muted"> — {gap.problem}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+          </div>
+
           <Card className="p-5">
             <div className="grid h-9 w-9 place-items-center rounded-full bg-lime/30 text-forest">
               <BookOpenCheck size={16} />

@@ -148,6 +148,7 @@ export function mapProductTruth(row: any): ProductTruth {
     limitations: row.limitations,
     approvedClaims: asStringArray(row.approved_claims),
     prohibitedClaims: asStringArray(row.prohibited_claims),
+    discoveryQuestions: asStringArray(row.discovery_questions),
     approvedAt: iso(row.approved_at),
     updatedAt: iso(row.updated_at) ?? new Date().toISOString(),
   };

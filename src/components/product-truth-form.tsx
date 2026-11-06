@@ -25,6 +25,9 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
   const [prohibitedClaims, setProhibitedClaims] = useState(
     toLines(truth.prohibitedClaims),
   );
+  const [discoveryQuestions, setDiscoveryQuestions] = useState(
+    toLines(truth.discoveryQuestions ?? []),
+  );
   const [pending, setPending] = useState<"draft" | "approve" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -45,6 +48,7 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
           limitations,
           approvedClaims: approvedClaims.split("\n").map((line) => line.trim()).filter(Boolean),
           prohibitedClaims: prohibitedClaims.split("\n").map((line) => line.trim()).filter(Boolean),
+          discoveryQuestions: discoveryQuestions.split("\n").map((line) => line.trim()).filter(Boolean),
           approve,
         },
       });
@@ -204,6 +208,23 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
               Phrases and categories that should always trigger a warning.
             </p>
           </div>
+        </div>
+
+        <div data-discovery-questions>
+          <label className="label" htmlFor="discovery-questions">
+            Questions to ask prospects (one per line)
+          </label>
+          <textarea
+            id="discovery-questions"
+            className="textarea min-h-[140px] font-mono text-12"
+            value={discoveryQuestions}
+            onChange={(event) => setDiscoveryQuestions(event.target.value)}
+            placeholder={"How do your subscribers receive signals today?\nWho handles payments and access for your VIP group?"}
+          />
+          <p className="field-hint">
+            Discovery questions every AI draft, suggestion and follow-up may ask — and connected
+            assistants can read. Write them in your own words.
+          </p>
         </div>
 
         {error && <InlineError>{error}</InlineError>}

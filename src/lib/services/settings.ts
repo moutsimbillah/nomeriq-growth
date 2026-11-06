@@ -205,6 +205,8 @@ export interface ProductTruthInput {
   limitations: string;
   approvedClaims: string[];
   prohibitedClaims: string[];
+  /** Omitted by older clients: the current questions are kept. */
+  discoveryQuestions?: string[];
   approve: boolean;
 }
 
@@ -237,6 +239,7 @@ export async function saveProductTruth(
         limitations = $7,
         approved_claims = $8::jsonb,
         prohibited_claims = $9::jsonb,
+        discovery_questions = $13::jsonb,
         approved_by = $10,
         approved_at = $11,
         updated_by = $10,
@@ -256,6 +259,7 @@ export async function saveProductTruth(
         userId,
         input.approve ? new Date().toISOString() : null,
         current.id,
+        JSON.stringify((input.discoveryQuestions ?? current.discoveryQuestions).map((question) => question.trim()).filter(Boolean)),
       ],
     );
     const row = updated.rows[0];
@@ -277,6 +281,7 @@ export async function saveProductTruth(
           limitations: row.limitations,
           approvedClaims: asStringArray(row.approved_claims),
           prohibitedClaims: asStringArray(row.prohibited_claims),
+          discoveryQuestions: asStringArray(row.discovery_questions),
         }),
         userId,
       ],

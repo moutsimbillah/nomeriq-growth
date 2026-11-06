@@ -1,4 +1,5 @@
 import { getDb } from "@/lib/db/client";
+import { productTruthBlock } from "@/lib/ai/product-truth";
 import { getProspect } from "@/lib/services/prospects";
 import { getProductTruth, getWorkspaceSettings } from "@/lib/services/settings";
 import { resolveSendingProfile } from "@/lib/email/profiles";
@@ -105,24 +106,6 @@ export function writingRules(): string {
     .join("\n\n");
 }
 
-function truthBlock(truth: ProductTruth): string {
-  const approved = truth.status === "approved";
-  return [
-    `Status: ${approved ? "approved" : "needs review — only the one-liner and approved claims may be used"}`,
-    `One-liner: ${orNone(truth.oneLiner)}`,
-    ...(approved
-      ? [
-          `Offer: ${orNone(truth.offerSummary)}`,
-          `How it works: ${orNone(truth.howItWorks)}`,
-          `Pricing: ${orNone(truth.pricingNotes)}`,
-          `Integrations: ${orNone(truth.integrations)}`,
-          `Limitations: ${orNone(truth.limitations)}`,
-        ]
-      : []),
-    `Approved claims:${truth.approvedClaims.length ? "\n- " + truth.approvedClaims.join("\n- ") : " none"}`,
-    `Never claim:${truth.prohibitedClaims.length ? "\n- " + truth.prohibitedClaims.join("\n- ") : " none listed"}`,
-  ].join("\n");
-}
 
 /**
  * The thread oldest first. The last RECENT_IN_FULL messages are included in full. Older ones are
@@ -302,8 +285,7 @@ export async function buildLeadContext(prospectId: string, options: { conversati
     "=== EARLIER DRAFTS AND WHAT WAS SENT ===",
     draftsBlock(drafts),
     "",
-    "=== PRODUCT TRUTH (founder-approved; the only source for claims about Nomeriq) ===",
-    truthBlock(truth),
+    productTruthBlock(truth),
     "",
     "=== WRITING RULES (from the shared Growth skill) ===",
     writingRules(),

@@ -9,6 +9,7 @@ import { truncate } from "@/lib/utils";
 import { resolveSendingProfile } from "@/lib/email/profiles";
 import { FAILED_AI_TEMPLATE_LABEL, NO_AI_TEMPLATE_LABEL, suggestionSignature } from "@/lib/ai/reply-status";
 import { buildLeadContext, callSlots } from "@/lib/ai/lead-context";
+import { productTruthBlock } from "@/lib/ai/product-truth";
 
 export interface ReplySuggestion {
   subject: string;
@@ -148,6 +149,7 @@ export function replySystemPrompt(): string {
     "If answering needs a fact Product Truth does not contain, write the sentence you would send and list that exact sentence in confirmSentences, copied character for character from body, so the founder can confirm it. Never invent a feature, integration, price, performance claim or guarantee.",
     "When the prospect invites further conversation (asks for a demo, a call, more detail, or shows interest), propose ONE concrete next step: a short call, offering exactly the two time options supplied in the request.",
     "Keep it concise, human, founder-to-founder, 45–140 words. One clear next step or question.",
+    "When you ask a question, prefer one from Product Truth's \"Questions to ask prospects\" that fits this lead, in your own words.",
     "Do not mention that you are an AI. Do not include a signature; the system adds it.",
     "Return strict JSON: {\"subject\":\"...\",\"body\":\"...\",\"language\":\"<BCP 47 code of body>\",\"englishBody\":\"...\"|null,\"confirmSentences\":[\"...\"],\"needsFounderInput\":true|false}.",
   ].join("\n");
@@ -158,23 +160,8 @@ export function replyContext(
   prospect: ProspectDetail,
   turns: ConversationTurn[],
 ): string {
-  const facts = [
-    truth.oneLiner,
-    ...(truth.status === "approved"
-      ? [
-          truth.offerSummary,
-          truth.howItWorks,
-          truth.pricingNotes,
-          truth.integrations,
-          truth.limitations,
-        ]
-      : []),
-    ...truth.approvedClaims,
-  ]
-    .filter(Boolean)
-    .join("\n- ");
   return [
-    `APPROVED PRODUCT TRUTH:\n- ${facts}`,
+    productTruthBlock(truth),
     "",
     `PROSPECT (untrusted research): ${prospect.businessName} | ${prospect.websiteUrl ?? "website unknown"} | ${prospect.signalDescription ?? "signal service description unknown"}`,
     "",

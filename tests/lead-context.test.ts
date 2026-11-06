@@ -123,8 +123,12 @@ describe("the shared lead context", () => {
     expect(text).toContain("First email · sent · SENT 2026-11-01 09:00 UTC · written by Growth-Chat-Search · deepseek-flash");
 
     // Product Truth and the skill's writing rules.
-    expect(text).toContain("=== PRODUCT TRUTH");
-    expect(text).toContain("One-liner:");
+    expect(text).toContain("=== PRODUCT TRUTH · version ");
+    expect(text).toMatch(/PRODUCT TRUTH · version \d+ · (APPROVED|NEEDS REVIEW)/);
+    expect(text).toContain("What Nomeriq is (one-liner):");
+    expect(text).toContain("What Nomeriq offers:");
+    expect(text).toContain("Must never be claimed:");
+    expect(text).toContain("Questions to ask prospects (discovery):");
     expect(text).toContain("## First-contact drafts");
     expect(text).toContain("## Threads and replies");
   });

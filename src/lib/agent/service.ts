@@ -228,6 +228,7 @@ async function executeAgentAction(
         limitations: truth.limitations,
         approvedClaims: truth.approvedClaims,
         prohibitedClaims: truth.prohibitedClaims,
+        discoveryQuestions: truth.discoveryQuestions,
         approvedAt: truth.approvedAt,
       };
       break;

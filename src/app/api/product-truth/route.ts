@@ -17,6 +17,7 @@ const schema = z.object({
   limitations: z.string().max(5000),
   approvedClaims: z.array(z.string().max(1000)).max(100),
   prohibitedClaims: z.array(z.string().max(500)).max(100),
+  discoveryQuestions: z.array(z.string().max(1000)).max(50).optional(),
   approve: z.boolean(),
 });
 
