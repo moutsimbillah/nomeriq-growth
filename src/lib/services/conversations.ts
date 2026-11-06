@@ -390,6 +390,7 @@ export async function suggestConversationReply(
   const turns = conversation.messages.map((message) => ({
     direction: message.direction,
     fromEmail: message.fromEmail,
+    fromName: message.fromName,
     subject: message.subject,
     // The original is sent as the body; the stored excerpt is only a fallback when the body is
     // empty, so the model never reads an excerpt as if it were the whole message.

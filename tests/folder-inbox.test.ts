@@ -187,6 +187,27 @@ describe("the stage buttons", () => {
   });
 });
 
+describe("contact history overrides qualification", () => {
+  it("includes candidates and rejected leads with inbound/outbound conversations, plus orphan messages", async () => {
+    const sent = await lead({ key: "repair-sent", status: "new", verified: false, out: 12 });
+    const replied = await lead({ key: "repair-replied", status: "new", verified: false, inbound: 3 });
+    const rejected = await lead({ key: "repair-rejected", status: "lost", verified: false, out: 20, doNotContact: true });
+    const orphan = await lead({ key: "repair-orphan", status: "new", verified: false });
+    const never = await lead({ key: "repair-never", status: "new", verified: false });
+    const db = await getDb();
+    await db.query(`UPDATE prospects SET qualification_status = 'rejected' WHERE id = $1`, [rejected]);
+    await db.query(`INSERT INTO messages (id, prospect_id, direction, source, from_email, subject, body_text, received_at)
+      VALUES (gen_random_uuid(), $1, 'inbound', 'seed', 'orphan@example.test', 'Hello', 'Hello', now())`, [orphan]);
+    const expected = new Map([[sent, "waiting"], [replied, "needs_reply"], [rejected, "closed_lost"], [orphan, "needs_reply"]]);
+    for (const [id, folder] of expected) {
+      const inbox = await getFolderInbox({ query: "repair-", focus: id });
+      expect(inbox.focused?.folder).toBe(folder);
+      expect(Object.values(inbox.counts).reduce((sum, value) => sum + value, 0)).toBe(expected.size);
+    }
+    expect((await getFolderInbox({ query: "repair-", focus: never })).focused).toBeNull();
+  });
+});
+
 describe("the main Email screen", () => {
   const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
 
@@ -203,11 +224,11 @@ describe("the main Email screen", () => {
     expect(inbox).toContain("data-qualification-pills");
   });
 
-  it("shows the thread newest first, pre-fills a reply suggestion, and offers bulk approval", () => {
+  it("shows the thread newest first, leaves suggestion manual, and offers bulk approval", () => {
     const inbox = read("src/app/(app)/email/folder-inbox.tsx");
     expect(inbox).not.toContain(".reverse()");
     expect(inbox).toContain("latest={index === 0 && inbound}");
-    expect(inbox).toContain("autoSuggest={theirsIsLatest}");
+    expect(inbox).not.toContain("autoSuggest");
     expect(inbox).toContain("<ApproveSelectionList");
     const client = read("src/components/folder-inbox-client.tsx");
     expect(client).toContain('"/api/drafts/approve-bulk"');

@@ -430,7 +430,8 @@ describe("Nomeriq Growth end-to-end workflow", () => {
     const conversation = await getConversationForProspect(state.alphaId);
     expect(conversation).not.toBeNull();
     const suggestion = await suggestConversationReply(conversation!.id);
-    expect(suggestion.body).toContain("Test Founder");
+    expect(suggestion.body).toBe("");
+    expect(suggestion.failure?.code).toBe("provider_unavailable");
     expect(suggestion.needsFounderInput).toBe(false);
 
     const idempotencyKey = crypto.randomUUID();

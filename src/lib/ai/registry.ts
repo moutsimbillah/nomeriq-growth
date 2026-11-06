@@ -1,7 +1,7 @@
 import { decryptSecret } from "@/lib/auth/crypto";
 import { getDb, type DbClient } from "@/lib/db/client";
 import { AppError } from "@/lib/utils";
-import { requestProviderChat } from "@/lib/ai/chat-transport";
+import { requestProviderChat, type ChatInput, type ChatAttemptFailure, type TransportResult } from "@/lib/ai/chat-transport";
 import { PROVIDER_CATALOG, PROVIDER_KINDS, type ProviderKind } from "@/lib/ai/provider-catalog";
 import { AI_TASKS, AI_TASK_LABELS, chatCapability, searchCapability, chatFallbacks, workingChatProvider, type AiTask } from "@/lib/ai/routing";
 export { AI_TASKS, AI_TASK_LABELS, chatCapability, searchCapability } from "@/lib/ai/routing";
@@ -229,6 +229,9 @@ export interface ChatMessage {
   maxTokens?: number;
   /** Ask for strict JSON where the provider supports it. */
   json?: boolean;
+  timeoutMs?: ChatInput["timeoutMs"];
+  transientRetries?: ChatInput["transientRetries"];
+  diagnosticTask?: ChatInput["diagnosticTask"];
 }
 
 export interface ChatOutcome<T> {
@@ -239,7 +242,7 @@ export interface ChatOutcome<T> {
 
 export type ChatResult =
   | { ok: true; text: string; provider: string; model: string; providerName?: string; providerId?: string }
-  | { ok: false; code: string; reason: string };
+  | Extract<TransportResult, { ok: false }>;
 
 /**
  * Ask one provider for a completion. Credentials come from the row's encrypted key and are never
@@ -286,6 +289,7 @@ export async function runChatTask(
     if (selection.chat) return {
       ok: false, code: "all_providers_failed",
       reason: "The assigned provider is disabled or has no passing Test, and no enabled, test-passed chat fallback is available. Check Settings.",
+      failures: [],
     };
     return {
       ok: false,
@@ -294,8 +298,10 @@ export async function runChatTask(
     };
   }
 
-  const failures: string[] = [];
+  const reasons: string[] = [];
+  const failures: ChatAttemptFailure[] = [];
   for (const provider of selection.fallbackChain) {
+    const started = Date.now();
     const outcome = await chatWithProvider(provider, message);
     if (outcome.ok) {
       return {
@@ -303,12 +309,16 @@ export async function runChatTask(
         ...(provider.id !== selection.chat?.id ? { fallbackUsed: provider.name } : {}),
       };
     }
-    failures.push(`${provider.name}: ${outcome.reason}`);
+    reasons.push(`${provider.name}: ${outcome.reason}`);
+    failures.push(...(outcome.failures ?? [{ code: outcome.code, provider: provider.provider, attempt: 1,
+      status: outcome.status ?? null, elapsedMs: outcome.elapsedMs ?? Date.now() - started,
+      ...(outcome.providerCode ? { providerCode: outcome.providerCode } : {}) }]));
   }
 
   return {
     ok: false,
     code: "all_providers_failed",
-    reason: `Every configured provider failed — ${failures.join("; ")}`,
+    reason: `Every configured provider failed — ${reasons.join("; ")}`,
+    failures,
   };
 }

@@ -7,7 +7,10 @@ import type { WorkspaceSettings } from "@/lib/services/settings";
 import { runChatTask } from "@/lib/ai/registry";
 import { truncate } from "@/lib/utils";
 import { resolveSendingProfile } from "@/lib/email/profiles";
-import { FAILED_AI_TEMPLATE_LABEL, NO_AI_TEMPLATE_LABEL, suggestionSignature } from "@/lib/ai/reply-status";
+import { NO_AI_TEMPLATE_LABEL, suggestionSignature } from "@/lib/ai/reply-status";
+import { requestProviderChat } from "@/lib/ai/chat-transport";
+import { replyContactName, replyGreeting, withReplyGreeting } from "@/lib/ai/reply-greeting";
+import { suggestionFailure, type SuggestionFailure } from "@/lib/ai/suggestion-failure";
 import { buildLeadContext, callSlots } from "@/lib/ai/lead-context";
 import { productTruthBlock } from "@/lib/ai/product-truth";
 
@@ -30,12 +33,14 @@ export interface ReplySuggestion {
   confirmSentences?: string[];
   /** Exactly what the model received, for the "Context used" view. Null for a template. */
   context?: string | null;
+  failure?: SuggestionFailure;
 }
 
 /** One message of the thread, as `getConversation` returns it: newest first. */
 interface ConversationTurn {
   direction: "inbound" | "outbound";
   fromEmail: string;
+  fromName?: string | null;
   subject: string;
   bodyText: string;
   sentAt: string | null;
@@ -73,17 +78,6 @@ function turnTranslationBlock(turn: ConversationTurn): string {
   ].join("\n");
 }
 
-function greeting(name: string | null, email: string): string {
-  if (name?.trim()) return `Hi ${name.trim().split(/\s+/)[0]},`;
-  const local = email.split("@")[0] ?? "";
-  const generic = /^(info|support|contact|hello|sales|team|admin)$/i.test(local);
-  if (!generic && /^[a-z][a-z._-]{1,30}$/i.test(local)) {
-    const first = local.split(/[._-]/)[0];
-    return `Hi ${first.charAt(0).toUpperCase() + first.slice(1)},`;
-  }
-  return "Hi there,";
-}
-
 export function deterministicReply(input: {
   prospect: ProspectDetail;
   classification: Classification;
@@ -93,10 +87,8 @@ export function deterministicReply(input: {
   signature?: string;
 }): ReplySuggestion {
   const { classification, lastInbound, settings } = input;
-  const greetingLine = greeting(
-    lastInbound?.fromEmail ? null : null,
-    input.prospect.contactEmail ?? "there",
-  );
+  const greetingLine = replyGreeting(replyContactName(lastInbound ? [lastInbound] : []), input.prospect.businessName,
+    lastInbound?.translation?.sourceLanguage);
   const signature =
     input.signature?.trim() || settings.senderSignature || "Founder\nNomeriq";
   let core =
@@ -150,7 +142,8 @@ export function replySystemPrompt(): string {
     "When the prospect invites further conversation (asks for a demo, a call, more detail, or shows interest), propose ONE concrete next step: a short call, offering exactly the two time options supplied in the request.",
     "Keep it concise, human, founder-to-founder, 45–140 words. One clear next step or question.",
     "When you ask a question, prefer one from Product Truth's \"Questions to ask prospects\" that fits this lead, in your own words.",
-    "Do not mention that you are an AI. Do not include a signature; the system adds it.",
+    "Never infer a name from an email address or its local part. Use only a contact name explicitly recorded in the messages or lead; otherwise address the business team in the reply language. The system supplies the greeting.",
+    "Do not mention that you are an AI. Do not include a greeting or signature; the system adds them.",
     "Return strict JSON: {\"subject\":\"...\",\"body\":\"...\",\"language\":\"<BCP 47 code of body>\",\"englishBody\":\"...\"|null,\"confirmSentences\":[\"...\"],\"needsFounderInput\":true|false}.",
   ].join("\n");
 }
@@ -181,67 +174,13 @@ export function replyContext(
   ].join("\n");
 }
 
-async function callOpenAI(system: string, user: string) {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error("OPENAI_API_KEY is not configured.");
-  const model = process.env.OPENAI_MODEL || "gpt-5-mini";
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`OpenAI returned ${response.status}`);
-  const payload = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  return {
-    parsed: parseReplyJson(payload.choices?.[0]?.message?.content ?? ""),
-    model,
-  };
-}
-
-async function callAnthropic(system: string, user: string) {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) throw new Error("ANTHROPIC_API_KEY is not configured.");
-  const model = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5";
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 900,
-      temperature: 0.3,
-      system,
-      messages: [{ role: "user", content: user }],
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) throw new Error(`Anthropic returned ${response.status}`);
-  const payload = (await response.json()) as {
-    content?: { type: string; text?: string }[];
-  };
-  const text =
-    payload.content
-      ?.filter((part) => part.type === "text")
-      .map((part) => part.text ?? "")
-      .join("\n") ?? "";
-  return { parsed: parseReplyJson(text), model };
+async function callEnvironment(provider: "openai" | "anthropic", system: string, user: string) {
+  const key = provider === "openai" ? process.env.OPENAI_API_KEY : process.env.ANTHROPIC_API_KEY;
+  if (!key) return { ok: false as const, code: "missing_api_key", reason: "Credential is not configured." };
+  return requestProviderChat({ provider,
+    baseUrl: provider === "openai" ? "https://api.openai.com" : "https://api.anthropic.com",
+    model: provider === "openai" ? process.env.OPENAI_MODEL || "gpt-5-mini" : process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
+  }, key, { system, user, json: true, maxTokens: 2048, timeoutMs: 120_000, transientRetries: 2, diagnosticTask: "suggest_reply" });
 }
 
 function parseReplyJson(text: string) {
@@ -323,10 +262,18 @@ export async function suggestReply(input: {
     signature,
   });
 
+  let addressee = replyContactName(input.turns);
+  const signBody = (body: string, language?: string | null) =>
+    [withReplyGreeting(body, replyGreeting(addressee, input.prospect.businessName, language)), "", "Best,", signature].join("\n");
+  const failed = (code: string, provider?: string | null): ReplySuggestion => {
+    const failure = suggestionFailure(code, provider);
+    return { ...fallback, body: "", note: failure.message, failure };
+  };
   const system = replySystemPrompt();
   // The shared, complete context when the lead exists; the thread-only context is a last resort for
   // a caller that has no stored lead, so a suggestion is never refused for want of research.
   const shared = await buildLeadContext(input.prospect.id, { conversationId: input.conversationId ?? null }).catch(() => null);
+  if (!addressee && shared) addressee = replyContactName([...shared.messages].reverse().map(message => ({ ...message, bodyText: message.body })));
   const slots = callSlots(input.settings.timezone || "UTC");
   const user = shared
     ? suggestionRequest(shared.text, slots)
@@ -339,21 +286,24 @@ export async function suggestReply(input: {
     const viaSettings = await runChatTask("suggest_reply", {
       system,
       user,
-      maxTokens: 900,
+      maxTokens: 2048,
       json: true,
+      timeoutMs: 120_000,
+      transientRetries: 2,
+      diagnosticTask: "suggest_reply",
     });
     if (viaSettings.ok) {
       const parsed = parseReplyJson(viaSettings.text);
       return {
         subject: parsed.subject,
-        body: [parsed.body, "", "Best,", signature].join("\n"),
+        body: signBody(parsed.body, parsed.language),
         needsFounderInput: parsed.needsFounderInput,
         usedAi: true,
         model: viaSettings.model,
         provider: viaSettings.providerName ?? viaSettings.provider,
         fallbackUsed: viaSettings.fallbackUsed ?? null,
         language: parsed.language,
-        englishBody: parsed.englishBody,
+        englishBody: parsed.englishBody ? withReplyGreeting(parsed.englishBody, replyGreeting(addressee, input.prospect.businessName, "en")) : null,
         confirmSentences: parsed.confirmSentences,
         // The exact sentences are shown highlighted; a general note is only for a flag with none.
         note: parsed.needsFounderInput && !parsed.confirmSentences.length
@@ -363,41 +313,33 @@ export async function suggestReply(input: {
       };
     }
     if (viaSettings.code !== "provider_unavailable") {
-      console.error(`[ai] task=suggest_reply code=${viaSettings.code}`);
-      return { ...fallback, note: fallback.note?.replace(NO_AI_TEMPLATE_LABEL, FAILED_AI_TEMPLATE_LABEL) ?? FAILED_AI_TEMPLATE_LABEL };
+      const cause = viaSettings.failures?.at(-1);
+      const code = cause?.status === 401 || cause?.status === 403 ? `http_${cause.status}` : cause?.code ?? viaSettings.code;
+      console.error(`[ai] task=suggest_reply code=${code}`);
+      return failed(code, cause?.provider);
     }
   } catch {
-    console.error("[ai] task=suggest_reply code=registry_or_response_failed");
-    return { ...fallback, note: fallback.note?.replace(NO_AI_TEMPLATE_LABEL, FAILED_AI_TEMPLATE_LABEL) ?? FAILED_AI_TEMPLATE_LABEL };
+    console.error("[ai] task=suggest_reply code=invalid_reply_response");
+    return failed("invalid_reply_response");
   }
 
   const provider = (process.env.AI_PROVIDER || "none").toLowerCase();
-  if (provider === "none") return fallback;
+  if (provider !== "openai" && provider !== "anthropic") return failed("provider_unavailable");
   try {
-    const result =
-      provider === "openai"
-        ? await callOpenAI(system, user)
-        : provider === "anthropic"
-          ? await callAnthropic(system, user)
-          : null;
-    if (!result) return fallback;
+    const result = await callEnvironment(provider, system, user);
+    if (!result.ok) return failed(result.code, provider);
+    const parsed = parseReplyJson(result.text);
     return {
-      subject: result.parsed.subject,
-      body: [
-        result.parsed.body,
-        "",
-        "Best,",
-        signature,
-      ].join("\n"),
-      needsFounderInput: result.parsed.needsFounderInput,
-      usedAi: true,
-      model: result.model,
-      note: result.parsed.needsFounderInput
-        ? "The AI flagged that part of this answer needs founder confirmation."
-        : null,
+      subject: parsed.subject, body: signBody(parsed.body, parsed.language),
+      needsFounderInput: parsed.needsFounderInput, usedAi: true, model: result.model, provider,
+      language: parsed.language,
+      englishBody: parsed.englishBody ? withReplyGreeting(parsed.englishBody, replyGreeting(addressee, input.prospect.businessName, "en")) : null,
+      confirmSentences: parsed.confirmSentences,
+      note: parsed.needsFounderInput ? "The AI flagged that part of this answer needs founder confirmation." : null,
+      context: `SYSTEM\n${system}\n\nREQUEST\n${user}`,
     };
   } catch {
-    console.error("[ai] task=suggest_reply code=environment_provider_failed");
-    return { ...fallback, note: fallback.note?.replace(NO_AI_TEMPLATE_LABEL, FAILED_AI_TEMPLATE_LABEL) ?? FAILED_AI_TEMPLATE_LABEL };
+    console.error("[ai] task=suggest_reply code=invalid_reply_response");
+    return failed("invalid_reply_response", provider);
   }
 }

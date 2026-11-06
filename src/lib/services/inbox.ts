@@ -8,8 +8,9 @@ import { FOLDERS, folderFor, type FolderKey } from "./folders";
 /**
  * The folder inbox (email item 2): every verified lead sits in exactly one folder — the plan's
  * eleven plus On hold (the founder's own do-not-contact, approved 6 Nov 2026) —
- * computed by `folderFor` — the same precedence the plan lists and the folder tests pin — so a lead
- * can never be in two folders or in none. Unverified candidates stay on the Research page; archived
+ * computed by `folderFor` — the same precedence the folder tests pin — so a lead cannot be in two
+ * folders or in none. Any lead with a conversation or email is included regardless of qualification;
+ * only never-contacted unverified leads stay on Research. Archived
  * leads only appear in the Archived view.
  *
  * Counts are over all leads that match the filters (sender, agent, search), never over the loaded
@@ -89,7 +90,11 @@ function latest(...values: (string | null)[]): string | null {
 
 export async function getFolderInbox(filters: InboxFilters = {}): Promise<FolderInbox> {
   const db = await getDb();
-  const conditions = ["p.qualification_status = 'verified'"];
+  // Qualification governs never-contacted research, not whether an existing email thread exists.
+  const conditions = [`(p.qualification_status = 'verified'
+    OR EXISTS (SELECT 1 FROM conversations ic WHERE ic.prospect_id = p.id)
+    OR EXISTS (SELECT 1 FROM messages im WHERE im.prospect_id = p.id)
+    OR EXISTS (SELECT 1 FROM drafts sd WHERE sd.prospect_id = p.id AND sd.status = 'sent'))`];
   const params: unknown[] = [];
   const query = filters.query?.trim();
   if (query) {
@@ -123,6 +128,9 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
             WHEN 'bounce' THEN 3 ELSE 4 END LIMIT 1) AS suppression_reason,
         d.id AS draft_id, d.kind AS draft_kind, d.sequence AS draft_sequence, d.status AS draft_status, d.updated_at AS draft_updated_at,
         c.id AS conversation_id, c.subject, c.unread_count, c.last_inbound_at, c.last_outbound_at,
+        (SELECT max(coalesce(m.received_at, m.created_at)) FROM messages m WHERE m.prospect_id = p.id AND m.direction = 'inbound') AS message_inbound_at,
+        (SELECT max(coalesce(m.sent_at, m.created_at)) FROM messages m WHERE m.prospect_id = p.id AND m.direction = 'outbound') AS message_outbound_at,
+        (SELECT max(sd.sent_at) FROM drafts sd WHERE sd.prospect_id = p.id AND sd.status = 'sent') AS draft_sent_at,
         EXISTS (SELECT 1 FROM conversations c2 WHERE c2.prospect_id = p.id AND c2.last_inbound_at IS NOT NULL) AS has_replied
        FROM prospects p
        LEFT JOIN LATERAL (
@@ -140,8 +148,8 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
   const counts = emptyCounts();
   const all: InboxRow[] = result.rows.map((row) => {
     const reason = row.suppression_reason ?? null;
-    const lastInboundAt = iso(row.last_inbound_at);
-    const lastOutboundAt = iso(row.last_outbound_at);
+    const lastInboundAt = latest(iso(row.last_inbound_at), iso(row.message_inbound_at));
+    const lastOutboundAt = latest(iso(row.last_outbound_at), iso(row.message_outbound_at), iso(row.draft_sent_at));
     const folder = folderFor({
       status: row.status,
       archivedAt: row.archived_at,
@@ -150,7 +158,8 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
       hasDraftWaiting: Boolean(row.draft_status),
       lastInboundAt,
       lastOutboundAt,
-      hasReplied: row.has_replied === true,
+      hasReplied: row.has_replied === true || Boolean(lastInboundAt),
+      hasOutbound: Boolean(lastOutboundAt),
     });
     counts[folder] += 1;
     return {

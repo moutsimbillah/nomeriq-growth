@@ -103,7 +103,6 @@ export async function FolderInbox({ params }: { params: FolderInboxParams }) {
   // Messages arrive newest first, the same order the conversation page shows.
   const messages = conversation?.messages ?? [];
   const lastInbound = messages.find((message) => message.direction === "inbound");
-  const theirsIsLatest = messages[0]?.direction === "inbound";
   const defaultSubject = lastInbound?.subject?.toLowerCase().startsWith("re:")
     ? lastInbound.subject
     : `Re: ${lastInbound?.subject || conversation?.subject || ""}`;
@@ -322,7 +321,6 @@ export async function FolderInbox({ params }: { params: FolderInboxParams }) {
                     suppressed={conversation.suppressed}
                     blockedReason={conversation.blockedReason}
                     sandbox={sandbox}
-                    autoSuggest={theirsIsLatest}
                   />
                 ) : (
                   !waitingDraft && (

@@ -8,7 +8,7 @@ import { resolveAiTask } from "@/lib/ai/registry";
 import { translateToEnglish } from "@/lib/ai/translation";
 import { translateMessage } from "@/lib/services/message-translations";
 import { suggestReply } from "@/lib/ai/reply";
-import { suggestionSignature, NO_AI_TEMPLATE_LABEL, FAILED_AI_TEMPLATE_LABEL } from "@/lib/ai/reply-status";
+import { suggestionSignature } from "@/lib/ai/reply-status";
 import type { ProspectDetail, ProductTruth } from "@/lib/types";
 import type { WorkspaceSettings } from "@/lib/services/settings";
 
@@ -111,8 +111,8 @@ it("labels an unavailable provider honestly", async () => {
   await saveTaskSetting("suggest_reply", { providerId: null });
   const suggestion = await suggestReply(replyInput);
   expect(suggestion.usedAi).toBe(false);
-  expect(suggestion.note).toContain(NO_AI_TEMPLATE_LABEL);
-  expect(suggestion.body).toContain("Moutsim\nNomeriq");
+  expect(suggestion.failure?.code).toBe("provider_unavailable");
+  expect(suggestion.body).toBe("");
 });
 
 it("labels a failed provider honestly, with no echoed content in logs", async () => {
@@ -123,7 +123,9 @@ it("labels a failed provider honestly, with no echoed content in logs", async ()
     vi.stubGlobal("fetch", vi.fn(async () => json({ error: { code: "invalid_request", message: "Private synthetic message" } }, 400)));
     const suggestion = await suggestReply(replyInput);
     expect(suggestion.usedAi).toBe(false);
-    expect(suggestion.note).toContain(FAILED_AI_TEMPLATE_LABEL);
+    expect(suggestion.failure).toBeDefined();
+    expect(suggestion.note).not.toContain("standard template");
+    expect(suggestion.body).toBe("");
     expect(JSON.stringify(log.mock.calls)).not.toContain("Private synthetic message");
     expect(suggestion.body).not.toContain("Founder");
   } finally { log.mockRestore(); }

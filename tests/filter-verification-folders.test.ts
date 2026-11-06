@@ -37,15 +37,15 @@ const JUDGED = `
       WHEN archived THEN 'archived'
       WHEN reason IN ('unsubscribe', 'opt_out', 'complaint') THEN 'opted_out'
       WHEN reason = 'bounce' THEN 'failed'
-      WHEN reason = 'manual' THEN 'on_hold'
       WHEN status = 'won' THEN 'won'
       WHEN status = 'lost' THEN 'closed_lost'
+      WHEN reason = 'manual' THEN 'on_hold'
       WHEN status IN ('demo', 'proposal') THEN 'meeting'
       WHEN inbound IS NOT NULL AND (outbound IS NULL OR inbound >= outbound) THEN 'needs_reply'
       WHEN draft_waiting THEN 'to_approve'
       WHEN status = 'interested' THEN 'in_conversation'
       WHEN replied AND outbound > coalesce(inbound, to_timestamp(0)) THEN 'in_conversation'
-      WHEN status = 'contacted' THEN 'waiting'
+      WHEN status = 'contacted' OR outbound IS NOT NULL THEN 'waiting'
       ELSE 'new_leads'
     END AS expected
   FROM cube

@@ -177,7 +177,6 @@ export function ReplyComposer({
   suppressed,
   blockedReason,
   sandbox,
-  autoSuggest = false,
 }: {
   conversationId: string;
   defaultSubject: string;
@@ -185,8 +184,6 @@ export function ReplyComposer({
   suppressed: boolean;
   blockedReason: string | null;
   sandbox: boolean;
-  /** Fetch one AI suggestion when the box opens (the folder inbox); the conversation page waits for a click. */
-  autoSuggest?: boolean;
 }) {
   const router = useRouter();
   const keyRef = useRef<string | null>(null);
@@ -202,26 +199,39 @@ export function ReplyComposer({
   const [meta, setMeta] = useState<SuggestionMeta | null>(null);
   const [copied, setCopied] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
-  const autoSuggested = useRef(false);
-
+  const edited = useRef(false);
+  const mounted = useRef(true);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const [proposed, setProposed] = useState<{ body: string; subject: string } | null>(null);
   useEffect(() => {
-    if (!autoSuggest || autoSuggested.current || suppressed || !recipient) return;
-    autoSuggested.current = true;
-    void suggest();
-    // Once per opened box: the parent keys this component by conversation.
+    mounted.current = true;
+    return () => { mounted.current = false; };
   }, []);
 
+  // No generation on mount. Only the Suggest / Retry buttons call this function.
   async function suggest() {
     setPending("suggest");
-    setError(null);
+    setSuggestionError(null);
     setSuggestionNote(null);
-    setMeta(null);
+    setProposed(null);
     try {
       const result = await apiRequest(
         `/api/conversations/${conversationId}/suggest-reply`,
         { method: "POST" },
       );
+      if (!mounted.current) return;
+      if (result.failure) {
+        setSuggestionError(result.failure.message);
+        return;
+      }
       if (result.body) {
+        // Typing before OR during the request always wins. Suggestions remain visible beside the
+        // editor, never inserted over the founder's text (including when the field was later cleared).
+        if (edited.current) {
+          setProposed({ body: result.body, subject: result.subject || defaultSubject });
+          setSuggestionNote("Suggestion ready below. Your text has not been changed.");
+          return;
+        }
         setSubject(result.subject || defaultSubject);
         setBody(result.body);
         setMeta(result.usedAi ? {
@@ -232,19 +242,14 @@ export function ReplyComposer({
           context: result.context ?? null,
           aiBody: result.body,
         } : null);
-        setSuggestionNote(
-          result.note ||
-            (result.usedAi
-              ? "AI suggestion inserted. Edit anything before sending."
-              : "Standard template — no AI provider connected"),
-        );
+        setSuggestionNote(result.note || (result.usedAi ? "AI suggestion inserted. Edit anything before sending." : "No AI suggestion available."));
       } else {
-        setSuggestionNote(result.note || "No suggestion available.");
+        setSuggestionError(result.note || "No suggestion available. Please try again.");
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not suggest a reply.");
+      if (mounted.current) setSuggestionError(caught instanceof Error ? caught.message : "Could not suggest a reply.");
     } finally {
-      setPending(null);
+      if (mounted.current) setPending(null);
     }
   }
 
@@ -377,7 +382,7 @@ export function ReplyComposer({
           <input
             className="input"
             value={subject}
-            onChange={(event) => setSubject(event.target.value)}
+            onChange={(event) => { edited.current = true; setSubject(event.target.value); }}
           />
         </div>
         <div>
@@ -385,11 +390,29 @@ export function ReplyComposer({
           <textarea
             className="textarea min-h-[240px] bg-[#fffefb]"
             value={body}
-            onChange={(event) => setBody(event.target.value)}
+            onChange={(event) => { edited.current = true; setBody(event.target.value); }}
             placeholder="Write a real answer to their message. Or generate a suggestion and edit it."
           />
         </div>
 
+        {suggestionError && (
+          <div className="rounded-lg border border-rust/25 bg-rust/[0.04] p-3 text-12 text-rust" role="alert" data-suggestion-error>
+            <p>{suggestionError}</p>
+            <button type="button" className="btn-secondary btn-xs mt-2" onClick={suggest} disabled={!!pending} data-suggestion-retry>
+              Retry
+            </button>
+          </div>
+        )}
+        {proposed && (
+          <div className="rounded-lg border border-line p-3 text-12" data-suggestion-preview>
+            <p className="font-semibold">AI suggestion — your reply is unchanged</p>
+            <p className="mt-1 whitespace-pre-wrap break-anywhere">{proposed.body}</p>
+            <button type="button" className="btn-secondary btn-xs mt-2" onClick={async () => {
+              await navigator.clipboard.writeText(proposed.body);
+              setSuggestionNote("Suggestion copied. Your text has not been changed.");
+            }}>Copy suggestion</button>
+          </div>
+        )}
         {suggestionNote && (
           <div className="rounded-lg border border-line bg-lime/10 px-2.5 py-2 text-12 leading-4 text-forest">
             {suggestionNote}

@@ -123,6 +123,8 @@ export interface FolderInput {
   lastInboundAt?: string | Date | null;
   lastOutboundAt?: string | Date | null;
   hasReplied?: boolean;
+  /** A recorded send, even if an import left the sales status as new. */
+  hasOutbound?: boolean;
 }
 
 function time(value: string | Date | null | undefined): number {
@@ -148,14 +150,12 @@ export function folderFor(input: FolderInput): FolderKey | "archived" {
     return "opted_out";
   }
   if (reason === "bounce") return "failed";
-  // The founder's own hold: do-not-contact, or the manual suppression that marking it records.
-  // Only real opt-outs and unsubscribes (above) are Opted out.
-  if (input.doNotContact || reason === "manual") return "on_hold";
-
   const status = String(input.status);
-
+  // An explicit completed outcome is not merely the founder's own hold. Actual opt-outs/bounces
+  // above still take precedence; a bare do-not-contact flag must not hide imported lost leads.
   if (status === "won") return "won";
   if (status === "lost") return "closed_lost";
+  if (input.doNotContact || reason === "manual") return "on_hold";
   if (status === "demo" || status === "proposal") return "meeting";
   if (inboundIsLatest(input)) return "needs_reply";
   if (input.hasDraftWaiting) return "to_approve";
@@ -163,7 +163,7 @@ export function folderFor(input: FolderInput): FolderKey | "archived" {
   if (input.hasReplied && time(input.lastOutboundAt) > time(input.lastInboundAt)) {
     return "in_conversation";
   }
-  if (status === "contacted") return "waiting";
+  if (status === "contacted" || input.hasOutbound || time(input.lastOutboundAt) > 0) return "waiting";
   return "new_leads";
 }
 

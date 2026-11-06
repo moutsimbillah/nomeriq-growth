@@ -104,6 +104,13 @@ describe("folder model", () => {
     expect(folderFor({ status: "contacted", archivedAt: T1 })).toBe("archived");
   });
 
+  it("keeps completed Lost ahead of own holds, while actual opt-outs still win", () => {
+    expect(folderFor({ status: "lost", doNotContact: true })).toBe("closed_lost");
+    expect(folderFor({ status: "lost", doNotContact: true, suppressionReason: "manual" })).toBe("closed_lost");
+    expect(folderFor({ status: "lost", doNotContact: true, suppressionReason: "opt_out" })).toBe("opted_out");
+    expect(folderFor({ status: "new", lastOutboundAt: T1 })).toBe("waiting");
+  });
+
   it("resolves a folder definition by key", () => {
     expect(folderDefinition("to_approve").label).toBe("To approve");
     expect(folderDefinition("needs_reply").group).toBe("Active");

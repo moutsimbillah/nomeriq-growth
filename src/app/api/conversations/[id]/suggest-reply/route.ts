@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { keepAliveJson } from "@/lib/ai/keep-alive-json";
 import { requireEditor } from "@/lib/auth/session";
 import { assertSameOrigin } from "@/lib/auth/request";
 import { suggestConversationReply } from "@/lib/services/conversations";
@@ -6,7 +6,8 @@ import { fail } from "@/lib/api";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// Up to three full-context attempts (120s each) plus short retry pauses.
+export const maxDuration = 420;
 
 export async function POST(
   request: Request,
@@ -16,10 +17,10 @@ export async function POST(
     assertSameOrigin(request);
     await requireEditor();
     const { id } = await context.params;
-    return NextResponse.json({
-      ok: true,
-      data: await suggestConversationReply(id),
-    });
+    return keepAliveJson(
+      async () => ({ ok: true, data: await suggestConversationReply(id) }),
+      async error => fail(error).json(),
+    );
   } catch (error) {
     return fail(error);
   }
