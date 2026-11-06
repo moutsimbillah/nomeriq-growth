@@ -19,6 +19,8 @@ export interface StoredResearchProvider {
   id: string;
   name: string;
   provider: string;
+  /** What the row can do: `chat`, `search` (Brave) or `both`. Migration 025. */
+  kinds: string;
   baseUrl: string;
   model: string;
   priority: number;
@@ -33,6 +35,7 @@ interface ProviderRow {
   id: string;
   name: string;
   provider: string;
+  kinds: string;
   base_url: string;
   model: string;
   encrypted_api_key: string;
@@ -49,7 +52,7 @@ interface ProviderRow {
 export async function listResearchProviders(): Promise<StoredResearchProvider[]> {
   const db = await getDb();
   const result = await db.query<ProviderRow>(
-    `SELECT id, name, provider, base_url, model, priority, is_enabled,
+    `SELECT id, name, provider, kinds, base_url, model, priority, is_enabled,
             (encrypted_api_key IS NOT NULL AND encrypted_api_key <> '') AS has_key,
             last_test_ok, last_test_message, last_tested_at
        FROM research_providers
@@ -60,6 +63,7 @@ export async function listResearchProviders(): Promise<StoredResearchProvider[]>
     id: row.id,
     name: row.name,
     provider: row.provider,
+    kinds: row.kinds,
     baseUrl: row.base_url,
     model: row.model,
     priority: Number(row.priority),

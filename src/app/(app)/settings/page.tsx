@@ -23,12 +23,15 @@ import { listApiKeys } from "@/lib/agent/apiKeys";
 import { listSuppressions } from "@/lib/services/suppressions";
 import { getDeepSeekPublicSettings } from "@/lib/deepseek/provider";
 import { listResearchProviders } from "@/lib/deepseek/provider-pool";
+import { listAiProviders } from "@/lib/ai/registry";
+import { listTaskSettings } from "@/lib/services/ai-task-settings";
 import { Card, PageHeader, SectionHeading } from "@/components/ui";
 import { WorkspaceSettingsForm } from "@/components/settings/workspace-form";
 import { EmailAccountsManager } from "@/components/settings/email-accounts";
 import { IntegrationsManager } from "@/components/settings/integrations";
 import { DeepSeekSettings } from "@/components/settings/deepseek";
 import { ProvidersCard } from "@/components/settings/providers";
+import { AiTasksCard } from "@/components/settings/ai-tasks";
 import {
   BackupPanel,
   SuppressionManager,
@@ -82,7 +85,7 @@ function SettingsSection({
 }
 
 export default async function SettingsPage() {
-  const [settings, accounts, apiKeys, users, suppressions, deepseekSettings, researchProviders] =
+  const [settings, accounts, apiKeys, users, suppressions, deepseekSettings, researchProviders, aiProviders, aiTaskSettings] =
     await Promise.all([
       getWorkspaceSettings(),
       listEmailAccounts(),
@@ -91,6 +94,8 @@ export default async function SettingsPage() {
       listSuppressions(),
       getDeepSeekPublicSettings(),
       listResearchProviders(),
+      listAiProviders(),
+      listTaskSettings(),
     ]);
   const usages: Record<string, Awaited<ReturnType<typeof getSendUsage>>> = {};
   const health: Record<
@@ -200,6 +205,25 @@ export default async function SettingsPage() {
           >
             <DeepSeekSettings initial={deepseekSettings} />
             <ProvidersCard initial={researchProviders} />
+          </SettingsSection>
+
+          <SettingsSection
+            id="ai"
+            icon={Sparkles}
+            eyebrow="AI ACTIONS"
+            title="Which provider serves each AI action"
+            description="Translate, Suggest with AI, drafting and the side-by-side test all read this list. A search-only provider such as Brave can never be chosen to write text — only to search."
+          >
+            <AiTasksCard
+              initialTasks={aiTaskSettings}
+              providers={aiProviders.map((provider) => ({
+                id: provider.id,
+                name: provider.name,
+                kinds: provider.kinds,
+                model: provider.model,
+                isEnabled: provider.isEnabled,
+              }))}
+            />
           </SettingsSection>
 
           <SettingsSection

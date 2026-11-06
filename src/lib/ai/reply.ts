@@ -4,6 +4,7 @@ import type {
   ProspectDetail,
 } from "@/lib/types";
 import type { WorkspaceSettings } from "@/lib/services/settings";
+import { runChatTask } from "@/lib/ai/registry";
 import { truncate } from "@/lib/utils";
 import { profileSignature, resolveSendingProfile } from "@/lib/email/profiles";
 
@@ -284,11 +285,43 @@ export async function suggestReply(input: {
     settings: input.settings,
     signature,
   });
+
+  const system = replySystemPrompt();
+  const user = replyContext(input.truth, input.prospect, input.turns);
+
+  // Settings first (item 3): the provider chosen for "Suggest with AI (reply)". When nothing is
+  // configured for the task this returns provider_unavailable and the environment path below runs,
+  // so an unconfigured install behaves exactly as it did before.
+  try {
+    const viaSettings = await runChatTask("suggest_reply", {
+      system,
+      user,
+      maxTokens: 900,
+      json: true,
+    });
+    if (viaSettings.ok) {
+      const parsed = parseReplyJson(viaSettings.text);
+      return {
+        subject: parsed.subject,
+        body: [parsed.body, "", "Best,", signature].join("\n"),
+        needsFounderInput: parsed.needsFounderInput,
+        usedAi: true,
+        model: viaSettings.model,
+        note: parsed.needsFounderInput
+          ? "The AI flagged that part of this answer needs founder confirmation."
+          : null,
+      };
+    }
+    if (viaSettings.code !== "provider_unavailable") {
+      console.error(`AI reply suggestion failed via Settings: ${viaSettings.reason}`);
+    }
+  } catch (error) {
+    console.error("AI reply suggestion via Settings failed; trying the environment.", error);
+  }
+
   const provider = (process.env.AI_PROVIDER || "none").toLowerCase();
   if (provider === "none") return fallback;
   try {
-    const system = replySystemPrompt();
-    const user = replyContext(input.truth, input.prospect, input.turns);
     const result =
       provider === "openai"
         ? await callOpenAI(system, user)

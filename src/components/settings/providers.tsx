@@ -5,10 +5,13 @@ import { LoaderCircle, Plus, RefreshCw, ShieldCheck, ShieldOff } from "lucide-re
 
 import { Notice } from "../ui";
 import { apiRequest, InlineError, SubmitBar } from "../client-ui";
+import { PROVIDER_CATALOG } from "@/lib/ai/provider-catalog";
 
 export interface ProviderRowView {
   id: string;
   name: string;
+  /** `chat`, `search` (Brave) or `both` — what the row can do. Migration 025. */
+  kinds: string;
   baseUrl: string;
   model: string;
   priority: number;
@@ -20,8 +23,9 @@ export interface ProviderRowView {
 }
 
 /**
- * The ordered list of DeepSeek-compatible providers the research engine tries.
- * Lowest priority number is tried first; the engine only fails when all of them fail.
+ * The provider catalog — which slugs exist and what each defaults to — is imported from
+ * `@/lib/ai/provider-catalog` so the screen and the server registry always agree. A test
+ * guards the catalog's own invariants (kinds valid, Brave search-only and model-free).
  */
 export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
   const [providers, setProviders] = useState<ProviderRowView[]>(initial);
@@ -29,7 +33,14 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ name: "", apiKey: "", baseUrl: "", model: "" });
+  const [form, setForm] = useState({
+    name: "",
+    provider: "deepseek",
+    kinds: "both",
+    apiKey: "",
+    baseUrl: "",
+    model: "",
+  });
 
   async function call(label: string, run: () => Promise<{ providers?: ProviderRowView[] } | null>) {
     setError(null);
@@ -59,16 +70,18 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
       apiRequest("/api/settings/providers", {
         body: {
           name,
+          provider: form.provider,
+          kinds: form.kinds,
           apiKey,
           baseUrl: form.baseUrl.trim() || undefined,
-          model: form.model.trim() || undefined,
+          model: form.kinds === "search" ? undefined : form.model.trim() || undefined,
         },
       }),
     );
 
     if (data) {
       setNotice(`Added ${name}. Test it to confirm the key works.`);
-      setForm({ name: "", apiKey: "", baseUrl: "", model: "" });
+      setForm({ name: "", provider: "deepseek", kinds: "both", apiKey: "", baseUrl: "", model: "" });
       setAdding(false);
     }
   }
@@ -144,8 +157,18 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
               className="flex flex-wrap items-center gap-2 rounded-lg border border-line/70 px-2.5 py-2"
             >
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 text-12 font-bold text-ink">
+                <div className="text-12 font-bold text-ink">
                   {row.name}
+                  {row.kinds !== "chat" && row.kinds !== "both" && (
+                    <span className="ml-2 rounded bg-line/60 px-1.5 py-0.5 text-12 font-medium text-muted">
+                      search only
+                    </span>
+                  )}
+                  {row.kinds === "both" && (
+                    <span className="ml-2 rounded bg-line/60 px-1.5 py-0.5 text-12 font-medium text-muted">
+                      chat + search
+                    </span>
+                  )}
                   {!row.isEnabled && (
                     <span className="rounded bg-line/60 px-1.5 py-0.5 text-12 font-medium text-muted">
                       disabled
@@ -153,7 +176,7 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
                   )}
                 </div>
                 <div className="truncate text-12 text-faint">
-                  {row.model} · {row.baseUrl}
+                  {row.kinds === "search" ? "search only" : row.model} · {row.baseUrl}
                 </div>
                 {row.lastTestMessage && (
                   <div
@@ -214,6 +237,45 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
               />
             </div>
             <div>
+              <label className="label" htmlFor="provider-slug">
+                Provider
+              </label>
+              <select
+                id="provider-slug"
+                className="input"
+                value={form.provider}
+                onChange={(event) => {
+                  const choice = PROVIDER_CATALOG[event.target.value];
+                  setForm({
+                    ...form,
+                    provider: event.target.value,
+                    kinds: choice ? choice.kinds : form.kinds,
+                  });
+                }}
+              >
+                {Object.entries(PROVIDER_CATALOG).map(([slug, choice]) => (
+                  <option key={slug} value={slug}>
+                    {choice.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label" htmlFor="provider-kinds">
+                Can do
+              </label>
+              <select
+                id="provider-kinds"
+                className="input"
+                value={form.kinds}
+                onChange={(event) => setForm({ ...form, kinds: event.target.value })}
+              >
+                <option value="chat">Chat only (a model)</option>
+                <option value="both">Chat and search</option>
+                <option value="search">Search only (no model)</option>
+              </select>
+            </div>
+            <div>
               <label className="label" htmlFor="provider-key">
                 API key
               </label>
@@ -240,13 +302,14 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
             </div>
             <div>
               <label className="label" htmlFor="provider-model">
-                Model (optional)
+                Model {form.kinds === "search" ? "(not used)" : "(optional)"}
               </label>
               <input
                 id="provider-model"
                 className="input"
-                placeholder="deepseek-flash"
+                placeholder={form.kinds === "search" ? "search-only" : "deepseek-flash"}
                 value={form.model}
+                disabled={form.kinds === "search"}
                 onChange={(event) => setForm({ ...form, model: event.target.value })}
               />
             </div>

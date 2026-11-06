@@ -1,3 +1,5 @@
+import { AppError } from '@/lib/utils';
+
 const MAX_INPUT_CHARS = 30000;
 const MAX_TRANSLATED_CHARS = 120000;
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
@@ -214,6 +216,34 @@ async function translateWithDeepSeek(original: string): Promise<TranslationResul
   }
 }
 
+/**
+ * Settings first: when a provider is configured for the `translation` task, it is used. Returns
+ * `null` when nothing is configured, so the environment-based path below still works — that keeps
+ * an unconfigured install behaving exactly as before while Settings takes over once it is set.
+ */
+async function translateViaRegistry(original: string): Promise<TranslationResult | null> {
+  try {
+    const { runChatTask } = await import('@/lib/ai/registry');
+    const outcome = await runChatTask('translation', {
+      system: SYSTEM_PROMPT,
+      user: original,
+      maxTokens: 12000,
+      json: true,
+    });
+    if (!outcome.ok) {
+      if (outcome.code === 'provider_unavailable') return null;
+      return failure(outcome.code, outcome.reason);
+    }
+    return validateTranslation(outcome.text, outcome.provider, outcome.model, original);
+  } catch (error) {
+    // A refusal from Settings (a search-only provider chosen for translation, say) is reported; a
+    // database that cannot be reached falls through to the environment rather than breaking.
+    if (error instanceof AppError) {
+      return failure(error.code ?? 'provider_unavailable', error.message);
+    }
+    return null;
+  }
+}
 export async function translateToEnglish(original: string): Promise<TranslationResult> {
   if (typeof original !== 'string' || original.trim().length === 0) {
     return failure('invalid_input', 'Original text is empty.');
@@ -221,6 +251,9 @@ export async function translateToEnglish(original: string): Promise<TranslationR
   if (original.length > MAX_INPUT_CHARS) {
     return failure('invalid_input', `Original text exceeds ${MAX_INPUT_CHARS} characters.`);
   }
+
+  const viaSettings = await translateViaRegistry(original);
+  if (viaSettings) return viaSettings;
 
   const provider = (process.env.AI_PROVIDER ?? '').trim().toLowerCase();
   if (provider === '' || provider === 'none') {

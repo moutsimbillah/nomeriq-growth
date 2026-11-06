@@ -11,6 +11,8 @@ export const dynamic = "force-dynamic";
 
 const patchSchema = z.object({
   name: z.string().min(1).max(100).optional(),
+  /** `chat`, `search` or `both` — correcting a row that was recorded wrongly. */
+  kinds: z.enum(["chat", "search", "both"]).optional(),
   /** Empty or omitted keeps the stored key; the key is never sent back to the browser. */
   apiKey: z.string().max(500).optional().nullable(),
   baseUrl: z.string().max(500).optional(),

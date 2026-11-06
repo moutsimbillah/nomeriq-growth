@@ -11,6 +11,8 @@ export const dynamic = "force-dynamic";
 
 const createSchema = z.object({
   name: z.string().min(1).max(100),
+  provider: z.string().min(1).max(50).optional(),
+  kinds: z.string().min(1).max(20).optional(),
   apiKey: z.string().min(1).max(500),
   baseUrl: z.string().max(500).optional(),
   model: z.string().max(300).optional(),
@@ -20,7 +22,7 @@ const createSchema = z.object({
   isEnabled: z.boolean().optional(),
 });
 
-/** The ordered list of DeepSeek-compatible providers the engine will try. */
+/** The ordered list of providers the engine and the AI actions will try. */
 export async function GET() {
   try {
     await requireEditor();

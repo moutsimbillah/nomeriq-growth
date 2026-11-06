@@ -1,6 +1,7 @@
 import type { ProductTruth, ProspectDetail } from "@/lib/types";
 import { truncate, wordCount } from "@/lib/utils";
 import type { WorkspaceSettings } from "@/lib/services/settings";
+import { runChatTask } from "@/lib/ai/registry";
 import {
   deepseekChatJson,
   resolveDeepSeekConfig,
@@ -206,6 +207,28 @@ function aiUserPrompt(
   ].join("\n");
 }
 
+/** Strict JSON {subject, body} from a provider, tolerating a fenced code block. */
+function parseDraftJson(text: string): { subject: string; body: string } {
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  let parsed: { subject?: unknown; body?: unknown };
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("The AI draft was not valid JSON.");
+    parsed = JSON.parse(match[0]);
+  }
+  const subject = typeof parsed.subject === "string" ? parsed.subject.trim() : "";
+  const body = typeof parsed.body === "string" ? parsed.body.trim() : "";
+  if (!subject || !body) {
+    throw new Error("The AI draft did not contain a subject and a body.");
+  }
+  return { subject, body };
+}
+
 async function callOpenAI(
   system: string,
   user: string,
@@ -313,6 +336,35 @@ export async function generateFirstContact(
   options: DraftGenerationOptions = {},
 ): Promise<GeneratedDraft> {
   const fallback = deterministicFirstContact(prospect, settings);
+
+  const system = aiSystemPrompt();
+  const user = aiUserPrompt(prospect, truth);
+
+  // Settings first (item 3): the provider and model chosen for "First-email drafting".
+  try {
+    const viaSettings = await runChatTask("first_email", { system, user, maxTokens: 700, json: true });
+    if (viaSettings.ok) {
+      const parsed = parseDraftJson(viaSettings.text);
+      const body = [
+        parsed.body.trim(),
+        "",
+        "Best,",
+        settings.senderSignature || "Founder\nNomeriq",
+      ].join("\n");
+      if (wordCount(body) >= 20) {
+        return {
+          subject: parsed.subject.trim().slice(0, 160),
+          body,
+          model: viaSettings.model,
+          usedAi: true,
+          usage: null,
+        };
+      }
+    }
+  } catch (error) {
+    console.error("AI draft generation via Settings failed; trying the environment.", error);
+  }
+
   const provider = (
     options.provider ||
     process.env.AI_PROVIDER ||
@@ -321,8 +373,6 @@ export async function generateFirstContact(
   if (provider === "none") return fallback;
 
   try {
-    const system = aiSystemPrompt();
-    const user = aiUserPrompt(prospect, truth);
     if (provider === "deepseek") {
       const resolved = options.deepseekConfig
         ? { config: options.deepseekConfig, error: null }

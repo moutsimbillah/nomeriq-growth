@@ -1,0 +1,479 @@
+import { decryptSecret } from "@/lib/auth/crypto";
+import { getDb } from "@/lib/db/client";
+import { AppError } from "@/lib/utils";
+import { cleanBaseUrl } from "@/lib/deepseek/provider";
+import { PROVIDER_CATALOG, PROVIDER_KINDS, type ProviderKind } from "@/lib/ai/provider-catalog";
+
+export { PROVIDER_KINDS } from "@/lib/ai/provider-catalog";
+export type { ProviderKind } from "@/lib/ai/provider-catalog";
+
+/**
+ * The provider registry the AI actions read.
+ *
+ * `research_providers` (widened in migration 025) is the one place a provider is configured: base
+ * URL, model, encrypted key, search and fetch paths, and `kinds` — what the row can actually do.
+ * This module turns a row into a call, for every provider the docs support, and refuses the
+ * combinations that cannot work.
+ *
+ * The refusal matters as much as the call. A search-only provider (Brave: a key and a search path,
+ * no model) can never serve a chat task, and an unknown task or provider is an error rather than a
+ * silent fallback — a misconfiguration has to be visible, not mysterious.
+ */
+
+export const AI_TASKS = [
+  "lead_research",
+  "first_email",
+  "follow_up",
+  "suggest_reply",
+  "simulate_reply",
+  "translation",
+  "classification",
+] as const;
+
+export type AiTask = (typeof AI_TASKS)[number];
+
+export const AI_TASK_LABELS: Record<AiTask, string> = {
+  lead_research: "Lead research",
+  first_email: "First-email drafting",
+  follow_up: "Follow-up drafting",
+  suggest_reply: "Suggest with AI (reply)",
+  simulate_reply: "Simulate a test reply",
+  translation: "Translation",
+  classification: "Classification",
+};
+
+/** Documentation-backed defaults per provider, used when a row leaves a field empty. */
+export const PROVIDER_DEFAULTS: Record<
+  string,
+  { label: string; baseUrl: string; model: string; kinds: ProviderKind }
+> = {
+  deepseek: {
+    label: "DeepSeek",
+    baseUrl: "https://api.deepseek.com",
+    model: "deepseek-flash",
+    kinds: "both",
+  },
+  openai: { label: "OpenAI", baseUrl: "https://api.openai.com", model: "gpt-5.4", kinds: "chat" },
+  anthropic: {
+    label: "Anthropic (Claude)",
+    baseUrl: "https://api.anthropic.com",
+    model: "claude-sonnet-4-5",
+    kinds: "chat",
+  },
+  gemini: {
+    label: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com",
+    model: "gemini-3.8-flash",
+    kinds: "chat",
+  },
+  openrouter: {
+    label: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api",
+    model: "openai/gpt-5",
+    kinds: "both",
+  },
+  brave: {
+    label: "Brave Search",
+    baseUrl: "https://api.search.brave.com",
+    // Brave has no model at all: it is a search API usable with any model.
+    model: "",
+    kinds: "search",
+  },
+  custom: {
+    label: "Custom (OpenAI-compatible)",
+    baseUrl: "",
+    model: "",
+    kinds: "chat",
+  },
+};
+
+/** Everything the registry knows about a provider row. */
+export interface AiProviderRow {
+  id: string;
+  name: string;
+  provider: string;
+  kinds: ProviderKind;
+  baseUrl: string;
+  model: string;
+  searchPath: string | null;
+  fetchPath: string | null;
+  priority: number;
+  isEnabled: boolean;
+  encryptedApiKey: string;
+}
+
+export function isAiTask(value: string): value is AiTask {
+  return (AI_TASKS as readonly string[]).includes(value);
+}
+
+/**
+ * A row can serve a chat task only if it says so and it actually names a model. This is the single
+ * place that rule lives, so the API and the UI cannot disagree about it.
+ */
+export function chatCapability(row: {
+  kinds: ProviderKind;
+  model: string | null;
+  name?: string;
+}): { ok: true } | { ok: false; message: string } {
+  const label = row.name ? `"${row.name}"` : "This provider";
+  if (row.kinds === "search") {
+    return {
+      ok: false,
+      message: `${label} is a search-only provider, so it cannot be chosen for a chat task. Choose it as the search source instead.`,
+    };
+  }
+  const model = (row.model ?? "").trim();
+  if (!model) {
+    return {
+      ok: false,
+      message: `${label} has no model set, so it cannot be chosen for a chat task. Set a model on the provider first, or choose it as the search source.`,
+    };
+  }
+  return { ok: true };
+}
+
+/** The mirror rule: only a search-capable row may be a search source. */
+export function searchCapability(row: {
+  kinds: ProviderKind;
+  name?: string;
+}): { ok: true } | { ok: false; message: string } {
+  if (row.kinds === "chat") {
+    const label = row.name ? `"${row.name}"` : "This provider";
+    return {
+      ok: false,
+      message: `${label} is a model-only provider, so it cannot be used as the search source. Choose a provider that offers search, or leave it on the model's own search.`,
+    };
+  }
+  return { ok: true };
+}
+
+interface ProviderRecord {
+  id: string;
+  name: string;
+  provider: string;
+  kinds: string;
+  base_url: string;
+  model: string;
+  search_path: string | null;
+  fetch_path: string | null;
+  priority: number | string;
+  is_enabled: boolean;
+  encrypted_api_key: string;
+}
+
+function toRow(record: ProviderRecord): AiProviderRow {
+  const kinds = (PROVIDER_KINDS as readonly string[]).includes(record.kinds)
+    ? (record.kinds as ProviderKind)
+    : "both";
+  return {
+    id: record.id,
+    name: record.name,
+    provider: record.provider,
+    kinds,
+    baseUrl: record.base_url,
+    model: record.model,
+    searchPath: record.search_path,
+    fetchPath: record.fetch_path,
+    priority: Number(record.priority),
+    isEnabled: Boolean(record.is_enabled),
+    encryptedApiKey: record.encrypted_api_key,
+  };
+}
+
+export async function listAiProviders(): Promise<AiProviderRow[]> {
+  const db = await getDb();
+  const result = await db.query<ProviderRecord>(
+    `SELECT id, name, provider, kinds, base_url, model, search_path, fetch_path,
+            priority, is_enabled, encrypted_api_key
+       FROM research_providers
+      ORDER BY is_enabled DESC, priority ASC, created_at ASC`,
+  );
+  return result.rows.map(toRow);
+}
+
+export async function getAiProvider(id: string): Promise<AiProviderRow | null> {
+  const db = await getDb();
+  const result = await db.query<ProviderRecord>(
+    `SELECT id, name, provider, kinds, base_url, model, search_path, fetch_path,
+            priority, is_enabled, encrypted_api_key
+       FROM research_providers WHERE id = $1`,
+    [id],
+  );
+  return result.rows[0] ? toRow(result.rows[0]) : null;
+}
+
+const UNKNOWN_PROVIDER = "That provider no longer exists. Choose another one in Settings.";
+
+export interface AiTaskSelection {
+  task: AiTask;
+  /** The chat provider that will serve this task. */
+  chat: AiProviderRow | null;
+  /** Where research should search, or null for "the chosen model's own search". */
+  search: AiProviderRow | null;
+  /** The chat providers to try, in order: the chosen one first, then the fallback list. */
+  fallbackChain: AiProviderRow[];
+}
+
+/**
+ * Resolve a task to the providers it should use.
+ *
+ * Refuses an unknown task, a provider id that does not exist, and a provider that cannot do the
+ * job it was chosen for — each with a message naming the problem. A task with nothing configured
+ * resolves to `chat: null`, which the callers report as "not configured" rather than failing.
+ */
+export async function resolveAiTask(task: string): Promise<AiTaskSelection> {
+  if (!isAiTask(task)) {
+    throw new AppError(
+      `Unknown AI task "${task}". Valid tasks are: ${AI_TASKS.join(", ")}.`,
+      400,
+      "unknown_task",
+    );
+  }
+
+  const db = await getDb();
+  const settings = await db.query<{
+    provider_id: string | null;
+    model: string | null;
+    search_provider_id: string | null;
+  }>(
+    `SELECT provider_id, model, search_provider_id FROM ai_task_settings WHERE task = $1`,
+    [task],
+  );
+  const row = settings.rows[0];
+
+  const fallbacks = await db.query<{ provider_id: string }>(
+    `SELECT provider_id FROM ai_task_fallbacks WHERE task = $1 ORDER BY priority ASC, provider_id`,
+    [task],
+  );
+
+  let chat: AiProviderRow | null = null;
+  if (row?.provider_id) {
+    const provider = await getAiProvider(row.provider_id);
+    if (!provider) throw new AppError(UNKNOWN_PROVIDER, 400, "unknown_provider");
+    const capable = chatCapability(provider);
+    if (!capable.ok) throw new AppError(capable.message, 400, "provider_not_chat_capable");
+    chat = provider;
+  }
+
+  let search: AiProviderRow | null = null;
+  if (row?.search_provider_id) {
+    const provider = await getAiProvider(row.search_provider_id);
+    if (!provider) throw new AppError(UNKNOWN_PROVIDER, 400, "unknown_provider");
+    const capable = searchCapability(provider);
+    if (!capable.ok) throw new AppError(capable.message, 400, "provider_not_search_capable");
+    search = provider;
+  }
+
+  const chain: AiProviderRow[] = chat ? [chat] : [];
+  for (const entry of fallbacks.rows) {
+    const provider = await getAiProvider(entry.provider_id);
+    if (!provider || !provider.isEnabled) continue;
+    const capable = chatCapability(provider);
+    // A fallback that cannot chat is skipped rather than fatal: the task still has its first choice.
+    if (!capable.ok) continue;
+    if (!chain.some((existing) => existing.id === provider.id)) chain.push(provider);
+  }
+
+  return { task, chat, search, fallbackChain: chain };
+}
+
+export interface ChatMessage {
+  system: string;
+  user: string;
+  maxTokens?: number;
+  /** Ask for strict JSON where the provider supports it. */
+  json?: boolean;
+}
+
+export interface ChatOutcome<T> {
+  data: T;
+  provider: string;
+  model: string;
+}
+
+/** The provider's documented chat endpoint, headers and body, from its own docs. */
+function requestFor(
+  row: AiProviderRow,
+  message: ChatMessage,
+  apiKey: string,
+): { url: string; init: RequestInit; pick: (payload: unknown) => unknown; model: string } {
+  const base = cleanBaseUrl(row.baseUrl);
+  const model = row.model;
+  const maxTokens = message.maxTokens ?? 4096;
+
+  if (row.provider === "anthropic") {
+    return {
+      url: `${base}/v1/messages`,
+      model,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          system: message.system,
+          messages: [{ role: "user", content: message.user }],
+        }),
+      },
+      pick: (payload) => {
+        const blocks = (payload as { content?: unknown }).content;
+        return Array.isArray(blocks)
+          ? blocks.find(
+              (block: { type?: unknown; text?: unknown }) =>
+                block?.type === "text" && typeof block.text === "string",
+            )?.text
+          : undefined;
+      },
+    };
+  }
+
+  if (row.provider === "gemini") {
+    return {
+      url: `${base}/v1beta/models/${model}:generateContent`,
+      model,
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: message.system }] },
+          contents: [{ role: "user", parts: [{ text: message.user }] }],
+          generationConfig: { maxOutputTokens: maxTokens },
+        }),
+      },
+      pick: (payload) => {
+        const candidates = (payload as { candidates?: unknown }).candidates;
+        if (!Array.isArray(candidates)) return undefined;
+        const parts = (candidates[0] as { content?: { parts?: unknown } })?.content?.parts;
+        return Array.isArray(parts)
+          ? parts.map((part: { text?: string }) => part?.text ?? "").join("")
+          : undefined;
+      },
+    };
+  }
+
+  // OpenAI, DeepSeek, OpenRouter and any OpenAI-compatible custom endpoint share one shape.
+  return {
+    url: `${base}/v1/chat/completions`,
+    model,
+    init: {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        max_completion_tokens: maxTokens,
+        ...(message.json ? { response_format: { type: "json_object" } } : {}),
+        messages: [
+          { role: "system", content: message.system },
+          { role: "user", content: message.user },
+        ],
+      }),
+    },
+    pick: (payload) =>
+      (payload as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]?.message
+        ?.content,
+  };
+}
+
+export type ChatResult =
+  | { ok: true; text: string; provider: string; model: string }
+  | { ok: false; code: string; reason: string };
+
+/**
+ * Ask one provider for a completion. Credentials come from the row's encrypted key and are never
+ * logged; a provider that fails is reported by name so the fallback chain can explain itself.
+ */
+export async function chatWithProvider(
+  row: AiProviderRow,
+  message: ChatMessage,
+): Promise<ChatResult> {
+  const capable = chatCapability(row);
+  if (!capable.ok) return { ok: false, code: "provider_not_chat_capable", reason: capable.message };
+
+  let apiKey: string;
+  try {
+    apiKey = decryptSecret(row.encryptedApiKey);
+  } catch {
+    return {
+      ok: false,
+      code: "key_unreadable",
+      reason: `The stored key for "${row.name}" could not be read. Enter it again in Settings.`,
+    };
+  }
+  if (!apiKey.trim()) {
+    return { ok: false, code: "missing_api_key", reason: `"${row.name}" has no API key stored.` };
+  }
+
+  const { url, init, pick, model } = requestFor(row, message, apiKey);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60000);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    if (!response.ok) {
+      return {
+        ok: false,
+        code: "http_error",
+        reason: `${row.name} returned HTTP ${response.status}.`,
+      };
+    }
+    const payload = await response.json();
+    const reported = (payload as { model?: unknown }).model;
+    const usedModel = typeof reported === "string" && reported.trim() ? reported : model;
+    const text = pick(payload);
+    if (typeof text !== "string" || text.trim().length === 0) {
+      return {
+        ok: false,
+        code: "empty_response",
+        reason: `${row.name} returned no text.`,
+      };
+    }
+    return { ok: true, text, provider: row.provider, model: usedModel };
+  } catch (error) {
+    return {
+      ok: false,
+      code: "request_failed",
+      reason: `${row.name} could not be reached: ${error instanceof Error ? error.message : "unknown error"}.`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Run a task against its chosen provider, falling through the fallback chain. Returns the first
+ * success, or a failure naming every provider that was tried.
+ */
+export async function runChatTask(
+  task: string,
+  message: ChatMessage,
+): Promise<ChatResult & { fallbackUsed?: string }> {
+  const selection = await resolveAiTask(task);
+  if (!selection.fallbackChain.length) {
+    return {
+      ok: false,
+      code: "provider_unavailable",
+      reason: `No provider is configured for ${AI_TASK_LABELS[selection.task]}. Choose one in Settings.`,
+    };
+  }
+
+  const failures: string[] = [];
+  for (const provider of selection.fallbackChain) {
+    const outcome = await chatWithProvider(provider, message);
+    if (outcome.ok) {
+      return {
+        ...outcome,
+        ...(provider.id !== selection.chat?.id ? { fallbackUsed: provider.name } : {}),
+      };
+    }
+    failures.push(`${provider.name}: ${outcome.reason}`);
+  }
+
+  return {
+    ok: false,
+    code: "all_providers_failed",
+    reason: `Every configured provider failed — ${failures.join("; ")}`,
+  };
+}
