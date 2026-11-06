@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { draftProvenance } from "@/lib/ai/provenance";
 import { useEffect, useMemo, useState } from "react";
 import { AGENT_LABELS } from "@/lib/agent/agentTag";
 import { agentPillLabel } from "@/lib/agent/agentPill";
@@ -806,11 +807,7 @@ export function DraftEditor({
             </span>
           </div>
           <p className="mt-1 text-12 text-muted">
-            {draft.sourceAgent
-              ? `Drafted by ${agentPillLabel(draft.sourceAgent, draft.sourceClient)}`
-              : draft.aiGenerated
-                ? `Written by ${[draft.aiProvider, draft.aiModel].filter(Boolean).join(" · ") || draft.sourceClient || "AI"}`
-                : "No-AI fallback — standard template"}{" "}
+            {draftProvenance(draft, agentPillLabel)}{" "}
             · {words} words
             {draft.founderEdited ? " · founder-edited" : ""}
           </p>

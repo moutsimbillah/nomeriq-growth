@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { languageName } from "@/lib/email/translation-view";
 import {
   Check,
   Copy,
@@ -402,7 +403,7 @@ export function ReplyComposer({
             {meta.englishBody && (
               <details className="rounded-lg border border-line bg-white/60 px-2.5 py-2 text-12" open>
                 <summary className="cursor-pointer font-semibold text-ink">
-                  English version (for you — the reply above is in {meta.language ?? "the prospect's language"} and is what gets sent)
+                  English version (for you — the reply above is in {meta.language ? languageName(meta.language) : "the prospect's language"} and is what gets sent)
                 </summary>
                 <p className="mt-1.5 whitespace-pre-wrap break-anywhere leading-5 text-muted">{meta.englishBody}</p>
               </details>

@@ -96,7 +96,8 @@ describe("part 4 — the No-AI fallback sits with the AI actions", () => {
   });
 
   it("labels a template draft as the No-AI fallback wherever drafts are listed", () => {
-    expect(read("src/components/lead-actions.tsx")).toContain("No-AI fallback — standard template");
+    expect(read("src/lib/ai/provenance.ts")).toContain("No-AI fallback — standard template");
+    expect(read("src/components/lead-actions.tsx")).toContain("draftProvenance(");
   });
 });
 

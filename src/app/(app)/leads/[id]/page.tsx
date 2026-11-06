@@ -27,6 +27,7 @@ import {
   getFirstContactDraft,
   listDraftsForProspect,
 } from "@/lib/services/drafts";
+import { draftProvenance } from "@/lib/ai/provenance";
 import { getConversationForProspect, previewMessages } from "@/lib/services/conversations";
 import { SendingProfileControl } from "@/components/sending-profile-control";
 import { FollowUpExclusionControl } from "@/components/follow-up-exclusion-control";
@@ -546,6 +547,9 @@ export default async function LeadDetailPage({
                       </div>
                       <div className="mt-0.5 text-12 text-faint">
                         {followUp.subject}
+                      </div>
+                      <div className="mt-0.5 text-12 text-faint" data-draft-provenance>
+                        {draftProvenance(followUp)}
                       </div>
                     </div>
                     <span className="badge capitalize">{followUp.status}</span>

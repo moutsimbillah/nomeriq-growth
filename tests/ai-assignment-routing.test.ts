@@ -52,14 +52,15 @@ describe("the failover order", () => {
     expect(chatFallbacks(providers, null).map(p => p.id)).toEqual(["usable"]);
   });
 
-  it("tries a test-passed provider before a failing one that shares its order number", () => {
+  it("falls back only to test-passed providers, whatever order number they share", () => {
     const providers = [
       provider({ id: "failed", priority: 100, lastTestOk: false }),
       provider({ id: "passed", priority: 100, lastTestOk: true }),
       provider({ id: "never-tested", priority: 100, lastTestOk: null }),
       provider({ id: "later", priority: 200 }),
     ];
-    expect(chatFallbacks(providers, null).map(p => p.id)).toEqual(["passed", "failed", "never-tested", "later"]);
+    // A failed or never-run Test is never a fallback; only the assigned provider is tried on one.
+    expect(chatFallbacks(providers, null).map(p => p.id)).toEqual(["passed", "later"]);
   });
 
   it("puts the task's own fallback list ahead of the global order", () => {

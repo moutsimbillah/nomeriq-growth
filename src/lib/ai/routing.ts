@@ -72,7 +72,9 @@ export function chatFallbacks<T extends ChatProviderOption>(
   const candidates = [...preferredIds.map(id => providers.find(p => p.id === id)), ...ordered];
   const seen = new Set(primaryId ? [primaryId] : []);
   return candidates.filter((provider): provider is T => {
-    if (!provider || seen.has(provider.id) || !provider.isEnabled || !chatCapability(provider).ok) return false;
+    // A fallback must be working: enabled, chat-capable AND test-passed (founder's rule). Only the
+    // assigned provider itself is tried on a failed Test — a fallback never is.
+    if (!provider || seen.has(provider.id) || !workingChatProvider(provider)) return false;
     seen.add(provider.id);
     return true;
   });

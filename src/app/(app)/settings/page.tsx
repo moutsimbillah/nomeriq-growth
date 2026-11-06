@@ -122,7 +122,9 @@ export default async function SettingsPage() {
     (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() === "live"
       ? "live"
       : "sandbox";
-  const aiProvider = (process.env.AI_PROVIDER || "none").toLowerCase();
+  // AI mode is what the AI actions actually use: assigned actions and working providers from the list.
+  const assignedActions = aiTaskSettings.filter((task) => task.providerId).length;
+  const workingProviders = aiProviders.filter((provider) => provider.isEnabled && provider.lastTestOk === true && provider.kinds !== "search").length;
 
   return (
     <div className="animate-fade-up">
@@ -335,9 +337,9 @@ export default async function SettingsPage() {
                 {
                   label: "AI mode",
                   value:
-                    aiProvider === "none"
-                      ? "Deterministic writer, no AI key"
-                      : `${aiProvider} · optional`,
+                    assignedActions === 0
+                      ? "No AI provider assigned — No-AI fallback"
+                      : `${assignedActions} of 7 actions assigned · ${workingProviders} working ${workingProviders === 1 ? "provider" : "providers"}`,
                   icon: Bot,
                 },
                 {

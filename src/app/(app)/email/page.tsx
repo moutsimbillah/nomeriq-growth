@@ -36,6 +36,7 @@ import {
   listFollowUpCandidates,
   listFollowUpDraftsPage,
 } from "@/lib/services/followups";
+import { draftProvenance } from "@/lib/ai/provenance";
 import { listCampaigns } from "@/lib/services/campaigns";
 import { listEmailAccounts } from "@/lib/email/accounts";
 import { getSyncHealth } from "@/lib/email/sync";
@@ -830,6 +831,9 @@ export default async function EmailPage({
                       </div>
                       <div className="mt-0.5 truncate text-12 text-muted">
                         {draft.subject} · {truncate(draft.body.replace(/\n+/g, " "), 130)}
+                      </div>
+                      <div className="mt-0.5 text-12 text-faint" data-draft-provenance>
+                        {draftProvenance(draft)}
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5">

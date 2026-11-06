@@ -24,7 +24,8 @@ export interface TranslationViewState {
   canFlip: boolean;
 }
 
-function languageName(code: string): string {
+/** "fr" → "French"; an unknown code is returned as it is. */
+export function languageName(code: string): string {
   try {
     return new Intl.DisplayNames(["en"], { type: "language" }).of(code) ?? code;
   } catch {
