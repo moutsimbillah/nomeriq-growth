@@ -8,7 +8,8 @@ import {
   PROVIDER_KINDS,
   listAiProviders,
 } from "@/lib/ai/registry";
-import { listTaskSettings, saveTaskSetting } from "@/lib/services/ai-task-settings";
+import { listTaskSettings, saveTaskSetting, useProviderForAllActions } from "@/lib/services/ai-task-settings";
+import { providerOption } from "@/lib/ai/routing";
 import { fail, readJson } from "@/lib/api";
 
 export const runtime = "nodejs";
@@ -22,7 +23,7 @@ export async function GET() {
       ok: true,
       data: {
         tasks: await listTaskSettings(),
-        providers: await listAiProviders(),
+        providers: (await listAiProviders()).map(providerOption),
         providerKinds: PROVIDER_KINDS,
         taskLabels: AI_TASK_LABELS,
         validTasks: AI_TASKS,
@@ -40,12 +41,20 @@ const saveSchema = z.object({
   searchProviderId: z.string().uuid().nullable().optional(),
   fallbackProviderIds: z.array(z.string().uuid()).max(10).optional(),
 });
+const requestSchema = z.union([
+  z.object({ allActions: z.literal(true), providerId: z.string().uuid() }).strict(),
+  saveSchema,
+]);
 
 export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const user = await requireEditor();
-    const input = saveSchema.parse(await readJson(request));
+    const input = requestSchema.parse(await readJson(request));
+    if ("allActions" in input) {
+      const tasks = await useProviderForAllActions(input.providerId, user.id);
+      return NextResponse.json({ ok: true, data: { tasks } });
+    }
     // `task` is validated against the known list inside saveTaskSetting, which refuses an unknown
     // task by name — a zod enum here would report it as a generic schema failure instead.
     const tasks = await saveTaskSetting(

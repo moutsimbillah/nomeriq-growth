@@ -56,6 +56,7 @@ export async function listResearchProviders(): Promise<StoredResearchProvider[]>
             (encrypted_api_key IS NOT NULL AND encrypted_api_key <> '') AS has_key,
             last_test_ok, last_test_message, last_tested_at
        FROM research_providers
+      WHERE deleted_at IS NULL
       ORDER BY is_enabled DESC, priority ASC, created_at ASC`,
   );
 
@@ -154,7 +155,7 @@ export async function resolveResearchProviders(input: {
   const db = await getDb();
   const result = await db.query<ProviderRow>(
     `SELECT * FROM research_providers
-      WHERE is_enabled = true
+      WHERE is_enabled = true AND deleted_at IS NULL
       ORDER BY priority ASC, created_at ASC`,
   );
 

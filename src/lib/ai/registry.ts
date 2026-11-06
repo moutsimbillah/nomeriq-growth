@@ -3,6 +3,9 @@ import { getDb, type DbClient } from "@/lib/db/client";
 import { AppError } from "@/lib/utils";
 import { requestProviderChat } from "@/lib/ai/chat-transport";
 import { PROVIDER_CATALOG, PROVIDER_KINDS, type ProviderKind } from "@/lib/ai/provider-catalog";
+import { AI_TASKS, AI_TASK_LABELS, chatCapability, searchCapability, chatFallbacks, workingChatProvider, type AiTask } from "@/lib/ai/routing";
+export { AI_TASKS, AI_TASK_LABELS, chatCapability, searchCapability } from "@/lib/ai/routing";
+export type { AiTask } from "@/lib/ai/routing";
 
 export { PROVIDER_KINDS } from "@/lib/ai/provider-catalog";
 export type { ProviderKind } from "@/lib/ai/provider-catalog";
@@ -20,27 +23,6 @@ export type { ProviderKind } from "@/lib/ai/provider-catalog";
  * silent fallback — a misconfiguration has to be visible, not mysterious.
  */
 
-export const AI_TASKS = [
-  "lead_research",
-  "first_email",
-  "follow_up",
-  "suggest_reply",
-  "simulate_reply",
-  "translation",
-  "classification",
-] as const;
-
-export type AiTask = (typeof AI_TASKS)[number];
-
-export const AI_TASK_LABELS: Record<AiTask, string> = {
-  lead_research: "Lead research",
-  first_email: "First-email drafting",
-  follow_up: "Follow-up drafting",
-  suggest_reply: "Suggest with AI (reply)",
-  simulate_reply: "Simulate a test reply",
-  translation: "Translation",
-  classification: "Classification",
-};
 
 /** Documentation-backed defaults per provider, used when a row leaves a field empty. */
 export const PROVIDER_DEFAULTS: Record<
@@ -99,6 +81,7 @@ export interface AiProviderRow {
   fetchPath: string | null;
   priority: number;
   isEnabled: boolean;
+  lastTestOk: boolean | null;
   encryptedApiKey: string;
 }
 
@@ -106,46 +89,6 @@ export function isAiTask(value: string): value is AiTask {
   return (AI_TASKS as readonly string[]).includes(value);
 }
 
-/**
- * A row can serve a chat task only if it says so and it actually names a model. This is the single
- * place that rule lives, so the API and the UI cannot disagree about it.
- */
-export function chatCapability(row: {
-  kinds: ProviderKind;
-  model: string | null;
-  name?: string;
-}): { ok: true } | { ok: false; message: string } {
-  const label = row.name ? `"${row.name}"` : "This provider";
-  if (row.kinds === "search") {
-    return {
-      ok: false,
-      message: `${label} is a search-only provider, so it cannot be chosen for a chat task. Choose it as the search source instead.`,
-    };
-  }
-  const model = (row.model ?? "").trim();
-  if (!model) {
-    return {
-      ok: false,
-      message: `${label} has no model set, so it cannot be chosen for a chat task. Set a model on the provider first, or choose it as the search source.`,
-    };
-  }
-  return { ok: true };
-}
-
-/** The mirror rule: only a search-capable row may be a search source. */
-export function searchCapability(row: {
-  kinds: ProviderKind;
-  name?: string;
-}): { ok: true } | { ok: false; message: string } {
-  if (row.kinds === "chat") {
-    const label = row.name ? `"${row.name}"` : "This provider";
-    return {
-      ok: false,
-      message: `${label} is a model-only provider, so it cannot be used as the search source. Choose a provider that offers search, or leave it on the model's own search.`,
-    };
-  }
-  return { ok: true };
-}
 
 interface ProviderRecord {
   id: string;
@@ -158,6 +101,7 @@ interface ProviderRecord {
   fetch_path: string | null;
   priority: number | string;
   is_enabled: boolean;
+  last_test_ok: boolean | null;
   encrypted_api_key: string;
 }
 
@@ -176,16 +120,18 @@ function toRow(record: ProviderRecord): AiProviderRow {
     fetchPath: record.fetch_path,
     priority: Number(record.priority),
     isEnabled: Boolean(record.is_enabled),
+    lastTestOk: record.last_test_ok ?? null,
     encryptedApiKey: record.encrypted_api_key,
   };
 }
 
-export async function listAiProviders(): Promise<AiProviderRow[]> {
-  const db = await getDb();
+export async function listAiProviders(runner?: DbClient): Promise<AiProviderRow[]> {
+  const db = runner ?? await getDb();
   const result = await db.query<ProviderRecord>(
     `SELECT id, name, provider, kinds, base_url, model, search_path, fetch_path,
-            priority, is_enabled, encrypted_api_key
+            priority, is_enabled, last_test_ok, encrypted_api_key
        FROM research_providers
+      WHERE deleted_at IS NULL
       ORDER BY is_enabled DESC, priority ASC, created_at ASC`,
   );
   return result.rows.map(toRow);
@@ -195,8 +141,8 @@ export async function getAiProvider(id: string, runner?: DbClient): Promise<AiPr
   const db = runner ?? await getDb();
   const result = await db.query<ProviderRecord>(
     `SELECT id, name, provider, kinds, base_url, model, search_path, fetch_path,
-            priority, is_enabled, encrypted_api_key
-       FROM research_providers WHERE id = $1`,
+            priority, is_enabled, last_test_ok, encrypted_api_key
+       FROM research_providers WHERE id = $1 AND deleted_at IS NULL`,
     [id],
   );
   return result.rows[0] ? toRow(result.rows[0]) : null;
@@ -252,7 +198,7 @@ export async function resolveAiTask(task: string, runner?: DbClient): Promise<Ai
     if (!provider) throw new AppError(UNKNOWN_PROVIDER, 400, "unknown_provider");
     const capable = chatCapability(provider);
     if (!capable.ok) throw new AppError(capable.message, 400, "provider_not_chat_capable");
-    if (!provider.isEnabled) throw new AppError("The chosen provider is disabled. Enable it in Settings.", 400, "provider_disabled");
+
     chat = { ...provider, model: row.model?.trim() || provider.model };
   }
 
@@ -265,15 +211,14 @@ export async function resolveAiTask(task: string, runner?: DbClient): Promise<Ai
     search = provider;
   }
 
-  const chain: AiProviderRow[] = chat ? [chat] : [];
-  for (const entry of fallbacks.rows) {
-    const provider = await getAiProvider(entry.provider_id, db);
-    if (!provider || !provider.isEnabled) continue;
-    const capable = chatCapability(provider);
-    // A fallback that cannot chat is skipped rather than fatal: the task still has its first choice.
-    if (!capable.ok) continue;
-    if (!chain.some((existing) => existing.id === provider.id)) chain.push(provider);
-  }
+  // The assigned provider is tried first when it is enabled and can chat — including when its last
+  // Test failed, because a Test is a snapshot and the provider may well answer now. Everything after
+  // it comes from the shared order, where a test-passed provider always precedes a failing one that
+  // shares its number. A disabled provider is never tried at all.
+  const chain: AiProviderRow[] = [];
+  if (chat && chat.isEnabled && chatCapability(chat).ok) chain.push(chat);
+  // No implicit global assignment for an unassigned action, especially Lead research.
+  if (chat) chain.push(...chatFallbacks(await listAiProviders(db), chat.id, fallbacks.rows.map(f => f.provider_id)));
 
   return { task, chat, search, fallbackChain: chain };
 }
@@ -293,7 +238,7 @@ export interface ChatOutcome<T> {
 }
 
 export type ChatResult =
-  | { ok: true; text: string; provider: string; model: string }
+  | { ok: true; text: string; provider: string; model: string; providerName?: string; providerId?: string }
   | { ok: false; code: string; reason: string };
 
 /**
@@ -323,7 +268,7 @@ export async function chatWithProvider(
 
   const outcome = await requestProviderChat(row, apiKey, message);
   return outcome.ok
-    ? { ...outcome, provider: row.provider }
+    ? { ...outcome, provider: row.provider, providerName: row.name, providerId: row.id }
     : { ...outcome, reason: `${row.name}: ${outcome.reason}` };
 }
 
@@ -338,6 +283,10 @@ export async function runChatTask(
 ): Promise<ChatResult & { fallbackUsed?: string }> {
   const selection = await resolveAiTask(task, runner);
   if (!selection.fallbackChain.length) {
+    if (selection.chat) return {
+      ok: false, code: "all_providers_failed",
+      reason: "The assigned provider is disabled or has no passing Test, and no enabled, test-passed chat fallback is available. Check Settings.",
+    };
     return {
       ok: false,
       code: "provider_unavailable",

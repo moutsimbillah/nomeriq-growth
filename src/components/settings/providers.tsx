@@ -2,15 +2,18 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { LoaderCircle, Plus, RefreshCw, ShieldCheck, ShieldOff } from "lucide-react";
+import { LoaderCircle, Plus, RefreshCw, ShieldCheck, ShieldOff, Trash2 } from "lucide-react";
 
 import { Notice } from "../ui";
-import { apiRequest, InlineError, SubmitBar } from "../client-ui";
+import { apiRequest, InlineError, Modal, SubmitBar } from "../client-ui";
 import { PROVIDER_CATALOG } from "@/lib/ai/provider-catalog";
+import { priorityConflicts } from "@/lib/ai/routing";
 
 export interface ProviderRowView {
   id: string;
   name: string;
+  /** The provider slug: `deepseek`, `openai`, `custom`, and so on. */
+  provider: string;
   /** `chat`, `search` (Brave) or `both` — what the row can do. Migration 025. */
   kinds: string;
   baseUrl: string;
@@ -21,6 +24,8 @@ export interface ProviderRowView {
   lastTestOk: boolean | null;
   lastTestMessage: string | null;
   lastTestedAt: string | null;
+  /** The AI actions and fallback lists that point here, so a delete can name them. */
+  usedBy?: string[];
 }
 
 /**
@@ -38,6 +43,8 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [deleting, setDeleting] = useState<ProviderRowView | null>(null);
+  const [switchTo, setSwitchTo] = useState("");
   const [form, setForm] = useState({
     name: "",
     provider: "deepseek",
@@ -131,6 +138,32 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
     }
   }
 
+  /**
+   * A delete is refused while anything still points at the provider, so the dialog offers the move
+   * first. The list already knows which rows can chat: enabled, with a passing full Test.
+   */
+  async function confirmDelete() {
+    const row = deleting;
+    if (!row) return;
+    const target = workingOptions.find(provider => provider.id === switchTo) ?? null;
+    const data = await call(`delete-${row.id}`, () =>
+      apiRequest(`/api/settings/providers/${row.id}`, {
+        method: "DELETE",
+        body: { switchToProviderId: switchTo || null },
+      }),
+    );
+    if (data) {
+      setNoticeOk(true);
+      setNotice(
+        target
+          ? `${row.name} deleted; its stored key is destroyed, and the actions that used it now use ${target.name}.`
+          : `${row.name} deleted. Its stored key is destroyed and cannot be recovered.`,
+      );
+      setDeleting(null);
+      setSwitchTo("");
+    }
+  }
+
   async function loadModels() {
     setPending("models");
     setError(null);
@@ -145,6 +178,34 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
       setError("Could not load models. Check the provider URL and credential.");
     } finally { setPending(null); }
   }
+
+  /**
+   * The rows a delete may hand an action to: enabled, test-passed and able to chat. Anything else
+   * would leave the action pointing at a provider that cannot answer.
+   */
+  const workingOptions = providers
+    .filter(provider =>
+      provider.isEnabled &&
+      provider.lastTestOk === true &&
+      provider.kinds !== "search" &&
+      provider.model.trim().length > 0,
+    )
+    .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
+
+  // Two live chat providers on the same number is a real ambiguity, so it is named, not resolved
+  // silently: the tie is broken by Test result and then by name.
+  const conflicts = priorityConflicts(
+    providers.map(provider => ({
+      id: provider.id,
+      name: provider.name,
+      provider: provider.provider,
+      kinds: provider.kinds,
+      model: provider.model,
+      priority: provider.priority,
+      isEnabled: provider.isEnabled,
+      lastTestOk: provider.lastTestOk,
+    })),
+  );
 
   return (
     <div className="mt-4 rounded-xl border border-line bg-white/50 px-3.5 py-3">
@@ -169,6 +230,14 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
           {adding ? "Cancel" : "Add provider"}
         </button>
       </div>
+
+      {conflicts.length > 0 && (
+        <p className="mt-3 rounded-lg bg-amber/10 px-2.5 py-2 text-12 text-amber" data-priority-conflict>
+          Order {conflicts.join(", ")} is shared by more than one live chat provider. They are tried
+          test-passed first, then by name, so the order is still defined — but give them distinct
+          numbers if you want an exact order.
+        </p>
+      )}
 
       {providers.length === 0 ? (
         <p className="mt-3 text-12 text-faint">
@@ -250,6 +319,16 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
               <button type="button" className="btn" onClick={() => void toggle(row)}>
                 {row.isEnabled ? <ShieldOff size={12} /> : <ShieldCheck size={12} />}
                 {row.isEnabled ? "Disable" : "Enable"}
+              </button>
+
+              <button
+                type="button"
+                className="btn"
+                onClick={() => { setDeleting(row); setSwitchTo(""); setError(null); setNotice(null); }}
+                aria-label={`Delete ${row.name}`}
+              >
+                <Trash2 size={12} />
+                Delete
               </button>
             </div>
           ))}
@@ -372,6 +451,85 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
       )}
 
       <InlineError>{error}</InlineError>
+      {deleting && (
+        <Modal
+          open
+          onClose={() => { setDeleting(null); setSwitchTo(""); }}
+          width="sm"
+          title={`Delete ${deleting.name}?`}
+          description="Its stored key is destroyed and can't be recovered."
+        >
+          {(deleting.usedBy ?? []).length > 0 ? (
+            <div className="space-y-3" data-delete-in-use>
+              <p className="text-13 text-ink">
+                These AI actions still point at {deleting.name}:
+              </p>
+              <ul className="list-disc space-y-1 pl-5 text-12 text-muted">
+                {(deleting.usedBy ?? []).map(use => <li key={use}>{use}</li>)}
+              </ul>
+              {workingOptions.filter(provider => provider.id !== deleting.id).length === 0 ? (
+                <p className="rounded-lg bg-rust/10 px-2.5 py-2 text-12 text-rust">
+                  No other working provider is available to move them to, so this cannot be deleted
+                  yet. Add and test another provider first.
+                </p>
+              ) : (
+                <>
+                  <p className="text-12 text-muted">
+                    Choose the provider they should use instead. Nothing is left pointing at a
+                    provider that cannot answer.
+                  </p>
+                  <label className="block text-12 text-muted">
+                    Switch them to
+                    <select
+                      className="input mt-1 w-full text-12"
+                      aria-label="Switch actions to"
+                      value={switchTo}
+                      onChange={event => setSwitchTo(event.target.value)}
+                    >
+                      <option value="">Choose a working provider...</option>
+                      {workingOptions
+                        .filter(provider => provider.id !== deleting.id)
+                        .map(provider => (
+                          <option key={provider.id} value={provider.id}>
+                            {provider.name} · {provider.model}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+                </>
+              )}
+            </div>
+          ) : (
+            <p className="text-13 text-ink" data-delete-unused>
+              No AI action or fallback list points at {deleting.name}. A record of it (name, type and
+              when it was deleted) stays, so older labels still make sense.
+            </p>
+          )}
+
+          <SubmitBar>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => { setDeleting(null); setSwitchTo(""); }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={
+                pending === `delete-${deleting.id}` ||
+                ((deleting.usedBy ?? []).length > 0 &&
+                  (!switchTo || workingOptions.filter(p => p.id !== deleting.id).length === 0))
+              }
+              onClick={() => void confirmDelete()}
+            >
+              {pending === `delete-${deleting.id}` && <LoaderCircle size={13} className="spin" />}
+              {(deleting.usedBy ?? []).length > 0 ? "Switch and delete" : "Delete provider"}
+            </button>
+          </SubmitBar>
+        </Modal>
+      )}
       {notice && <div className="mt-4" data-provider-test-notice><Notice tone={noticeOk ? "success" : "danger"}>{notice}</Notice></div>}
     </div>
   );

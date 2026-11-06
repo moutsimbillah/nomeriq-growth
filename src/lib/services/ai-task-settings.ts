@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db/client";
 import { AppError } from "@/lib/utils";
+import { workingChatProvider } from "@/lib/ai/routing";
 import {
   AI_TASKS,
   AI_TASK_LABELS,
@@ -205,5 +206,30 @@ export async function saveTaskSetting(
     }
   }
 
+  return listTaskSettings();
+}
+
+/** Deliberate founder click, atomic across six actions. Lead research is not activated here. */
+export async function useProviderForAllActions(providerId: string, updatedBy?: string | null): Promise<TaskSetting[]> {
+  const db = await getDb();
+  await db.transaction(async tx => {
+    await tx.query("SELECT id FROM research_providers WHERE id = $1 FOR SHARE", [providerId]);
+    const provider = await getAiProvider(providerId, tx);
+    if (!provider) throw new AppError("That provider no longer exists.", 400, "unknown_provider");
+    const capable = chatCapability(provider);
+    if (!capable.ok) throw new AppError(capable.message, 400, "provider_not_chat_capable");
+    if (!workingChatProvider(provider)) {
+      throw new AppError("Choose an enabled chat provider with a passing full Test first.", 400, "provider_not_working");
+    }
+    for (const task of AI_TASKS.filter(task => task !== "lead_research")) {
+      await tx.query(
+        `INSERT INTO ai_task_settings (task, provider_id, model, search_provider_id, updated_by, updated_at)
+         VALUES ($1, $2, $3, NULL, $4, now())
+         ON CONFLICT (task) DO UPDATE SET provider_id = EXCLUDED.provider_id,
+           model = EXCLUDED.model, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+        [task, provider.id, provider.model, updatedBy ?? null],
+      );
+    }
+  });
   return listTaskSettings();
 }

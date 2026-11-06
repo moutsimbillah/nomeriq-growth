@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, LoaderCircle, Plus, Trash2 } from "lucide-react";
 
 import { Notice } from "../ui";
 import { apiRequest, InlineError } from "../client-ui";
-import { PROVIDER_CATALOG } from "@/lib/ai/provider-catalog";
+import { chatCapability, workingChatProvider, taskRouting, type ChatProviderOption } from "@/lib/ai/routing";
 
 export interface TaskView {
   task: string;
@@ -19,17 +20,11 @@ export interface TaskView {
   updatedAt: string | null;
 }
 
-export interface ProviderOption {
-  id: string;
-  name: string;
-  kinds: string;
-  model: string;
-  isEnabled: boolean;
-}
+export type ProviderOption = ChatProviderOption;
 
 /** A provider that can serve a chat task: it is not search-only and it names a model. */
 function canChat(provider: ProviderOption): boolean {
-  return provider.kinds !== "search" && provider.model.trim().length > 0;
+  return chatCapability(provider).ok;
 }
 
 /** A provider that can be a search source: anything that is not model-only. */
@@ -51,12 +46,14 @@ export function AiTasksCard({
   initialTasks: TaskView[];
   providers: ProviderOption[];
 }) {
+  const router = useRouter();
   const [tasks, setTasks] = useState<TaskView[]>(initialTasks);
   useEffect(() => { setTasks(initialTasks); }, [initialTasks]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const [bulkProviderId, setBulkProviderId] = useState("");
   // Fallback lists are edited locally then saved with the task, so the order is what is stored.
   const [drafts, setDrafts] = useState<Record<string, string[]>>({});
 
@@ -74,6 +71,7 @@ export function AiTasksCard({
       })) as { tasks?: TaskView[] } | null;
       if (data?.tasks) setTasks(data.tasks);
       setNotice(`${task.label} saved.`);
+      router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "That did not work.");
     } finally {
@@ -97,14 +95,49 @@ export function AiTasksCard({
   const chatOptions = providers.filter(canChat);
   const searchOptions = providers.filter(canSearch);
   const blocked = providers.filter((provider) => !canChat(provider));
+  const working = providers.filter(workingChatProvider).sort((a, b) => a.priority - b.priority);
+  const selectedBulkId = working.some(p => p.id === bulkProviderId) ? bulkProviderId : working[0]?.id ?? "";
+
+  async function useForAll() {
+    setError(null);
+    setNotice(null);
+    setPending("all");
+    try {
+      const data = await apiRequest("/api/settings/ai-tasks", {
+        body: { allActions: true, providerId: selectedBulkId },
+      }) as { tasks?: TaskView[] } | null;
+      if (data?.tasks) setTasks(data.tasks);
+      setNotice("Provider and model saved for all six email AI actions. Lead research is unchanged.");
+      router.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "That did not work.");
+    } finally { setPending(null); }
+  }
 
   return (
     <div className="mt-4 rounded-xl border border-line bg-white/50 px-3.5 py-3">
-      <div className="text-12 font-bold text-ink">Which provider serves each task</div>
+      <div className="text-12 font-bold text-ink">Which provider serves each AI action</div>
       <p className="text-12 text-muted">
-        Each AI action uses the provider chosen here. Until something is chosen, the action falls
-        back to the environment configuration, or to the built-in template when there is none.
+        Working means enabled with a passing full Test. Disabled or failed providers are skipped;
+        calls fall back to enabled, test-passed chat providers in failover order. Each result names
+        the provider that answered. These are provider settings, not proof that a later-phase action is built.
       </p>
+      <div className="mt-3 flex flex-wrap items-end gap-2">
+        <label className="min-w-0 max-w-full text-12 text-muted">
+          Provider for all actions
+          <select className="input mt-1 w-full sm:w-64 text-12" aria-label="Provider for all actions"
+            value={selectedBulkId} disabled={pending !== null || !working.length}
+            onChange={event => setBulkProviderId(event.target.value)}>
+            {!working.length && <option value="">No working chat provider</option>}
+            {working.map(provider => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
+          </select>
+        </label>
+        <button type="button" className="btn-secondary text-12" disabled={pending !== null || !selectedBulkId} onClick={() => void useForAll()}>
+          {pending === "all" && <LoaderCircle size={12} className="spin" />}
+          Use this provider for all actions
+        </button>
+      </div>
+      <p className="mt-1 text-12 text-faint">Applies to the six email AI actions. Lead research stays unchanged and may remain not assigned until its part is built.</p>
 
       {providers.length === 0 && (
         <p className="mt-3 text-12 text-faint">
@@ -112,10 +145,11 @@ export function AiTasksCard({
         </p>
       )}
 
-      {providers.length > 0 && (
         <div className="mt-3 space-y-2">
           {tasks.map((task) => {
             const expanded = open === task.task;
+            const route = taskRouting(task, providers);
+            const replacement = route.replacement;
             const chain = fallbacksFor(task);
             const chainNames = chain
               .map((id) => providers.find((provider) => provider.id === id)?.name)
@@ -123,26 +157,42 @@ export function AiTasksCard({
               .join(" → ");
 
             return (
-              <div key={task.task} className="rounded-lg border border-line/70 px-2.5 py-2">
+              <div key={task.task} data-ai-action={task.task} data-status={route.health.status} className="min-w-0 rounded-lg border border-line/70 px-2.5 py-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     className="min-w-0 flex-1 text-left"
                     onClick={() => setOpen(expanded ? null : task.task)}
                   >
-                    <div className="text-12 font-bold text-ink">{task.label}</div>
-                    <div className="truncate text-12 text-faint">
-                      {task.providerName ?? "Not configured"}
-                      {task.model ? ` · ${task.model}` : ""}
+                    <div className="flex flex-wrap items-center gap-2 text-12 font-bold text-ink">
+                      {task.label}
+                      <span className={route.health.status === "working" ? "text-forest" : "text-rust"}>{route.health.label}</span>
+                    </div>
+                    <div className="break-anywhere text-12 text-muted">
+                      Assigned: {task.providerName ?? "Not assigned"}
+                      {route.model ? ` · ${route.model}` : " · no model"}
                       {task.searchProviderName ? ` · search: ${task.searchProviderName}` : ""}
                       {!expanded && chainNames ? ` · fallback: ${chainNames}` : ""}
                     </div>
+                    <div className="break-anywhere text-12 text-faint" data-chat-fallback>
+                      {!task.providerId ? "No automatic fallback until assigned."
+                        : route.fallback ? `${route.health.status === "working" ? "If it fails" : "Would answer now"}: ${route.fallback.name} · ${route.fallback.model}`
+                        : "No enabled, test-passed chat fallback available."}
+                    </div>
                   </button>
 
+                  {replacement && <button type="button" className="btn-secondary max-w-full whitespace-normal text-12"
+                    disabled={pending !== null} onClick={() => void save(task, {
+                      ...currentOf(task), providerId: replacement.id, model: replacement.model,
+                    }, `task-${task.task}`)}>
+                    Switch to {replacement.name}
+                  </button>}
+
                   <select
-                    className="input w-56 text-12"
+                    className="input w-full sm:w-56 text-12"
+                    aria-label={`${task.label} provider`}
                     value={task.providerId ?? ""}
-                    disabled={pending === `task-${task.task}`}
+                    disabled={pending !== null}
                     onChange={(event) => {
                       const providerId = event.target.value || null;
                       const chosen = providers.find((provider) => provider.id === providerId);
@@ -157,9 +207,9 @@ export function AiTasksCard({
                       );
                     }}
                   >
-                    <option value="">Not configured</option>
+                    <option value="">Not assigned</option>
                     {chatOptions.map((provider) => (
-                      <option key={provider.id} value={provider.id}>
+                      <option key={provider.id} value={provider.id} disabled={!provider.isEnabled}>
                         {provider.name}
                         {provider.isEnabled ? "" : " (disabled)"}
                       </option>
@@ -225,7 +275,7 @@ export function AiTasksCard({
                         Fallback order — tried when the chosen provider fails
                       </div>
                       {chain.length === 0 ? (
-                        <p className="text-12 text-faint">Nothing in the chain. The task fails if the chosen provider fails.</p>
+                        <p className="text-12 text-faint">Uses the global failover order of enabled, test-passed chat providers.</p>
                       ) : (
                         <ol className="mt-1 space-y-1">
                           {chain.map((id, index) => {
@@ -287,6 +337,7 @@ export function AiTasksCard({
                         >
                           <option value="">Add a fallback…</option>
                           {chatOptions
+                            .filter(workingChatProvider)
                             .filter((provider) => !chain.includes(provider.id))
                             .filter((provider) => provider.id !== task.providerId)
                             .map((provider) => (
@@ -322,7 +373,6 @@ export function AiTasksCard({
             );
           })}
         </div>
-      )}
 
       {blocked.length > 0 && (
         <p className="mt-3 text-12 text-faint">

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { requireEditor } from "@/lib/auth/session";
 import { assertSameOrigin } from "@/lib/auth/request";
 import { listResearchProviders } from "@/lib/deepseek/provider-pool";
-import { createResearchProvider } from "@/lib/services/research-provider-admin";
+import { createResearchProvider, providerUsage } from "@/lib/services/research-provider-admin";
 import { fail, readJson } from "@/lib/api";
 
 export const runtime = "nodejs";
@@ -26,9 +26,13 @@ const createSchema = z.object({
 export async function GET() {
   try {
     await requireEditor();
+    const [providers, usage] = await Promise.all([listResearchProviders(), providerUsage()]);
+    const usedBy = new Map(usage.map(entry => [entry.providerId, entry.uses]));
     return NextResponse.json({
       ok: true,
-      data: { providers: await listResearchProviders() },
+      // `usedBy` rides along with the list so the delete dialog names the actions it protects
+      // without a second round trip that could disagree with what the delete then reads.
+      data: { providers: providers.map(provider => ({ ...provider, usedBy: usedBy.get(provider.id) ?? [] })) },
     });
   } catch (error) {
     return fail(error);

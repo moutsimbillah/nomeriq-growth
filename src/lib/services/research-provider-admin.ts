@@ -5,6 +5,8 @@ import { PROVIDER_DEFAULTS, PROVIDER_KINDS } from "@/lib/ai/registry";
 import { testProviderChat } from "@/lib/ai/provider-test";
 import { getDb } from "@/lib/db/client";
 import { AppError } from "@/lib/utils";
+import { AI_TASK_LABELS, isAiTask, type AiTask } from "@/lib/ai/registry";
+import { chatCapability, workingChatProvider } from "@/lib/ai/routing";
 
 /**
  * Founder-facing administration of the ordered provider list.
@@ -14,6 +16,196 @@ import { AppError } from "@/lib/utils";
  * the outcome on its own row, so the Settings screen shows the last real result rather
  * than a guess.
  */
+
+/** Which AI actions point at a provider, as sentences Settings can show in a delete dialog. */
+export interface ProviderUsage {
+  providerId: string;
+  /** One entry per action that would break. Empty means the provider is unused. */
+  uses: string[];
+}
+
+function taskLabel(task: string): string {
+  return isAiTask(task) ? AI_TASK_LABELS[task as AiTask] : task;
+}
+
+/**
+ * Every place a provider is referenced: the action it serves, the search source it fills, and the
+ * fallback lists it sits in. Used both by the delete dialog and by the delete itself, so the list a
+ * founder is shown is the same list the deletion acts on.
+ */
+export async function providerUsage(providerId?: string): Promise<ProviderUsage[]> {
+  const db = await getDb();
+  const filter = providerId ? `WHERE provider_id = $1 OR search_provider_id = $1` : "";
+  const params = providerId ? [providerId] : [];
+  const assigned = await db.query<{ provider_id: string | null; search_provider_id: string | null; task: string }>(
+    `SELECT provider_id, search_provider_id, task FROM ai_task_settings ${filter}`,
+    params,
+  );
+  const fallbackFilter = providerId ? `WHERE provider_id = $1` : "";
+  const fallbacks = await db.query<{ provider_id: string; task: string }>(
+    `SELECT provider_id, task FROM ai_task_fallbacks ${fallbackFilter}`,
+    params,
+  );
+
+  const byProvider = new Map<string, string[]>();
+  const add = (id: string | null, use: string) => {
+    if (!id) return;
+    const list = byProvider.get(id) ?? [];
+    if (!list.includes(use)) list.push(use);
+    byProvider.set(id, list);
+  };
+
+  for (const row of assigned.rows) {
+    add(row.provider_id, `${taskLabel(row.task)} (assigned)`);
+    add(row.search_provider_id, `${taskLabel(row.task)} (search source)`);
+  }
+  for (const row of fallbacks.rows) add(row.provider_id, `${taskLabel(row.task)} (fallback)`);
+
+  return [...byProvider.entries()]
+    .map(([id, uses]) => ({ providerId: id, uses: uses.sort() }))
+    .filter(entry => !providerId || entry.providerId === providerId);
+}
+
+/**
+ * Retire a provider.
+ *
+ * A founder-only act, and deliberately not a hard delete: the stored key is destroyed and the row
+ * leaves every list, but its name, type and deleter stay behind so older "produced by" labels still
+ * resolve. If any action still points at it, the deletion is refused unless a working replacement is
+ * named — an action is never left pointing at nothing.
+ */
+export async function deleteResearchProvider(
+  id: string,
+  input: { actorUserId?: string | null; switchToProviderId?: string | null } = {},
+): Promise<{ name: string; reassignedTo: string | null; uses: string[] }> {
+  const db = await getDb();
+
+  return db.transaction(async (tx) => {
+    const result = await tx.query<{ id: string; name: string; provider: string; kinds: string; model: string; deleted_at: string | null }>(
+      `SELECT id, name, provider, kinds, model, deleted_at FROM research_providers WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    const row = result.rows[0];
+    if (!row) throw new AppError("Provider not found.", 404, "provider_not_found");
+    if (row.deleted_at) {
+      throw new AppError(`"${row.name}" is already deleted.`, 409, "provider_already_deleted");
+    }
+
+    const uses = (await providerUsageIn(tx, id)).uses;
+    let replacement: { id: string; name: string; model: string } | null = null;
+
+    if (uses.length) {
+      const switchTo = (input.switchToProviderId ?? "").trim();
+      if (!switchTo) {
+        throw new AppError(
+          `"${row.name}" is still used by: ${uses.join(", ")}. Switch those actions to a working provider first, then delete it.`,
+          409,
+          "provider_in_use",
+        );
+      }
+      const target = await tx.query<{
+        id: string; name: string; provider: string; kinds: string; model: string; is_enabled: boolean; last_test_ok: boolean | null; deleted_at: string | null;
+      }>(
+        `SELECT id, name, provider, kinds, model, is_enabled, last_test_ok, deleted_at
+           FROM research_providers WHERE id = $1`,
+        [switchTo],
+      );
+      const candidate = target.rows[0];
+      if (!candidate || candidate.deleted_at) {
+        throw new AppError("The replacement provider no longer exists. Choose another one.", 400, "unknown_provider");
+      }
+      const capable = chatCapability(candidate);
+      if (!capable.ok) throw new AppError(capable.message, 400, "provider_not_chat_capable");
+      if (!workingChatProvider({
+        id: candidate.id,
+        name: candidate.name,
+        provider: candidate.provider,
+        kinds: candidate.kinds,
+        model: candidate.model,
+        priority: 0,
+        isEnabled: candidate.is_enabled,
+        lastTestOk: candidate.last_test_ok ?? null,
+      })) {
+        throw new AppError(
+          "Choose an enabled provider with a passing full Test as the replacement.",
+          400,
+          "provider_not_working",
+        );
+      }
+      replacement = { id: candidate.id, name: candidate.name, model: candidate.model };
+
+      // The assignment keeps working, with the replacement's own model — never the deleted one's.
+      await tx.query(
+        `UPDATE ai_task_settings SET provider_id = $1, model = $2, updated_at = now() WHERE provider_id = $3`,
+        [replacement.id, replacement.model, id],
+      );
+      await tx.query(
+        `UPDATE ai_task_settings SET search_provider_id = $1, updated_at = now() WHERE search_provider_id = $2`,
+        [replacement.id, id],
+      );
+      // A task that already lists the replacement would collide on the (task, provider_id) key.
+      await tx.query(
+        `DELETE FROM ai_task_fallbacks f USING ai_task_fallbacks g
+          WHERE f.task = g.task AND f.provider_id = $1 AND g.provider_id = $2`,
+        [replacement.id, id],
+      );
+      await tx.query(`UPDATE ai_task_fallbacks SET provider_id = $1 WHERE provider_id = $2`, [
+        replacement.id,
+        id,
+      ]);
+    }
+
+    await tx.query(
+      `UPDATE research_providers
+          SET encrypted_api_key = '', is_enabled = false, deleted_at = now(), deleted_by = $2,
+              search_path = NULL, fetch_path = NULL,
+              last_test_ok = NULL, last_test_message = NULL, last_tested_at = NULL,
+              updated_at = now()
+        WHERE id = $1`,
+      [id, input.actorUserId ?? null],
+    );
+
+    await tx.query(
+      `INSERT INTO audit_log (id, actor_type, actor_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'founder', $2, 'ai_provider.deleted', 'research_provider', $3, $4::jsonb)`,
+      [
+        crypto.randomUUID(),
+        input.actorUserId ?? null,
+        id,
+        JSON.stringify({
+          name: row.name,
+          provider: row.provider,
+          kinds: row.kinds,
+          reassignedTo: replacement?.name ?? null,
+          aiActions: uses,
+        }),
+      ],
+    );
+
+    return { name: row.name, reassignedTo: replacement?.name ?? null, uses };
+  });
+}
+
+/** `providerUsage` against a caller's transaction, so a delete reads and writes one view. */
+async function providerUsageIn(tx: { query: <T>(text: string, params?: unknown[]) => Promise<{ rows: T[] }> }, providerId: string): Promise<ProviderUsage> {
+  const assigned = await tx.query<{ provider_id: string | null; search_provider_id: string | null; task: string }>(
+    `SELECT provider_id, search_provider_id, task FROM ai_task_settings
+      WHERE provider_id = $1 OR search_provider_id = $1`,
+    [providerId],
+  );
+  const fallbacks = await tx.query<{ task: string }>(
+    `SELECT task FROM ai_task_fallbacks WHERE provider_id = $1`,
+    [providerId],
+  );
+  const uses: string[] = [];
+  const add = (use: string) => { if (!uses.includes(use)) uses.push(use); };
+  for (const row of assigned.rows) {
+    if (row.provider_id === providerId) add(`${taskLabel(row.task)} (assigned)`);
+    if (row.search_provider_id === providerId) add(`${taskLabel(row.task)} (search source)`);
+  }
+  for (const row of fallbacks.rows) add(`${taskLabel(row.task)} (fallback)`);
+  return { providerId, uses: uses.sort() };
+}
 
 export interface ProviderInput {
   name?: string;
@@ -100,9 +292,19 @@ export async function createResearchProvider(
   }
 
   const db = await getDb();
-  const existing = await db.query(`SELECT 1 FROM research_providers WHERE lower(name) = lower($1)`, [name]);
+  // A deleted provider keeps its name, so older "produced by" labels still resolve to it.
+  const existing = await db.query<{ deleted_at: string | null }>(
+    `SELECT deleted_at FROM research_providers WHERE lower(name) = lower($1)`,
+    [name],
+  );
   if (existing.rows.length) {
-    throw new AppError("A provider with that name already exists.", 409, "provider_exists");
+    throw new AppError(
+      existing.rows[0]!.deleted_at
+        ? "A deleted provider used that name, and older results still refer to it. Choose another name."
+        : "A provider with that name already exists.",
+      409,
+      "provider_exists",
+    );
   }
 
   const id = crypto.randomUUID();

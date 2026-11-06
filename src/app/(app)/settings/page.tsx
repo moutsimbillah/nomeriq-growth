@@ -25,6 +25,7 @@ import { getDeepSeekPublicSettings } from "@/lib/deepseek/provider";
 import { listResearchProviders } from "@/lib/deepseek/provider-pool";
 import { listAiProviders } from "@/lib/ai/registry";
 import { listTaskSettings } from "@/lib/services/ai-task-settings";
+import { providerUsage } from "@/lib/services/research-provider-admin";
 import { Card, PageHeader, SectionHeading } from "@/components/ui";
 import { WorkspaceSettingsForm } from "@/components/settings/workspace-form";
 import { EmailAccountsManager } from "@/components/settings/email-accounts";
@@ -85,7 +86,7 @@ function SettingsSection({
 }
 
 export default async function SettingsPage() {
-  const [settings, accounts, apiKeys, users, suppressions, deepseekSettings, researchProviders, aiProviders, aiTaskSettings] =
+  const [settings, accounts, apiKeys, users, suppressions, deepseekSettings, researchProviders, aiProviders, aiTaskSettings, providerUses] =
     await Promise.all([
       getWorkspaceSettings(),
       listEmailAccounts(),
@@ -96,6 +97,7 @@ export default async function SettingsPage() {
       listResearchProviders(),
       listAiProviders(),
       listTaskSettings(),
+      providerUsage(),
     ]);
   const usages: Record<string, Awaited<ReturnType<typeof getSendUsage>>> = {};
   const health: Record<
@@ -204,7 +206,12 @@ export default async function SettingsPage() {
             description="The engine that finds, verifies and saves qualified trading-signal providers without an open browser or chat session. It never sends email."
           >
             <DeepSeekSettings initial={deepseekSettings} />
-            <ProvidersCard initial={researchProviders} />
+            <ProvidersCard
+              initial={researchProviders.map(provider => ({
+                ...provider,
+                usedBy: providerUses.find(entry => entry.providerId === provider.id)?.uses ?? [],
+              }))}
+            />
           </SettingsSection>
 
           <SettingsSection
@@ -219,9 +226,12 @@ export default async function SettingsPage() {
               providers={aiProviders.map((provider) => ({
                 id: provider.id,
                 name: provider.name,
+                provider: provider.provider,
                 kinds: provider.kinds,
                 model: provider.model,
                 isEnabled: provider.isEnabled,
+                priority: provider.priority,
+                lastTestOk: provider.lastTestOk,
               }))}
             />
           </SettingsSection>
