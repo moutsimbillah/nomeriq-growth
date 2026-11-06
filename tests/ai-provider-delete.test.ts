@@ -5,6 +5,14 @@ import { closeDb, getDb } from "@/lib/db/client";
 import { ensureWorkspaceDefaults } from "@/lib/services/settings";
 import { createResearchProvider, deleteResearchProvider, providerUsage } from "@/lib/services/research-provider-admin";
 import { listAiProviders, resolveAiTask, runChatTask } from "@/lib/ai/registry";
+
+/** Leave no AI assignment behind: later test files expect an unconfigured registry. */
+async function clearAiSettings() {
+  const db = await getDb();
+  await db.query(`DELETE FROM ai_task_fallbacks`);
+  await db.query(`DELETE FROM ai_task_settings`);
+  await db.query(`DELETE FROM research_providers`);
+}
 import { listTaskSettings, saveTaskSetting, useProviderForAllActions } from "@/lib/services/ai-task-settings";
 
 /**
@@ -41,6 +49,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await clearAiSettings();
   await closeDb();
 });
 

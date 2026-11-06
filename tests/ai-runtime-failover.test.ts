@@ -4,6 +4,14 @@ import { closeDb, getDb } from "@/lib/db/client";
 import { ensureWorkspaceDefaults } from "@/lib/services/settings";
 import { createResearchProvider } from "@/lib/services/research-provider-admin";
 import { saveTaskSetting } from "@/lib/services/ai-task-settings";
+
+/** Leave no AI assignment behind: later test files expect an unconfigured registry. */
+async function clearAiSettings() {
+  const db = await getDb();
+  await db.query(`DELETE FROM ai_task_fallbacks`);
+  await db.query(`DELETE FROM ai_task_settings`);
+  await db.query(`DELETE FROM research_providers`);
+}
 import { runChatTask } from "@/lib/ai/registry";
 
 /**
@@ -51,7 +59,8 @@ beforeEach(async () => {
   await db.query(`DELETE FROM research_providers`);
 });
 afterEach(() => vi.unstubAllGlobals());
-afterAll(async () => { await closeDb(); });
+afterAll(async () => { await clearAiSettings();
+  await closeDb(); });
 
 describe("an action whose provider is disabled or failing still answers, and says who answered", () => {
   it("skips a disabled OpenAI assignment and is answered by Anthropic", async () => {

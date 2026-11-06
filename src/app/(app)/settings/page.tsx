@@ -21,7 +21,6 @@ import { getSyncHealth } from "@/lib/email/sync";
 import { getSendUsage } from "@/lib/services/email-sending";
 import { listApiKeys } from "@/lib/agent/apiKeys";
 import { listSuppressions } from "@/lib/services/suppressions";
-import { getDeepSeekPublicSettings } from "@/lib/deepseek/provider";
 import { listResearchProviders } from "@/lib/deepseek/provider-pool";
 import { listAiProviders } from "@/lib/ai/registry";
 import { listTaskSettings } from "@/lib/services/ai-task-settings";
@@ -31,7 +30,8 @@ import { Card, PageHeader, SectionHeading } from "@/components/ui";
 import { WorkspaceSettingsForm } from "@/components/settings/workspace-form";
 import { EmailAccountsManager } from "@/components/settings/email-accounts";
 import { IntegrationsManager } from "@/components/settings/integrations";
-import { DeepSeekSettings } from "@/components/settings/deepseek";
+import { ResearchEngineCard } from "@/components/settings/research-engine";
+import { NoAiFallbackCard } from "@/components/settings/no-ai-fallback";
 import { ProvidersCard } from "@/components/settings/providers";
 import { AiTasksCard } from "@/components/settings/ai-tasks";
 import {
@@ -87,14 +87,13 @@ function SettingsSection({
 }
 
 export default async function SettingsPage() {
-  const [settings, accounts, apiKeys, users, suppressions, deepseekSettings, researchProviders, aiProviders, aiTaskSettings, providerUses, viewer] =
+  const [settings, accounts, apiKeys, users, suppressions, researchProviders, aiProviders, aiTaskSettings, providerUses, viewer] =
     await Promise.all([
       getWorkspaceSettings(),
       listEmailAccounts(),
       listApiKeys(),
       listUsers(),
       listSuppressions(),
-      getDeepSeekPublicSettings(),
       listResearchProviders(),
       listAiProviders(),
       listTaskSettings(),
@@ -144,7 +143,9 @@ export default async function SettingsPage() {
             {[
               ["outreach", "Sending identity", PenLine],
               ["email", "Email accounts", Mail],
-              ["deepseek", "DeepSeek engine", Sparkles],
+              ["providers", "AI providers", Sparkles],
+              ["engine", "Research engine", SlidersHorizontal],
+              ["ai", "AI actions", Sparkles],
               ["integrations", "AI integrations", Bot],
               ["team", "Users", UsersRound],
               ["privacy", "Privacy & data", ShieldCheck],
@@ -201,19 +202,43 @@ export default async function SettingsPage() {
           </SettingsSection>
 
           <SettingsSection
-            id="deepseek"
+            id="providers"
             icon={Sparkles}
-            eyebrow="Autonomous discovery"
-            title="DeepSeek research provider"
-            description="The engine that finds, verifies and saves qualified trading-signal providers without an open browser or chat session. It never sends email."
+            eyebrow="One provider list"
+            title="AI providers"
+            description="Used by the portal's own AI actions and its built-in research engine. Agents connected through MCP (Claude, ChatGPT, Gemini, Hermes) use their own models and don't use this list."
           >
-            <DeepSeekSettings initial={deepseekSettings} />
             <ProvidersCard
               canDelete={viewer?.role === "founder"}
               initial={researchProviders.map(provider => ({
                 ...provider,
                 usedBy: providerUses.find(entry => entry.providerId === provider.id)?.uses ?? [],
               }))}
+            />
+          </SettingsSection>
+
+          <SettingsSection
+            id="engine"
+            icon={SlidersHorizontal}
+            eyebrow="Built-in research engine"
+            title="Research engine settings"
+            description="Budget per job, rate limits and where research searches. The engine uses providers from the list above; it never sends email."
+          >
+            <ResearchEngineCard
+              initial={{
+                budgetUsd: settings.researchDefaultBudgetUsd,
+                concurrency: settings.researchDefaultConcurrency,
+                searchQps: settings.deepseekSearchQps,
+                fetchQps: settings.deepseekFetchQps,
+                leadResearch: {
+                  providerId: aiTaskSettings.find((task) => task.task === "lead_research")?.providerId ?? null,
+                  model: aiTaskSettings.find((task) => task.task === "lead_research")?.model ?? null,
+                  searchProviderId: aiTaskSettings.find((task) => task.task === "lead_research")?.searchProviderId ?? null,
+                },
+                searchProviders: aiProviders
+                  .filter((provider) => provider.kinds !== "chat")
+                  .map((provider) => ({ id: provider.id, name: provider.name, isEnabled: provider.isEnabled })),
+              }}
             />
           </SettingsSection>
 
@@ -237,21 +262,19 @@ export default async function SettingsPage() {
                 lastTestOk: provider.lastTestOk,
               }))}
             />
+            <NoAiFallbackCard />
           </SettingsSection>
 
           <SettingsSection
             id="integrations"
             icon={Bot}
             eyebrow="MCP + REST"
-            title="ChatGPT, Claude and Hermes"
+            title="ChatGPT, Claude, Gemini and Hermes"
             description="One shared database, one skill document, separate scoped keys. Research assistants can save verified work but can never send email or alter system policy."
           >
             <IntegrationsManager
               keys={apiKeys}
               appUrl={appUrl}
-              aiProvider={aiProvider}
-              hasOpenAI={Boolean(process.env.OPENAI_API_KEY)}
-              hasAnthropic={Boolean(process.env.ANTHROPIC_API_KEY)}
             />
           </SettingsSection>
 

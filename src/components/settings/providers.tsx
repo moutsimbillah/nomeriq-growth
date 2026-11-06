@@ -52,6 +52,8 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
     apiKey: "",
     baseUrl: "",
     model: "",
+    searchPath: "",
+    fetchPath: "",
   });
 
   async function call(label: string, run: () => Promise<{ providers?: ProviderRowView[] } | null>) {
@@ -89,6 +91,9 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
           apiKey,
           baseUrl: form.baseUrl.trim() || undefined,
           model: form.kinds === "search" ? undefined : form.model.trim() || undefined,
+          // Optional: left empty, the provider's documented paths are used and Test detects them.
+          searchPath: form.kinds !== "chat" && form.searchPath.trim() ? form.searchPath.trim() : undefined,
+          fetchPath: form.kinds !== "chat" && form.fetchPath.trim() ? form.fetchPath.trim() : undefined,
         },
       }),
     );
@@ -96,7 +101,7 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
     if (data) {
       setNotice(`Added ${name}. Test it, then choose it under AI actions; testing alone does not assign tasks.`);
       setModels([]);
-      setForm({ name: "", provider: "deepseek", kinds: "both", apiKey: "", baseUrl: "", model: "" });
+      setForm({ name: "", provider: "deepseek", kinds: "both", apiKey: "", baseUrl: "", model: "", searchPath: "", fetchPath: "" });
       setAdding(false);
     }
   }
@@ -241,7 +246,7 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
 
       {providers.length === 0 ? (
         <p className="mt-3 text-12 text-faint">
-          No ordered provider yet — the engine is using the single DeepSeek credential above.
+          No AI provider yet. Add one below; until then the AI actions use the No-AI fallback.
         </p>
       ) : (
         <div className="mt-3 space-y-2">
@@ -431,6 +436,20 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
                 {pending === "models" ? "Loading models…" : "Load models"}
               </button>}
             </div>
+            {form.kinds !== "chat" && (
+              <>
+                <div>
+                  <label className="label" htmlFor="provider-search-path">Search path (optional)</label>
+                  <input id="provider-search-path" className="input" placeholder="/v1/tools/search"
+                    value={form.searchPath} onChange={(event) => setForm({ ...form, searchPath: event.target.value })} />
+                </div>
+                <div>
+                  <label className="label" htmlFor="provider-fetch-path">Fetch path (optional)</label>
+                  <input id="provider-fetch-path" className="input" placeholder="/v1/tools/fetch"
+                    value={form.fetchPath} onChange={(event) => setForm({ ...form, fetchPath: event.target.value })} />
+                </div>
+              </>
+            )}
           </div>
           <SubmitBar>
             <button

@@ -18,6 +18,14 @@ import { draftSimulatedReply, simulationSystemPrompt } from "@/lib/ai/simulate";
 import { generateFollowUp } from "@/lib/ai/writer";
 import { getProspect } from "@/lib/services/prospects";
 import type { ProductTruth } from "@/lib/types";
+
+/** Leave no AI assignment behind: later test files expect an unconfigured registry. */
+async function clearAiSettings() {
+  const db = await getDb();
+  await db.query(`DELETE FROM ai_task_fallbacks`);
+  await db.query(`DELETE FROM ai_task_settings`);
+  await db.query(`DELETE FROM research_providers`);
+}
 import type { WorkspaceSettings } from "@/lib/services/settings";
 
 /**
@@ -81,7 +89,8 @@ beforeAll(async () => {
   await seedLead();
 });
 afterEach(() => vi.unstubAllGlobals());
-afterAll(async () => { await closeDb(); });
+afterAll(async () => { await clearAiSettings();
+  await closeDb(); });
 
 describe("the shared lead context", () => {
   it("contains every part the founder listed, each marked present", async () => {

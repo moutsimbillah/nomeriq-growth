@@ -56,22 +56,16 @@ type ApiKeyRow = {
 export function IntegrationsManager({
   keys,
   appUrl,
-  aiProvider,
-  hasOpenAI,
-  hasAnthropic,
 }: {
   keys: ApiKeyRow[];
   appUrl: string;
-  aiProvider: string;
-  hasOpenAI: boolean;
-  hasAnthropic: boolean;
 }) {
   const router = useRouter();
   const timezone = useWorkspaceTimezone();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [assistant, setAssistant] = useState<
-    "chatgpt" | "claude" | "deepseek" | "hermes" | "custom"
+    "chatgpt" | "claude" | "deepseek" | "hermes" | "gemini" | "custom"
   >("claude");
   const [scopes, setScopes] = useState<string[]>([...DEFAULT_SCOPES]);
   const [expiresInDays, setExpiresInDays] = useState(90);
@@ -118,32 +112,39 @@ export function IntegrationsManager({
     }
   }
 
+  /**
+   * One click: a NEW key with the same assistant and the same permissions, for 90 days. The old key
+   * is not touched — it keeps working until it expires or is revoked — so the assistant can be
+   * switched over without a gap.
+   */
+  async function replace(key: ApiKeyRow) {
+    if (!key.scopes.length) {
+      setError("This key has no recorded permissions, so a replacement cannot copy them. Create a key by hand.");
+      return;
+    }
+    setPending(`replace-${key.id}`);
+    setError(null);
+    try {
+      const result = await apiRequest("/api/api-keys", {
+        body: {
+          name: `${key.name} (replacement)`.slice(0, 100),
+          assistant: key.assistant,
+          scopes: [...key.scopes],
+          expiresInDays: 90,
+        },
+      });
+      setCreatedKey(result.key);
+      router.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not create the replacement key.");
+    } finally {
+      setPending(null);
+    }
+  }
+
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-line bg-white/50 p-4">
-          <div className="flex items-center gap-2 text-12 font-bold uppercase tracking-[0.12em] text-faint">
-            <Bot size={12} /> AI drafting
-          </div>
-          <div className="mt-2 flex items-center gap-2">
-            <span className="text-12 font-semibold capitalize text-ink">
-              {aiProvider === "none" ? "Deterministic writer" : aiProvider}
-            </span>
-            <span
-              className={`badge ${
-                hasOpenAI || hasAnthropic
-                  ? "border-forest/20 bg-lime/20 text-forest"
-                  : "border-amber/20 bg-amber/[0.06] text-amber"
-              }`}
-            >
-              {hasOpenAI || hasAnthropic ? "configured" : "optional, no key"}
-            </span>
-          </div>
-          <p className="mt-2 text-12 leading-5 text-muted">
-            Without an AI key, Growth uses its deterministic founder-style writer.
-            Drafts still work, still get claim warnings, and never auto-send.
-          </p>
-        </div>
+      <div>
         <div className="rounded-xl border border-line bg-white/50 p-4">
           <div className="flex items-center gap-2 text-12 font-bold uppercase tracking-[0.12em] text-faint">
             <LockKeyhole size={12} /> Assistant boundary
@@ -173,8 +174,8 @@ export function IntegrationsManager({
         <div className="mt-3 space-y-2">
           {keys.length === 0 && (
             <div className="rounded-xl border border-dashed-line border-line px-4 py-5 text-center text-12 text-muted">
-              No keys yet. Create one for Claude, one for ChatGPT, or a separate
-              key for the REST API.
+              No keys yet. Create one per assistant — Claude, ChatGPT, Gemini or
+              Hermes — or a separate key for the REST API.
             </div>
           )}
           {keys.map((key) => {
@@ -253,6 +254,18 @@ export function IntegrationsManager({
                       </Notice>
                     </div>
                   )}
+                  {!key.revokedAt && (expiringSoon || expired) && (
+                    <button
+                      type="button"
+                      className="btn-secondary btn-xs mt-2"
+                      onClick={() => replace(key)}
+                      disabled={pending !== null}
+                      data-replace-key
+                    >
+                      {pending === `replace-${key.id}` ? <LoaderCircle size={10} className="spin" /> : <KeyRound size={10} />}
+                      Create replacement key
+                    </button>
+                  )}
                 </div>
                 {!key.revokedAt && (
                   <button
@@ -314,6 +327,21 @@ export function IntegrationsManager({
               through <code>get_instructions</code>.
             </p>
           </div>
+          <div className="rounded-lg border border-line bg-white/60 p-3">
+            <div className="text-12 font-bold text-ink">Gemini</div>
+            <p className="mt-1 text-12 leading-4 text-muted">
+              In a Gemini client that supports remote MCP servers, add the MCP URL above with
+              the Authorization header <code>Bearer &lt;key&gt;</code> (create the key with
+              assistant Gemini). Call <code>get_instructions</code> first.
+            </p>
+          </div>
+          <div className="rounded-lg border border-line bg-white/60 p-3">
+            <div className="text-12 font-bold text-ink">Hermes</div>
+            <p className="mt-1 text-12 leading-4 text-muted">
+              Add the MCP URL above as an MCP server with the Authorization header{" "}
+              <code>Bearer &lt;key&gt;</code> (assistant Hermes), or use the REST API base.
+            </p>
+          </div>
         </div>
         <div className="mt-3 rounded-lg border border-line bg-white/60 p-3">
           <div className="flex items-center gap-2">
@@ -367,7 +395,7 @@ export function IntegrationsManager({
           <div>
             <label className="label">Assistant</label>
             <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-line bg-paper/50 p-1">
-              {(["claude", "chatgpt", "deepseek", "hermes", "custom"] as const).map(
+              {(["claude", "chatgpt", "gemini", "hermes", "deepseek", "custom"] as const).map(
                 (value) => (
                   <button
                     type="button"
