@@ -361,7 +361,7 @@ Four phases over about six weeks, each closed by a gate that must pass before th
 | --- | --- | --- |
 | 1. Foundation | Week 1 | DNS + warm-up start, Lightsail server, PostgreSQL + backups and restore drill, deploy local build, safety fixes (QPS label and limit, key expiry, minimal scopes, rate limits, CORS allowlist, route guard, README), server scheduler |
 | 2. Research engine | Weeks 2–3 | Multiple DeepSeek APIs, research ledger, key expiry and rate limits, lessons and outcome reasons groundwork, test on 25 leads |
-| 3. Email | Weeks 3–5 | The email phase in detail below: quick fixes, mailbox foundations, the eleven-folder inbox, AI providers, AI drafting with full conversation context, small analytics, and agent connectors. Closed by gate 3 |
+| 3. Email | Weeks 3–5 | The email phase in detail below: quick fixes, mailbox foundations, the eleven-folder inbox, AI providers, AI drafting with full conversation context, the pipeline board and analytics, and agent connectors. Closed by gate 3 |
 | 4. Scale and measure | Week 6 onward | Scheduled follow-ups, weekly outcome digest, 5-number scoreboard, $30 budget alert, review reply rate |
 
 Weeks are planning estimates. The email phase overlaps research so the first sends can go out as soon as warm-up ends.
@@ -427,9 +427,32 @@ Prepared drafts land in a review queue (the Unanswered section and Drafts) where
 and approves selected or all. Approved drafts are queued and sent within each profile's daily limit.
 Nothing is ever sent without the founder's approval.
 
-**5. Analytics, small and meaningful.** One page: the funnel (contacted, replied, interested, demo,
-won), reply rate by sender, market and agent, replies after a follow-up, and bounce rate per sender,
-per week.
+**5. Pipeline board and analytics (the old portal's Pipeline page as the starting point).**
+To be built in this slot, replacing the previous analytics-only item.
+
+**Board:** columns Research (not contacted), Outreach (first email sent, waiting), Follow-up
+(a follow-up due or sent), Engaged (replied), Demo, Commercial (proposal/negotiation), Won,
+and Closed (lost, opted out, bounced). Counts per column over all leads, with **Load more**.
+
+**Cards:** name, tier pill, largest audience, sender pill, the status line (e.g. "They replied
+and are waiting for your answer", "Held: unmatched message from them", "Said not interested"),
+the follow-up status ("Follow-up #1 sent 4 Nov · next due 11 Nov", or "Stopped: they replied"),
+last activity, and how long a reply has waited for the founder, highlighted after **24 hours**.
+
+**Moves:** automatic from recorded facts (sent to Outreach, follow-up sent to Follow-up, reply
+to Engaged, opt-out or permanent bounce to Closed). Demo, Commercial, Won and Lost are the
+founder's decisions, by one click or drag, with the move recorded in the audit log.
+
+**Analytics:** one page, per week, filterable by tier, market, sender and agent:
+- The funnel with conversion between stages.
+- Replies after the first email versus after each follow-up.
+- The founder's reply speed and time in each stage.
+- Reply and demo rates by tier, market, sender and agent.
+- Bounce rate per mailbox.
+- Stale leads with no next step.
+
+**Design review:** screenshots from the local dev server, using a throwaway user and database,
+are presented to the founder for review before wiring it fully.
 
 **6. Connectors.** Email tools for agents through MCP — list folders, follow-ups due, save follow-up
 drafts in bulk; drafts only, no send tool, the agent boundary stays — and a downloadable skill file
