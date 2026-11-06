@@ -22,6 +22,12 @@ Run every assertion. Never skip one because the last deploy passed.
 - Editing the server's `.env`, `.growth.env` or `.env.production` (values never change).
 - Deploying with a red test suite, a failing typecheck or a failing build.
 - Touching the main Nomeriq platform project.
+- **Disguising a denied name so a deny rule does not see it.** Writing a command so a
+  forbidden filename never appears in it — a glob, `$(...)`, a variable, a wildcard — is
+  routing around the deny list, and it is banned for every purpose, including a harmless
+  read. If a server-side step needs a file whose name is denied, **tell the founder and
+  stop**; the repo-side edit is done with the file tools (which are not scoped by the deny
+  list) and the normal reviewed deploy carries it to the server.
 
 ## 0. Connect
 
@@ -29,10 +35,17 @@ Run every assertion. Never skip one because the last deploy passed.
 ssh -i C:/Users/Welcome/.ssh/LightsailDefaultKey-ap-south-1.pem ubuntu@52.66.27.26
 ```
 The server's host key is already known — **never** pass `StrictHostKeyChecking=no`.
-Remote commands use passwordless `sudo -n`. Never let a local sudo prompt fire:
-put remote privileged work in a script and call it as
-`ssh host 'sudo -n bash /tmp/<script>.sh'` (avoids a heredoc body line starting with the
-privileged word, which the local scanner can misread as a local invocation).
+Remote commands use passwordless `sudo -n`. Never let a local sudo prompt fire.
+
+**Two command shapes are allowed, both single-quoted one-liners on the ssh call:**
+
+- read-only work: `ssh host 'cmd1; cmd2'`;
+- privileged work: a committed, reviewed script, `ssh host 'sudo -n bash /home/growth/app/scripts/<name>.sh'`.
+
+**The `<<'SH'` heredoc shape is banned for privileged remote commands.** A `sudo`-prefixed
+line inside the heredoc body reads to the approval scanner as a *local* privileged
+invocation, so it raises a password prompt (the founder cancels it). Never stage a script
+in `/tmp` either — a temp copy is unreviewed by definition.
 
 ## 1. Local gate (all three must be green)
 
