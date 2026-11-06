@@ -4,6 +4,9 @@ import { closeDb, getDb } from "@/lib/db/client";
 import { ensureWorkspaceDefaults } from "@/lib/services/settings";
 import { defaultFolder, getFolderInbox, isInboxFolder } from "@/lib/services/inbox";
 import { FOLDERS } from "@/lib/services/folders";
+import { FOUNDER_STAGES, isFounderStage, setLeadStage } from "@/lib/services/stage";
+import fs from "node:fs";
+import path from "node:path";
 
 /**
  * Email item 2 — the folder inbox service over real rows: every verified lead lands in exactly one
@@ -16,17 +19,17 @@ const hours = (n: number) => new Date(Date.now() - n * 3_600_000).toISOString();
 
 async function lead(spec: {
   key: string; status: string; verified?: boolean; agent?: string | null; archived?: boolean;
-  out?: number; inbound?: number; draft?: boolean; suppression?: string;
+  out?: number; inbound?: number; draft?: boolean; suppression?: string; doNotContact?: boolean;
 }) {
   const db = await getDb();
   const id = crypto.randomUUID();
   ids.push(id);
   const email = `${spec.key}@inbox.example.test`;
   await db.query(
-    `INSERT INTO prospects (id, business_name, name_key, domain_key, status, qualification_status, created_by_type, source_agent, archived_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'founder', $7, $8)`,
+    `INSERT INTO prospects (id, business_name, name_key, domain_key, status, qualification_status, created_by_type, source_agent, archived_at, do_not_contact)
+     VALUES ($1, $2, $3, $4, $5, $6, 'founder', $7, $8, $9)`,
     [id, `Inbox ${spec.key}`, `inbox-${spec.key}`, `${spec.key}.inbox.example.test`, spec.status,
-      spec.verified === false ? "candidate" : "verified", spec.agent ?? null, spec.archived ? hours(1) : null],
+      spec.verified === false ? "candidate" : "verified", spec.agent ?? null, spec.archived ? hours(1) : null, spec.doNotContact === true],
   );
   await db.query(
     `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary)
@@ -63,6 +66,8 @@ async function lead(spec: {
 
 let needsOld = "";
 let needsNew = "";
+let stageLead = "";
+let founderId = "";
 
 beforeAll(async () => {
   await ensureWorkspaceDefaults();
@@ -77,10 +82,19 @@ beforeAll(async () => {
   await lead({ key: "new", status: "new" });
   await lead({ key: "archived", status: "contacted", out: 40, archived: true });
   await lead({ key: "candidate", status: "new", verified: false });
+  // The founder's own holds: do-not-contact alone, and the manual suppression marking it records.
+  await lead({ key: "hold", status: "contacted", out: 40, doNotContact: true });
+  await lead({ key: "hold-manual", status: "replied", out: 40, inbound: 3, doNotContact: true, suppression: "manual" });
+  // An actual opt-out that also set do-not-contact stays in Opted out.
+  await lead({ key: "optout-dnc", status: "lost", out: 60, inbound: 50, doNotContact: true, suppression: "unsubscribe" });
+  stageLead = await lead({ key: "stage", status: "replied", out: 9, inbound: 7 });
+  const db = await getDb();
+  founderId = (await db.query<{ id: string }>(`SELECT id FROM users WHERE role = 'founder' LIMIT 1`)).rows[0]?.id ?? "";
 });
 
 afterAll(async () => {
   const db = await getDb();
+  await db.query(`DELETE FROM audit_log WHERE entity_type = 'prospect' AND entity_id::text = ANY($1::text[])`, [ids]);
   await db.query(`DELETE FROM messages WHERE prospect_id = ANY($1::uuid[])`, [ids]);
   await db.query(`DELETE FROM conversations WHERE prospect_id = ANY($1::uuid[])`, [ids]);
   await db.query(`DELETE FROM drafts WHERE prospect_id = ANY($1::uuid[])`, [ids]);
@@ -94,16 +108,17 @@ describe("the folder inbox", () => {
   it("puts every verified lead in exactly one folder, archived apart, candidates nowhere", async () => {
     const inbox = await getFolderInbox({ query: "inbox.example.test", folder: "needs_reply" });
     expect(inbox.counts).toMatchObject({
-      needs_reply: 2, to_approve: 1, waiting: 1, meeting: 1, won: 1, opted_out: 1, failed: 1, new_leads: 1, archived: 1,
+      needs_reply: 3, to_approve: 1, waiting: 1, meeting: 1, won: 1, opted_out: 2, failed: 1, new_leads: 1, archived: 1,
+      on_hold: 2,
     });
     const placed = Object.values(inbox.counts).reduce((n, v) => n + v, 0);
-    expect(placed).toBe(10); // 11 seeded, the unverified candidate is not in the email folders
+    expect(placed).toBe(14); // 15 seeded, the unverified candidate is not in the email folders
     expect(Object.keys(inbox.counts).sort()).toEqual([...FOLDERS.map((f) => f.key), "archived"].sort());
   });
 
   it("lists the selected folder newest activity first, with the latest message line", async () => {
     const inbox = await getFolderInbox({ query: "inbox.example.test", folder: "needs_reply" });
-    expect(inbox.rows.map((row) => row.prospectId)).toEqual([needsNew, needsOld]);
+    expect(inbox.rows.map((row) => row.prospectId)).toEqual([needsNew, stageLead, needsOld]);
     expect(inbox.rows[0]!.snippet).toBe("Their words");
     expect(inbox.rows[0]!.snippetDirection).toBe("inbound");
   });
@@ -111,9 +126,9 @@ describe("the folder inbox", () => {
   it("counts every match, not the loaded window", async () => {
     const inbox = await getFolderInbox({ query: "inbox.example.test", folder: "needs_reply", limit: 1 });
     expect(inbox.rows).toHaveLength(1);
-    expect(inbox.total).toBe(2);
+    expect(inbox.total).toBe(3);
     expect(inbox.hasMore).toBe(true);
-    expect(inbox.counts.needs_reply).toBe(2);
+    expect(inbox.counts.needs_reply).toBe(3);
   });
 
   it("filters by agent and keeps the counts consistent with the filter", async () => {
@@ -128,5 +143,85 @@ describe("the folder inbox", () => {
     expect(defaultFolder(empty)).toBe("needs_reply");
     expect(isInboxFolder("needs_reply")).toBe(true);
     expect(isInboxFolder("drop table")).toBe(false);
+  });
+
+  it("returns the open lead even after it leaves the selected folder", async () => {
+    const inbox = await getFolderInbox({ query: "inbox.example.test", folder: "waiting", focus: needsOld });
+    expect(inbox.rows.some((row) => row.prospectId === needsOld)).toBe(false);
+    expect(inbox.focused?.prospectId).toBe(needsOld);
+    expect(inbox.focused?.folder).toBe("needs_reply");
+    expect(inbox.focused?.snippet).toBe("Their words");
+  });
+
+  it("puts the To approve draft id on the row, for bulk approval", async () => {
+    const inbox = await getFolderInbox({ query: "inbox.example.test", folder: "to_approve" });
+    expect(inbox.rows).toHaveLength(1);
+    expect(inbox.rows[0]!.draftWaiting).toMatchObject({ kind: "first_contact", status: "draft" });
+    expect(inbox.rows[0]!.draftWaiting!.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe("the stage buttons", () => {
+  it("moves a lead to a founder stage, audits it, and the lead changes folder", async () => {
+    expect(FOUNDER_STAGES).toEqual(["interested", "demo", "proposal", "won", "lost"]);
+    expect(isFounderStage("contacted")).toBe(false);
+    const result = await setLeadStage(stageLead, "demo", founderId);
+    expect(result).toEqual({ from: "replied", to: "demo", changed: true });
+    const inbox = await getFolderInbox({ query: "inbox.example.test", focus: stageLead });
+    expect(inbox.focused?.folder).toBe("meeting");
+    const db = await getDb();
+    const audit = await db.query<{ action: string; metadata: unknown }>(
+      `SELECT action, metadata FROM audit_log WHERE entity_type = 'prospect' AND entity_id::text = $1`,
+      [stageLead],
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0]!.action).toBe("lead.stage_changed");
+    const metadata = typeof audit.rows[0]!.metadata === "string" ? JSON.parse(audit.rows[0]!.metadata) : audit.rows[0]!.metadata;
+    expect(metadata).toMatchObject({ from: "replied", to: "demo" });
+  });
+
+  it("is a no-op for the current stage and refuses automatic stages", async () => {
+    expect(await setLeadStage(stageLead, "demo", founderId)).toMatchObject({ changed: false });
+    await expect(setLeadStage(stageLead, "contacted" as never, founderId)).rejects.toThrow(/by hand/);
+    await expect(setLeadStage(crypto.randomUUID(), "won", founderId)).rejects.toThrow(/not found/i);
+  });
+});
+
+describe("the main Email screen", () => {
+  const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
+
+  it("is the folder inbox at /email, with the old tabs behind ?tab= and the design URL redirected", () => {
+    const page = read("src/app/(app)/email/page.tsx");
+    expect(page).toContain("if (params.tab) return <EmailToolsPage");
+    expect(page).toContain("<FolderInbox params={params} />");
+    expect(read("src/app/(app)/email/folders/page.tsx")).toContain("redirect(`/email");
+    const inbox = read("src/app/(app)/email/folder-inbox.tsx");
+    for (const tool of ["/email?tab=sent", "/email?tab=campaigns", "/email?tab=followups"]) {
+      expect(inbox, tool).toContain(tool);
+    }
+    expect(inbox).toContain("data-email-tools");
+    expect(inbox).toContain("data-qualification-pills");
+  });
+
+  it("shows the thread newest first, pre-fills a reply suggestion, and offers bulk approval", () => {
+    const inbox = read("src/app/(app)/email/folder-inbox.tsx");
+    expect(inbox).not.toContain(".reverse()");
+    expect(inbox).toContain("latest={index === 0 && inbound}");
+    expect(inbox).toContain("autoSuggest={theirsIsLatest}");
+    expect(inbox).toContain("<ApproveSelectionList");
+    const client = read("src/components/folder-inbox-client.tsx");
+    expect(client).toContain('"/api/drafts/approve-bulk"');
+    expect(client).toContain("Select all");
+    expect(client).toContain("Approve selected");
+    expect(client).toContain("/stage`");
+    expect(client).not.toMatch(/sendDraft|campaigns\/start/);
+  });
+
+  it("applies Sender and Agent on change and has no Apply button", () => {
+    const client = read("src/components/folder-inbox-client.tsx");
+    expect(client).toContain("onChange={(event) => go({ sender:");
+    expect(client).toContain("onChange={(event) => go({ agent:");
+    expect(client).not.toMatch(/>\s*Apply\s*</);
+    expect(read("src/app/(app)/email/folder-inbox.tsx")).not.toMatch(/>\s*Apply\s*</);
   });
 });

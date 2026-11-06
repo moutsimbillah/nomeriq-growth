@@ -6,7 +6,8 @@ import { FOLDERS, folderFor, type FolderKey } from "./folders";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * The folder inbox (email item 2): every verified lead sits in exactly one of the eleven folders,
+ * The folder inbox (email item 2): every verified lead sits in exactly one folder — the plan's
+ * eleven plus On hold (the founder's own do-not-contact, approved 6 Nov 2026) —
  * computed by `folderFor` — the same precedence the plan lists and the folder tests pin — so a lead
  * can never be in two folders or in none. Unverified candidates stay on the Research page; archived
  * leads only appear in the Archived view.
@@ -28,6 +29,8 @@ export interface InboxFilters {
   /** An agent tag, or "unknown". */
   agent?: string | null;
   limit?: number;
+  /** The open lead: returned even when it is outside the selected folder (e.g. just moved to Won). */
+  focus?: string | null;
 }
 
 export interface InboxRow {
@@ -45,7 +48,7 @@ export interface InboxRow {
   lastInboundAt: string | null;
   lastOutboundAt: string | null;
   lastActivityAt: string | null;
-  draftWaiting: { kind: "first_contact" | "follow_up"; sequence: number; status: string } | null;
+  draftWaiting: { id: string; kind: "first_contact" | "follow_up"; sequence: number; status: string } | null;
   sendingProfileId: string | null;
   sourceAgent: AgentTag | null;
   sourceChannel: ChannelTag | null;
@@ -61,6 +64,8 @@ export interface FolderInbox {
   rows: InboxRow[];
   limit: number;
   hasMore: boolean;
+  /** The lead named by `focus`, if it matches the filters; null otherwise. */
+  focused: InboxRow | null;
 }
 
 export function isInboxFolder(value: string | null | undefined): value is InboxFolder {
@@ -116,12 +121,12 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
           WHERE pe.prospect_id = p.id AND s.active = true
           ORDER BY CASE s.reason WHEN 'unsubscribe' THEN 0 WHEN 'opt_out' THEN 1 WHEN 'complaint' THEN 2
             WHEN 'bounce' THEN 3 ELSE 4 END LIMIT 1) AS suppression_reason,
-        d.kind AS draft_kind, d.sequence AS draft_sequence, d.status AS draft_status, d.updated_at AS draft_updated_at,
+        d.id AS draft_id, d.kind AS draft_kind, d.sequence AS draft_sequence, d.status AS draft_status, d.updated_at AS draft_updated_at,
         c.id AS conversation_id, c.subject, c.unread_count, c.last_inbound_at, c.last_outbound_at,
         EXISTS (SELECT 1 FROM conversations c2 WHERE c2.prospect_id = p.id AND c2.last_inbound_at IS NOT NULL) AS has_replied
        FROM prospects p
        LEFT JOIN LATERAL (
-         SELECT kind, sequence, status, updated_at FROM drafts
+         SELECT id, kind, sequence, status, updated_at FROM drafts
           WHERE prospect_id = p.id AND status IN ('draft', 'approved')
           ORDER BY updated_at DESC LIMIT 1) d ON true
        LEFT JOIN LATERAL (
@@ -134,14 +139,14 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
 
   const counts = emptyCounts();
   const all: InboxRow[] = result.rows.map((row) => {
-    // A lead marked do-not-contact without a suppression row is still someone who opted out.
-    const reason = row.suppression_reason ?? (row.do_not_contact ? "opt_out" : null);
+    const reason = row.suppression_reason ?? null;
     const lastInboundAt = iso(row.last_inbound_at);
     const lastOutboundAt = iso(row.last_outbound_at);
     const folder = folderFor({
       status: row.status,
       archivedAt: row.archived_at,
       suppressionReason: reason,
+      doNotContact: row.do_not_contact === true,
       hasDraftWaiting: Boolean(row.draft_status),
       lastInboundAt,
       lastOutboundAt,
@@ -165,7 +170,7 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
       // Email activity first; the lead record's own edit time only when nothing was ever written.
       lastActivityAt: latest(lastInboundAt, lastOutboundAt, iso(row.draft_updated_at)) ?? iso(row.updated_at),
       draftWaiting: row.draft_status
-        ? { kind: row.draft_kind, sequence: Number(row.draft_sequence ?? 0), status: row.draft_status }
+        ? { id: row.draft_id, kind: row.draft_kind, sequence: Number(row.draft_sequence ?? 0), status: row.draft_status }
         : null,
       sendingProfileId: row.sending_profile_id ?? null,
       sourceAgent: row.source_agent ?? null,
@@ -181,9 +186,11 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
     .sort((a, b) => (Date.parse(b.lastActivityAt ?? "") || 0) - (Date.parse(a.lastActivityAt ?? "") || 0));
   const limit = Math.max(1, Math.min(Math.floor(filters.limit ?? INBOX_PAGE_SIZE) || INBOX_PAGE_SIZE, 500));
   const rows = inFolder.slice(0, limit);
+  const focused = filters.focus ? all.find((row) => row.prospectId === filters.focus) ?? null : null;
+  const withSnippets = focused && !rows.includes(focused) ? [...rows, focused] : rows;
 
   // The latest message line for the visible rows only.
-  const conversationIds = rows.map((row) => row.conversationId).filter((id): id is string => Boolean(id));
+  const conversationIds = withSnippets.map((row) => row.conversationId).filter((id): id is string => Boolean(id));
   if (conversationIds.length) {
     const snippets = await db.query<any>(
       `SELECT DISTINCT ON (m.conversation_id) m.conversation_id, m.snippet, m.direction
@@ -192,7 +199,7 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
       [conversationIds],
     );
     const byConversation = new Map(snippets.rows.map((row) => [row.conversation_id, row]));
-    for (const row of rows) {
+    for (const row of withSnippets) {
       const found = row.conversationId ? byConversation.get(row.conversationId) : null;
       if (found) {
         row.snippet = found.snippet ?? null;
@@ -201,5 +208,5 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
     }
   }
 
-  return { folder: requested, counts, total: inFolder.length, rows, limit, hasMore: inFolder.length > rows.length };
+  return { folder: requested, counts, total: inFolder.length, rows, limit, hasMore: inFolder.length > rows.length, focused };
 }

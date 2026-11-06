@@ -26,7 +26,7 @@ describe("draft provenance", () => {
     expect(read("src/components/lead-actions.tsx")).toContain("draftProvenance(draft, agentPillLabel)");
     expect(read("src/app/(app)/leads/[id]/page.tsx")).toContain("draftProvenance(followUp)");
     expect(read("src/components/follow-up-bulk.tsx")).toContain("draftProvenance(draft)");
-    expect(read("src/app/(app)/email/page.tsx")).toContain("<FollowUpDraftList");
+    expect(read("src/app/(app)/email/email-tools.tsx")).toContain("<FollowUpDraftList");
   });
 
   it("names the reply language in words for the founder", () => {

@@ -166,7 +166,7 @@ describe("Approve selected and Approve all", () => {
 
   it("the Email page uses the bulk lists, and the route only approves", () => {
     const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8");
-    const page = read("src/app/(app)/email/page.tsx");
+    const page = read("src/app/(app)/email/email-tools.tsx");
     expect(page).toContain("<FollowUpEligibleList");
     expect(page).toContain("<FollowUpDraftList");
     expect(page).toContain("!candidate.activeDraftId");

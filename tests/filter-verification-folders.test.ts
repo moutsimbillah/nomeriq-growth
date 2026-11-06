@@ -37,6 +37,7 @@ const JUDGED = `
       WHEN archived THEN 'archived'
       WHEN reason IN ('unsubscribe', 'opt_out', 'complaint') THEN 'opted_out'
       WHEN reason = 'bounce' THEN 'failed'
+      WHEN reason = 'manual' THEN 'on_hold'
       WHEN status = 'won' THEN 'won'
       WHEN status = 'lost' THEN 'closed_lost'
       WHEN status IN ('demo', 'proposal') THEN 'meeting'

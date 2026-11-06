@@ -6,10 +6,11 @@ const T1 = "2026-11-01T10:00:00.000Z";
 const T2 = "2026-11-02T10:00:00.000Z";
 
 describe("folder model", () => {
-  it("lists the plan's eleven folders in rule order", () => {
+  it("lists the plan's eleven folders plus On hold, in rule order", () => {
     expect(FOLDERS.map((folder) => folder.label)).toEqual([
       "Opted out",
       "Failed",
+      "On hold",
       "Rejected",
       "Won",
       "Closed (lost)",
@@ -27,7 +28,7 @@ describe("folder model", () => {
     expect(groups.map((entry) => entry.group)).toEqual(["Active", "Outcome", "Problem"]);
     expect(groups[0]!.folders.length).toBe(6);
     expect(groups[1]!.folders.length).toBe(4);
-    expect(groups[2]!.folders.map((folder) => folder.key)).toEqual(["failed"]);
+    expect(groups[2]!.folders.map((folder) => folder.key)).toEqual(["failed", "on_hold"]);
   });
 
   it("puts an unsubscribed or complaining provider in Opted out", () => {
@@ -35,6 +36,15 @@ describe("folder model", () => {
     expect(folderFor({ status: "contacted", suppressionReason: "opt_out" })).toBe("opted_out");
     expect(folderFor({ status: "contacted", suppressionReason: "complaint" })).toBe("opted_out");
     expect(folderFor({ status: "contacted", suppressionReason: "manual" })).not.toBe("opted_out");
+  });
+
+  it("puts the founder's own do-not-contact hold in On hold, never Opted out", () => {
+    expect(folderFor({ status: "contacted", doNotContact: true })).toBe("on_hold");
+    expect(folderFor({ status: "contacted", suppressionReason: "manual" })).toBe("on_hold");
+    expect(folderFor({ status: "replied", doNotContact: true, lastInboundAt: T2, lastOutboundAt: T1 })).toBe("on_hold");
+    // An actual opt-out or bounce still explains the hold.
+    expect(folderFor({ status: "lost", doNotContact: true, suppressionReason: "unsubscribe" })).toBe("opted_out");
+    expect(folderFor({ status: "contacted", doNotContact: true, suppressionReason: "bounce" })).toBe("failed");
   });
 
   it("puts a bounced provider in Failed", () => {

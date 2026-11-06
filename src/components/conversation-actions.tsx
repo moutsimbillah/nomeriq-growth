@@ -177,6 +177,7 @@ export function ReplyComposer({
   suppressed,
   blockedReason,
   sandbox,
+  autoSuggest = false,
 }: {
   conversationId: string;
   defaultSubject: string;
@@ -184,6 +185,8 @@ export function ReplyComposer({
   suppressed: boolean;
   blockedReason: string | null;
   sandbox: boolean;
+  /** Fetch one AI suggestion when the box opens (the folder inbox); the conversation page waits for a click. */
+  autoSuggest?: boolean;
 }) {
   const router = useRouter();
   const keyRef = useRef<string | null>(null);
@@ -199,6 +202,14 @@ export function ReplyComposer({
   const [meta, setMeta] = useState<SuggestionMeta | null>(null);
   const [copied, setCopied] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const autoSuggested = useRef(false);
+
+  useEffect(() => {
+    if (!autoSuggest || autoSuggested.current || suppressed || !recipient) return;
+    autoSuggested.current = true;
+    void suggest();
+    // Once per opened box: the parent keys this component by conversation.
+  }, []);
 
   async function suggest() {
     setPending("suggest");

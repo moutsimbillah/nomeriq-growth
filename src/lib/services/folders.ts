@@ -14,6 +14,7 @@ import type { PipelineStatus } from "@/lib/types";
 export type FolderKey =
   | "opted_out"
   | "failed"
+  | "on_hold"
   | "rejected"
   | "won"
   | "closed_lost"
@@ -47,6 +48,12 @@ export const FOLDERS: readonly FolderDefinition[] = [
     label: "Failed",
     group: "Problem",
     rule: "A delivery bounced.",
+  },
+  {
+    key: "on_hold",
+    label: "On hold",
+    group: "Problem",
+    rule: "You marked the lead do-not-contact (your own hold) — not an opt-out.",
   },
   {
     key: "rejected",
@@ -110,6 +117,8 @@ export interface FolderInput {
   archivedAt?: string | Date | null;
   /** suppressions.reason: unsubscribe, opt_out, bounce, complaint, manual. */
   suppressionReason?: string | null;
+  /** prospects.do_not_contact: the founder's own hold unless an opt-out or bounce explains it. */
+  doNotContact?: boolean;
   hasDraftWaiting?: boolean;
   lastInboundAt?: string | Date | null;
   lastOutboundAt?: string | Date | null;
@@ -139,6 +148,9 @@ export function folderFor(input: FolderInput): FolderKey | "archived" {
     return "opted_out";
   }
   if (reason === "bounce") return "failed";
+  // The founder's own hold: do-not-contact, or the manual suppression that marking it records.
+  // Only real opt-outs and unsubscribes (above) are Opted out.
+  if (input.doNotContact || reason === "manual") return "on_hold";
 
   const status = String(input.status);
 

@@ -99,7 +99,7 @@ it("survives the URL as a pair of states", () => {
 });
 
 it("offers the Custom range option whether or not it is already selected", () => {
-  for (const path of ["src/app/(app)/leads/page.tsx", "src/app/(app)/email/page.tsx"]) {
+  for (const path of ["src/app/(app)/leads/page.tsx", "src/app/(app)/email/email-tools.tsx"]) {
     const source = readFileSync(path, "utf8");
     const from = source.indexOf('value="custom"');
     expect(from, path).toBeGreaterThan(-1);
