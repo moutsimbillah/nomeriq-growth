@@ -61,6 +61,8 @@ export function agentFromAssistantLabel(assistant: string | null | undefined): A
       return "hermes";
     case "deepseek":
       return "deepseek";
+    case "gemini":
+      return "gemini";
     default:
       return "other";
   }

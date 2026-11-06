@@ -13,7 +13,7 @@ export type { ApiScope };
 export interface ApiKeyIdentity {
   id: string;
   name: string;
-  assistant: "chatgpt" | "claude" | "deepseek" | "hermes" | "custom";
+  assistant: "chatgpt" | "claude" | "deepseek" | "hermes" | "gemini" | "custom";
   scopes: string[];
 }
 
@@ -67,7 +67,7 @@ export function resetApiKeyRateLimits(): void {
 
 export async function createApiKey(input: {
   name: string;
-  assistant: "chatgpt" | "claude" | "deepseek" | "hermes" | "custom";
+  assistant: "chatgpt" | "claude" | "deepseek" | "hermes" | "gemini" | "custom";
   scopes?: string[];
   expiresInDays?: number;
   userId: string;
