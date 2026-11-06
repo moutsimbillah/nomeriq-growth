@@ -44,21 +44,23 @@ try {
   if (!modelsResponse.ok || !ids.includes(row.model)) process.exitCode = 2;
   else {
     const common = { model: row.model, messages: [{ role: 'system', content: 'Return JSON only.' }, { role: 'user', content: 'Return {"ok":true}.' }], response_format: { type: 'json_object' } };
-    for (const variant of ['current_request', 'standard_stream']) {
-      const body = { ...common, ...(variant === 'current_request' ? { max_completion_tokens: 64 } : { max_tokens: 64, stream: true }) };
+    for (const variant of ['stream_standard', 'stream_without_format', 'stream_completion_limit']) {
+      const body = { ...common, max_tokens: 256, stream: true };
+      if (variant !== 'stream_standard') delete body.response_format;
+      if (variant === 'stream_completion_limit') { delete body.max_tokens; body.max_completion_tokens = 256; }
       const response = await fetch(`${base}/v1/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(60000), redirect: 'error' });
       const raw = await response.text();
       let payload = {};
       try { payload = JSON.parse(raw); } catch { /* SSE is parsed below, never printed. */ }
       let content = payload?.choices?.[0]?.message?.content;
-      if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
+      if (raw.includes('data:')) {
         content = raw.split(/\r?\n/).filter(line => line.startsWith('data:') && !line.includes('[DONE]')).map(line => {
-          try { return JSON.parse(line.slice(5)).choices?.[0]?.delta?.content ?? ''; } catch { return ''; }
+          try { const chunk = JSON.parse(line.slice(5)); if(chunk.error) payload=chunk; return chunk.choices?.[0]?.delta?.content ?? ''; } catch { return ''; }
         }).join('');
       }
       console.log(JSON.stringify({ step: variant, url: `${base}/v1/chat/completions`, requestFields: Object.keys(body), ...safeError(payload, response.status), nonempty: typeof content === 'string' && content.trim().length > 0 }));
       if (response.ok && typeof content === 'string' && content.trim()) break;
-      if (response.status !== 400 && response.status !== 422) break;
+      if (response.status !== 400 && response.status !== 422 && !payload.error) break;
     }
   }
   await client.query('ROLLBACK');
