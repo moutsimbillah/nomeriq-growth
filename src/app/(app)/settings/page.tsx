@@ -26,6 +26,7 @@ import { listResearchProviders } from "@/lib/deepseek/provider-pool";
 import { listAiProviders } from "@/lib/ai/registry";
 import { listTaskSettings } from "@/lib/services/ai-task-settings";
 import { providerUsage } from "@/lib/services/research-provider-admin";
+import { getSessionUser } from "@/lib/auth/session";
 import { Card, PageHeader, SectionHeading } from "@/components/ui";
 import { WorkspaceSettingsForm } from "@/components/settings/workspace-form";
 import { EmailAccountsManager } from "@/components/settings/email-accounts";
@@ -86,7 +87,7 @@ function SettingsSection({
 }
 
 export default async function SettingsPage() {
-  const [settings, accounts, apiKeys, users, suppressions, deepseekSettings, researchProviders, aiProviders, aiTaskSettings, providerUses] =
+  const [settings, accounts, apiKeys, users, suppressions, deepseekSettings, researchProviders, aiProviders, aiTaskSettings, providerUses, viewer] =
     await Promise.all([
       getWorkspaceSettings(),
       listEmailAccounts(),
@@ -98,6 +99,7 @@ export default async function SettingsPage() {
       listAiProviders(),
       listTaskSettings(),
       providerUsage(),
+      getSessionUser(),
     ]);
   const usages: Record<string, Awaited<ReturnType<typeof getSendUsage>>> = {};
   const health: Record<
@@ -207,6 +209,7 @@ export default async function SettingsPage() {
           >
             <DeepSeekSettings initial={deepseekSettings} />
             <ProvidersCard
+              canDelete={viewer?.role === "founder"}
               initial={researchProviders.map(provider => ({
                 ...provider,
                 usedBy: providerUses.find(entry => entry.providerId === provider.id)?.uses ?? [],

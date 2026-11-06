@@ -112,6 +112,20 @@ export function isEditor(user: SessionUser): boolean {
   return user.role === "founder" || user.role === "admin";
 }
 
+/** The founder-only rule itself, kept pure so it is tested without a request scope. */
+export function assertFounder(user: Pick<SessionUser, "role">): void {
+  if (user.role !== "founder") {
+    throw new AppError("Only the founder can do this.", 403, "forbidden");
+  }
+}
+
+/** For the few acts only the founder may take — destroying a stored provider key is one. */
+export async function requireFounder(): Promise<SessionUser> {
+  const user = await requireApiUser();
+  assertFounder(user);
+  return user;
+}
+
 export async function userCount(): Promise<number> {
   const db = await getDb();
   const result = await db.query<{ count: string | number }>(

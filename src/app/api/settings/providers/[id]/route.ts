@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireEditor } from "@/lib/auth/session";
+import { requireEditor, requireFounder } from "@/lib/auth/session";
 import { assertSameOrigin } from "@/lib/auth/request";
 import { listResearchProviders } from "@/lib/deepseek/provider-pool";
 import { deleteResearchProvider, providerUsage, updateResearchProvider } from "@/lib/services/research-provider-admin";
@@ -61,7 +61,8 @@ export async function DELETE(
 ) {
   try {
     assertSameOrigin(request);
-    const user = await requireEditor();
+    // Destroying a stored key is irreversible, so it is the founder's act, not an admin's.
+    const user = await requireFounder();
     const { id } = await context.params;
     const input = deleteSchema.parse(await readJson(request).catch(() => ({})));
 

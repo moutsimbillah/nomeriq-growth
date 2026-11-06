@@ -33,7 +33,7 @@ export interface ProviderRowView {
  * `@/lib/ai/provider-catalog` so the screen and the server registry always agree. A test
  * guards the catalog's own invariants (kinds valid, Brave search-only and model-free).
  */
-export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
+export function ProvidersCard({ initial, canDelete = false }: { initial: ProviderRowView[]; canDelete?: boolean }) {
   const router = useRouter();
   const [noticeOk, setNoticeOk] = useState(true);
   const [models, setModels] = useState<string[]>([]);
@@ -321,7 +321,7 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
                 {row.isEnabled ? "Disable" : "Enable"}
               </button>
 
-              <button
+              {canDelete && <button
                 type="button"
                 className="btn"
                 onClick={() => { setDeleting(row); setSwitchTo(""); setError(null); setNotice(null); }}
@@ -329,7 +329,7 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
               >
                 <Trash2 size={12} />
                 Delete
-              </button>
+              </button>}
             </div>
           ))}
         </div>
