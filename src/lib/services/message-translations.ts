@@ -75,7 +75,8 @@ export async function translateMessage(id: string): Promise<TranslationOutcome> 
     if (stored && stored.source_hash === sourceHash)
       return { ok: true, translation: mapRow(id, stored, true), cached: true };
 
-    const translated = await translateToEnglish(source.original);
+    // Registry reads share the locked transaction, avoiding a second-client queue deadlock in PGlite.
+    const translated = await translateToEnglish(source.original, tx);
     if (!translated.ok) return { ok: false, code: translated.code, reason: translated.reason };
 
     const saved = (

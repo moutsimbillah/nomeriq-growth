@@ -6,7 +6,8 @@ import type {
 import type { WorkspaceSettings } from "@/lib/services/settings";
 import { runChatTask } from "@/lib/ai/registry";
 import { truncate } from "@/lib/utils";
-import { profileSignature, resolveSendingProfile } from "@/lib/email/profiles";
+import { resolveSendingProfile } from "@/lib/email/profiles";
+import { FAILED_AI_TEMPLATE_LABEL, NO_AI_TEMPLATE_LABEL, suggestionSignature } from "@/lib/ai/reply-status";
 
 export interface ReplySuggestion {
   subject: string;
@@ -116,8 +117,8 @@ export function deterministicReply(input: {
     usedAi: false,
     model: null,
     note: needsFounderInput
-      ? "The answer needs founder confirmation against Product Truth before sending."
-      : null,
+      ? `${NO_AI_TEMPLATE_LABEL}. The answer needs founder confirmation against Product Truth before sending.`
+      : NO_AI_TEMPLATE_LABEL,
   };
 }
 
@@ -274,9 +275,10 @@ export async function suggestReply(input: {
   // The lead's own sending profile, when it has one: a reply goes out from the address the prospect is
   // already talking to, so it must be signed the same way. Falls back to the workspace signature.
   const profile = await resolveSendingProfile({ prospectId: input.prospect.id }).catch(() => null);
-  const signature = profileSignature(
-    profile?.signature ?? "",
-    input.settings.senderSignature || "Founder\nNomeriq",
+  const signature = suggestionSignature(
+    profile?.signature,
+    input.settings.senderSignature,
+    profile?.fromName,
   );
   const fallback = deterministicReply({
     prospect: input.prospect,
@@ -313,10 +315,12 @@ export async function suggestReply(input: {
       };
     }
     if (viaSettings.code !== "provider_unavailable") {
-      console.error(`AI reply suggestion failed via Settings: ${viaSettings.reason}`);
+      console.error(`[ai] task=suggest_reply code=${viaSettings.code}`);
+      return { ...fallback, note: fallback.note?.replace(NO_AI_TEMPLATE_LABEL, FAILED_AI_TEMPLATE_LABEL) ?? FAILED_AI_TEMPLATE_LABEL };
     }
-  } catch (error) {
-    console.error("AI reply suggestion via Settings failed; trying the environment.", error);
+  } catch {
+    console.error("[ai] task=suggest_reply code=registry_or_response_failed");
+    return { ...fallback, note: fallback.note?.replace(NO_AI_TEMPLATE_LABEL, FAILED_AI_TEMPLATE_LABEL) ?? FAILED_AI_TEMPLATE_LABEL };
   }
 
   const provider = (process.env.AI_PROVIDER || "none").toLowerCase();
@@ -344,8 +348,8 @@ export async function suggestReply(input: {
         ? "The AI flagged that part of this answer needs founder confirmation."
         : null,
     };
-  } catch (error) {
-    console.error("AI reply suggestion failed; using deterministic reply.", error);
-    return fallback;
+  } catch {
+    console.error("[ai] task=suggest_reply code=environment_provider_failed");
+    return { ...fallback, note: fallback.note?.replace(NO_AI_TEMPLATE_LABEL, FAILED_AI_TEMPLATE_LABEL) ?? FAILED_AI_TEMPLATE_LABEL };
   }
 }

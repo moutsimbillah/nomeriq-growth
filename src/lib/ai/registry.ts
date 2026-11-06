@@ -1,7 +1,7 @@
 import { decryptSecret } from "@/lib/auth/crypto";
-import { getDb } from "@/lib/db/client";
+import { getDb, type DbClient } from "@/lib/db/client";
 import { AppError } from "@/lib/utils";
-import { cleanBaseUrl } from "@/lib/deepseek/provider";
+import { requestProviderChat } from "@/lib/ai/chat-transport";
 import { PROVIDER_CATALOG, PROVIDER_KINDS, type ProviderKind } from "@/lib/ai/provider-catalog";
 
 export { PROVIDER_KINDS } from "@/lib/ai/provider-catalog";
@@ -191,8 +191,8 @@ export async function listAiProviders(): Promise<AiProviderRow[]> {
   return result.rows.map(toRow);
 }
 
-export async function getAiProvider(id: string): Promise<AiProviderRow | null> {
-  const db = await getDb();
+export async function getAiProvider(id: string, runner?: DbClient): Promise<AiProviderRow | null> {
+  const db = runner ?? await getDb();
   const result = await db.query<ProviderRecord>(
     `SELECT id, name, provider, kinds, base_url, model, search_path, fetch_path,
             priority, is_enabled, encrypted_api_key
@@ -221,7 +221,7 @@ export interface AiTaskSelection {
  * job it was chosen for — each with a message naming the problem. A task with nothing configured
  * resolves to `chat: null`, which the callers report as "not configured" rather than failing.
  */
-export async function resolveAiTask(task: string): Promise<AiTaskSelection> {
+export async function resolveAiTask(task: string, runner?: DbClient): Promise<AiTaskSelection> {
   if (!isAiTask(task)) {
     throw new AppError(
       `Unknown AI task "${task}". Valid tasks are: ${AI_TASKS.join(", ")}.`,
@@ -230,7 +230,7 @@ export async function resolveAiTask(task: string): Promise<AiTaskSelection> {
     );
   }
 
-  const db = await getDb();
+  const db = runner ?? await getDb();
   const settings = await db.query<{
     provider_id: string | null;
     model: string | null;
@@ -248,16 +248,17 @@ export async function resolveAiTask(task: string): Promise<AiTaskSelection> {
 
   let chat: AiProviderRow | null = null;
   if (row?.provider_id) {
-    const provider = await getAiProvider(row.provider_id);
+    const provider = await getAiProvider(row.provider_id, db);
     if (!provider) throw new AppError(UNKNOWN_PROVIDER, 400, "unknown_provider");
     const capable = chatCapability(provider);
     if (!capable.ok) throw new AppError(capable.message, 400, "provider_not_chat_capable");
-    chat = provider;
+    if (!provider.isEnabled) throw new AppError("The chosen provider is disabled. Enable it in Settings.", 400, "provider_disabled");
+    chat = { ...provider, model: row.model?.trim() || provider.model };
   }
 
   let search: AiProviderRow | null = null;
   if (row?.search_provider_id) {
-    const provider = await getAiProvider(row.search_provider_id);
+    const provider = await getAiProvider(row.search_provider_id, db);
     if (!provider) throw new AppError(UNKNOWN_PROVIDER, 400, "unknown_provider");
     const capable = searchCapability(provider);
     if (!capable.ok) throw new AppError(capable.message, 400, "provider_not_search_capable");
@@ -266,7 +267,7 @@ export async function resolveAiTask(task: string): Promise<AiTaskSelection> {
 
   const chain: AiProviderRow[] = chat ? [chat] : [];
   for (const entry of fallbacks.rows) {
-    const provider = await getAiProvider(entry.provider_id);
+    const provider = await getAiProvider(entry.provider_id, db);
     if (!provider || !provider.isEnabled) continue;
     const capable = chatCapability(provider);
     // A fallback that cannot chat is skipped rather than fatal: the task still has its first choice.
@@ -289,93 +290,6 @@ export interface ChatOutcome<T> {
   data: T;
   provider: string;
   model: string;
-}
-
-/** The provider's documented chat endpoint, headers and body, from its own docs. */
-function requestFor(
-  row: AiProviderRow,
-  message: ChatMessage,
-  apiKey: string,
-): { url: string; init: RequestInit; pick: (payload: unknown) => unknown; model: string } {
-  const base = cleanBaseUrl(row.baseUrl);
-  const model = row.model;
-  const maxTokens = message.maxTokens ?? 4096;
-
-  if (row.provider === "anthropic") {
-    return {
-      url: `${base}/v1/messages`,
-      model,
-      init: {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: maxTokens,
-          system: message.system,
-          messages: [{ role: "user", content: message.user }],
-        }),
-      },
-      pick: (payload) => {
-        const blocks = (payload as { content?: unknown }).content;
-        return Array.isArray(blocks)
-          ? blocks.find(
-              (block: { type?: unknown; text?: unknown }) =>
-                block?.type === "text" && typeof block.text === "string",
-            )?.text
-          : undefined;
-      },
-    };
-  }
-
-  if (row.provider === "gemini") {
-    return {
-      url: `${base}/v1beta/models/${model}:generateContent`,
-      model,
-      init: {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: message.system }] },
-          contents: [{ role: "user", parts: [{ text: message.user }] }],
-          generationConfig: { maxOutputTokens: maxTokens },
-        }),
-      },
-      pick: (payload) => {
-        const candidates = (payload as { candidates?: unknown }).candidates;
-        if (!Array.isArray(candidates)) return undefined;
-        const parts = (candidates[0] as { content?: { parts?: unknown } })?.content?.parts;
-        return Array.isArray(parts)
-          ? parts.map((part: { text?: string }) => part?.text ?? "").join("")
-          : undefined;
-      },
-    };
-  }
-
-  // OpenAI, DeepSeek, OpenRouter and any OpenAI-compatible custom endpoint share one shape.
-  return {
-    url: `${base}/v1/chat/completions`,
-    model,
-    init: {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model,
-        max_completion_tokens: maxTokens,
-        ...(message.json ? { response_format: { type: "json_object" } } : {}),
-        messages: [
-          { role: "system", content: message.system },
-          { role: "user", content: message.user },
-        ],
-      }),
-    },
-    pick: (payload) =>
-      (payload as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]?.message
-        ?.content,
-  };
 }
 
 export type ChatResult =
@@ -407,39 +321,10 @@ export async function chatWithProvider(
     return { ok: false, code: "missing_api_key", reason: `"${row.name}" has no API key stored.` };
   }
 
-  const { url, init, pick, model } = requestFor(row, message, apiKey);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60000);
-  try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
-    if (!response.ok) {
-      return {
-        ok: false,
-        code: "http_error",
-        reason: `${row.name} returned HTTP ${response.status}.`,
-      };
-    }
-    const payload = await response.json();
-    const reported = (payload as { model?: unknown }).model;
-    const usedModel = typeof reported === "string" && reported.trim() ? reported : model;
-    const text = pick(payload);
-    if (typeof text !== "string" || text.trim().length === 0) {
-      return {
-        ok: false,
-        code: "empty_response",
-        reason: `${row.name} returned no text.`,
-      };
-    }
-    return { ok: true, text, provider: row.provider, model: usedModel };
-  } catch (error) {
-    return {
-      ok: false,
-      code: "request_failed",
-      reason: `${row.name} could not be reached: ${error instanceof Error ? error.message : "unknown error"}.`,
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+  const outcome = await requestProviderChat(row, apiKey, message);
+  return outcome.ok
+    ? { ...outcome, provider: row.provider }
+    : { ...outcome, reason: `${row.name}: ${outcome.reason}` };
 }
 
 /**
@@ -449,8 +334,9 @@ export async function chatWithProvider(
 export async function runChatTask(
   task: string,
   message: ChatMessage,
+  runner?: DbClient,
 ): Promise<ChatResult & { fallbackUsed?: string }> {
-  const selection = await resolveAiTask(task);
+  const selection = await resolveAiTask(task, runner);
   if (!selection.fallbackChain.length) {
     return {
       ok: false,

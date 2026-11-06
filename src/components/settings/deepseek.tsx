@@ -299,10 +299,10 @@ export function DeepSeekSettings({ initial }: { initial: DeepSeekPublicState }) 
           ) : (
             <PlugZap size={13} />
           )}
-          {pending === "test" ? "Testing…" : "Test Search, Fetch and models"}
+          {pending === "test" ? "Testing…" : "Test chat, Search, Fetch and models"}
         </button>
         <span className="text-12 text-faint">
-          The test makes one real Search, one Fetch and one model-list call.
+          The test checks the model list, one tiny real chat completion, Search and Fetch.
         </span>
       </div>
 

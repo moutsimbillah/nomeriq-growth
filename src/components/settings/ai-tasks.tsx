@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, LoaderCircle, Plus, Trash2 } from "lucide-react";
 
 import { Notice } from "../ui";
@@ -52,6 +52,7 @@ export function AiTasksCard({
   providers: ProviderOption[];
 }) {
   const [tasks, setTasks] = useState<TaskView[]>(initialTasks);
+  useEffect(() => { setTasks(initialTasks); }, [initialTasks]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);

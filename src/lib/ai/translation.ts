@@ -1,4 +1,5 @@
 import { AppError } from '@/lib/utils';
+import type { DbClient } from '@/lib/db/client';
 
 const MAX_INPUT_CHARS = 30000;
 const MAX_TRANSLATED_CHARS = 120000;
@@ -221,7 +222,7 @@ async function translateWithDeepSeek(original: string): Promise<TranslationResul
  * `null` when nothing is configured, so the environment-based path below still works — that keeps
  * an unconfigured install behaving exactly as before while Settings takes over once it is set.
  */
-async function translateViaRegistry(original: string): Promise<TranslationResult | null> {
+async function translateViaRegistry(original: string, runner?: DbClient): Promise<TranslationResult | null> {
   try {
     const { runChatTask } = await import('@/lib/ai/registry');
     const outcome = await runChatTask('translation', {
@@ -229,7 +230,7 @@ async function translateViaRegistry(original: string): Promise<TranslationResult
       user: original,
       maxTokens: 12000,
       json: true,
-    });
+    }, runner);
     if (!outcome.ok) {
       if (outcome.code === 'provider_unavailable') return null;
       return failure(outcome.code, outcome.reason);
@@ -244,7 +245,7 @@ async function translateViaRegistry(original: string): Promise<TranslationResult
     return null;
   }
 }
-export async function translateToEnglish(original: string): Promise<TranslationResult> {
+export async function translateToEnglish(original: string, runner?: DbClient): Promise<TranslationResult> {
   if (typeof original !== 'string' || original.trim().length === 0) {
     return failure('invalid_input', 'Original text is empty.');
   }
@@ -252,7 +253,7 @@ export async function translateToEnglish(original: string): Promise<TranslationR
     return failure('invalid_input', `Original text exceeds ${MAX_INPUT_CHARS} characters.`);
   }
 
-  const viaSettings = await translateViaRegistry(original);
+  const viaSettings = await translateViaRegistry(original, runner);
   if (viaSettings) return viaSettings;
 
   const provider = (process.env.AI_PROVIDER ?? '').trim().toLowerCase();

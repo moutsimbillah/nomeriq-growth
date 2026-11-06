@@ -11,6 +11,7 @@ import {
 import { recordResearchUsage } from "@/lib/services/research-usage";
 import { AppError } from "@/lib/utils";
 import { fail } from "@/lib/api";
+import { testProviderChat } from "@/lib/ai/provider-test";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +32,10 @@ export async function POST(request: Request) {
     const current = await getDeepSeekPublicSettings();
     let result;
     try {
+      const chat = await testProviderChat({ provider: "deepseek", baseUrl: config.baseUrl, model: config.model }, config.apiKey);
+      if (!chat.ok) throw new AppError(chat.message, 502, chat.code ?? "chat_test_failed");
       result = await testDeepSeekConnection(config);
+      result = { ...result, ok: result.ok && result.fetchOk, message: `${chat.message} ${result.message}` };
     } catch (testError) {
       const message =
         testError instanceof Error ? testError.message : "Connection test failed.";

@@ -157,7 +157,7 @@ export function ReplyComposer({
           result.note ||
             (result.usedAi
               ? "AI suggestion inserted. Edit anything before sending."
-              : "Draft suggestion inserted. This is not a generic pitch; review it against the real thread."),
+              : "Standard template — no AI provider connected"),
         );
       } else {
         setSuggestionNote(result.note || "No suggestion available.");

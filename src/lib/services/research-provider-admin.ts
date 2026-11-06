@@ -2,6 +2,7 @@ import { encryptSecret } from "@/lib/auth/crypto";
 import { cleanBaseUrl, testDeepSeekConnection, type DeepSeekConfig } from "@/lib/deepseek/provider";
 import { decryptSecret } from "@/lib/auth/crypto";
 import { PROVIDER_DEFAULTS, PROVIDER_KINDS } from "@/lib/ai/registry";
+import { testProviderChat } from "@/lib/ai/provider-test";
 import { getDb } from "@/lib/db/client";
 import { AppError } from "@/lib/utils";
 
@@ -32,6 +33,8 @@ interface ProviderRow {
   name: string;
   base_url: string;
   model: string;
+  provider: string;
+  kinds: string;
   encrypted_api_key: string;
   search_path: string | null;
   fetch_path: string | null;
@@ -165,6 +168,11 @@ export async function updateResearchProvider(id: string, patch: ProviderInput): 
   // An empty key means "keep the stored one" — the UI never round-trips the secret.
   const apiKey = (patch.apiKey ?? "").trim();
   if (apiKey) set("encrypted_api_key", encryptSecret(apiKey));
+  if (apiKey || patch.model !== undefined || patch.baseUrl !== undefined || patch.kinds !== undefined) {
+    set("last_test_ok", null);
+    set("last_test_message", null);
+    set("last_tested_at", null);
+  }
 
   if (!assignments.length) return;
 
@@ -196,13 +204,26 @@ export async function testResearchProvider(id: string): Promise<{
   };
 
   try {
-    const test = await testDeepSeekConnection(configFor(row));
-    outcome = { ok: test.ok, message: test.message, models: test.models };
-    discovered = { searchPath: test.searchPath, fetchPath: test.fetchPath };
-  } catch (error) {
+    const config = configFor(row);
+    if (row.kinds !== "search") {
+      const chat = await testProviderChat({ provider: row.provider, baseUrl: config.baseUrl, model: row.model }, config.apiKey);
+      outcome = chat;
+      // Native search adapters for other vendors are part of the research-engine phase.
+      // A model-only row is tested for chat, not rejected for lacking proprietary DeepSeek tools.
+      if (chat.ok && (row.provider === "deepseek" || (row.provider === "custom" && row.kinds === "both"))) {
+        const research = await testDeepSeekConnection(config);
+        outcome = { ok: research.ok && research.fetchOk, message: `${chat.message} ${research.message}`, models: chat.models };
+        discovered = { searchPath: research.searchPath, fetchPath: research.fetchPath };
+      }
+    } else {
+      const test = await testDeepSeekConnection(config);
+      outcome = { ok: test.ok && test.fetchOk, message: test.message, models: test.models };
+      discovered = { searchPath: test.searchPath, fetchPath: test.fetchPath };
+    }
+  } catch {
     outcome = {
       ok: false,
-      message: error instanceof Error ? error.message : "The provider could not be reached.",
+      message: "The provider test failed. Check the provider URL, selected model and credential.",
       models: [],
     };
   }

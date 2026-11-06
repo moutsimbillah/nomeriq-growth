@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { LoaderCircle, Plus, RefreshCw, ShieldCheck, ShieldOff } from "lucide-react";
 
 import { Notice } from "../ui";
@@ -28,6 +29,10 @@ export interface ProviderRowView {
  * guards the catalog's own invariants (kinds valid, Brave search-only and model-free).
  */
 export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
+  const router = useRouter();
+  const [noticeOk, setNoticeOk] = useState(true);
+  const [models, setModels] = useState<string[]>([]);
+  const [rowModels, setRowModels] = useState<Record<string, string[]>>({});
   const [providers, setProviders] = useState<ProviderRowView[]>(initial);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -45,10 +50,12 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
   async function call(label: string, run: () => Promise<{ providers?: ProviderRowView[] } | null>) {
     setError(null);
     setNotice(null);
+    setNoticeOk(true);
     setPending(label);
     try {
       const data = await run();
       if (data?.providers) setProviders(data.providers);
+      router.refresh();
       return data;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "That did not work.");
@@ -80,7 +87,8 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
     );
 
     if (data) {
-      setNotice(`Added ${name}. Test it to confirm the key works.`);
+      setNotice(`Added ${name}. Test it, then choose it under AI actions; testing alone does not assign tasks.`);
+      setModels([]);
       setForm({ name: "", provider: "deepseek", kinds: "both", apiKey: "", baseUrl: "", model: "" });
       setAdding(false);
     }
@@ -116,9 +124,26 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
       apiRequest(`/api/settings/providers/${row.id}/test`, { body: {} }),
     );
     if (data && "message" in data) {
-      const outcome = data as unknown as { ok: boolean; message: string };
+      const outcome = data as unknown as { ok: boolean; message: string; models?: string[] };
+      setNoticeOk(outcome.ok);
+      if (outcome.models) setRowModels(current => ({ ...current, [row.id]: outcome.models! }));
       setNotice(`${row.name}: ${outcome.message}`);
     }
+  }
+
+  async function loadModels() {
+    setPending("models");
+    setError(null);
+    try {
+      const data = await apiRequest("/api/settings/provider-models", {
+        body: { provider: form.provider, baseUrl: form.baseUrl, apiKey: form.apiKey },
+      });
+      const listed = Array.isArray(data.models) ? data.models as string[] : [];
+      setModels(listed);
+      setForm(current => ({ ...current, model: listed.includes(current.model) ? current.model : "" }));
+    } catch {
+      setError("Could not load models. Check the provider URL and credential.");
+    } finally { setPending(null); }
   }
 
   return (
@@ -178,6 +203,16 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
                 <div className="truncate text-12 text-faint">
                   {row.kinds === "search" ? "search only" : row.model} · {row.baseUrl}
                 </div>
+                {rowModels[row.id]?.length > 0 && row.kinds !== "search" && (
+                  <label className="mt-2 block text-12 text-muted">
+                    Model from this provider
+                    <select className="input mt-1 w-full" value={row.model}
+                      onChange={event => void patch(row.id, { model: event.target.value }, `model-${row.id}`)}>
+                      {!rowModels[row.id].includes(row.model) && <option value={row.model}>Choose a listed model…</option>}
+                      {rowModels[row.id].map(model => <option key={model} value={model}>{model}</option>)}
+                    </select>
+                  </label>
+                )}
                 {row.lastTestMessage && (
                   <div
                     className={`text-12 ${row.lastTestOk ? "text-emerald-600" : "text-rose-600"}`}
@@ -246,9 +281,11 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
                 value={form.provider}
                 onChange={(event) => {
                   const choice = PROVIDER_CATALOG[event.target.value];
+                  setModels([]);
                   setForm({
                     ...form,
                     provider: event.target.value,
+                    model: "",
                     kinds: choice ? choice.kinds : form.kinds,
                   });
                 }}
@@ -285,7 +322,7 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
                 type="password"
                 autoComplete="off"
                 value={form.apiKey}
-                onChange={(event) => setForm({ ...form, apiKey: event.target.value })}
+                onChange={(event) => { setModels([]); setForm({ ...form, apiKey: event.target.value, model: "" }); }}
               />
             </div>
             <div>
@@ -297,21 +334,23 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
                 className="input"
                 placeholder="https://api.deepseek.com"
                 value={form.baseUrl}
-                onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
+                onChange={(event) => { setModels([]); setForm({ ...form, baseUrl: event.target.value, model: "" }); }}
               />
             </div>
             <div>
               <label className="label" htmlFor="provider-model">
-                Model {form.kinds === "search" ? "(not used)" : "(optional)"}
+                Model {form.kinds === "search" ? "(not used)" : "(from provider list)"}
               </label>
-              <input
-                id="provider-model"
-                className="input"
-                placeholder={form.kinds === "search" ? "search-only" : "deepseek-flash"}
-                value={form.model}
-                disabled={form.kinds === "search"}
-                onChange={(event) => setForm({ ...form, model: event.target.value })}
-              />
+              <select id="provider-model" className="input" value={form.model}
+                disabled={form.kinds === "search" || models.length === 0}
+                onChange={event => setForm({ ...form, model: event.target.value })}>
+                <option value="">{form.kinds === "search" ? "search-only" : "Load models, then choose…"}</option>
+                {models.map(model => <option key={model} value={model}>{model}</option>)}
+              </select>
+              {form.kinds !== "search" && <button type="button" className="btn mt-2"
+                disabled={!form.apiKey.trim() || pending === "models"} onClick={() => void loadModels()}>
+                {pending === "models" ? "Loading models…" : "Load models"}
+              </button>}
             </div>
           </div>
           <SubmitBar>
@@ -319,7 +358,7 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
               type="button"
               className="btn-primary"
               onClick={() => void add()}
-              disabled={pending === "add"}
+              disabled={!!pending || (form.kinds !== "search" && !models.includes(form.model))}
             >
               {pending === "add" ? (
                 <LoaderCircle size={13} className="spin" />
@@ -333,7 +372,7 @@ export function ProvidersCard({ initial }: { initial: ProviderRowView[] }) {
       )}
 
       <InlineError>{error}</InlineError>
-      {notice && <Notice tone="success">{notice}</Notice>}
+      {notice && <div className="mt-4" data-provider-test-notice><Notice tone={noticeOk ? "success" : "danger"}>{notice}</Notice></div>}
     </div>
   );
 }
