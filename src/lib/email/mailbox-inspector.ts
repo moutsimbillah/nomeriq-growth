@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { parseBounce, type BounceKind } from "./bounces";
+import { getParsedBounceInput, isAutoReply, parseBounceReports } from "./bounces";
 
 /** No runtime services, database bootstrap, mutations or logging in this module. */
 export const NEEDS_REPLY_NAMES = ["CryptoSense AI", "FXPULSE", "Forex Cipher", "Forexearlywarning", "Money Bells", "NeverSleep Forex Signals", "OnwardBTC", "Scope Signals", "Y7Signals", "Zak FX Hub Academy"] as const;
@@ -27,31 +27,16 @@ export function folderLabel(path: string, ordinal: number) { return /^[\w ./\\-]
 
 /** Extract just facts/digests. MIME/raw content stays in the caller's process, never in the report. */
 export function mailFacts(parsed: Row, raw: Buffer, envelope: Row, leads: Row[]): Row {
-  const header = (name: string) => parsed.headerLines?.filter((h: Row) => h.key === name).map((h: Row) => h.line.slice(h.line.indexOf(":") + 1).trim()).join("\n") || "";
   const body = parsed.text || (typeof parsed.html === "string" ? parsed.html.replace(/<[^>]+>/g, " ") : "");
-  // mailparser commonly exposes delivery-status and feedback-report parts as attachments.
-  const reports = (parsed.attachments || []).filter((a: Row) => /message\/(delivery-status|feedback-report)/i.test(a.contentType)).map((a: Row) => a.content?.toString("utf8") || "").join("\n");
   const from = addresses(parsed.from?.value?.map((a: Row) => a.address))[0] || "";
-  const autoReply = /auto-replied/i.test(header("auto-submitted")) || /\b(out of (the )?office|automatic reply|auto.?reply|vacation)\b/i.test(parsed.subject || "");
-  const report = autoReply && !/report-type\s*=\s*(delivery-status|feedback-report)/i.test(header("content-type"))
-    ? { kind: "none" as BounceKind, recipient: null }
-    : parseBounce({ fromEmail: from, subject: parsed.subject || "", bodyText: `${body}\n${reports}\n${raw.toString("utf8")}`, contentType: header("content-type"), headers: Object.fromEntries(["x-failed-recipients", "x-failed-recipient", "final-recipient", "original-recipient", "status", "action", "diagnostic-code"].map(k => [k, header(k)])) });
+  // Parse authoritative MIME parts before excluding automatic replies. Real DSNs may carry
+  // Auto-Submitted: auto-replied and a quoted report-type; their attached original is not evidence.
+  const input = getParsedBounceInput(parsed as any);
+  const deliveryReports = parseBounceReports(input).map(r => ({ kind: r.kind, recipient: r.recipient }));
+  const report = deliveryReports[0] ?? { kind: "none", recipient: null };
+  const autoReply = !deliveryReports.length && isAutoReply(input);
   const signature = body.slice(-4000).toLowerCase();
   const signatureCandidates = leads.filter(p => p.business_name?.length >= 5 && signature.includes(p.business_name.toLowerCase())).map(p => p.id);
-  const deliveryReports: { kind: BounceKind; recipient: string | null }[] = [];
-  if (report.kind !== "none") {
-    // A single DSN may name several recipients, with different permanent/transient outcomes.
-    const decoded = `${body}\n${reports}`;
-    const fields = /^(?:Final-Recipient|Original-Recipient|Removal-Recipient|Original-Rcpt-To)\s*:/im.test(decoded) ? decoded : raw.toString("utf8");
-    const starts = [...fields.matchAll(/^Final-Recipient\s*:/gim)];
-    const seen = new Set<string>();
-    for (let i = 0; i < starts.length; i++) {
-      const part = parseBounce({ fromEmail: from, subject: parsed.subject || "", bodyText: fields.slice(starts[i].index, starts[i + 1]?.index), contentType: header("content-type") });
-      const key = `${part.kind}:${part.recipient}`;
-      if (!seen.has(key) && part.kind !== "none") { seen.add(key); deliveryReports.push({ kind: part.kind, recipient: part.recipient }); }
-    }
-    if (!deliveryReports.length) deliveryReports.push({ kind: report.kind, recipient: report.recipient });
-  }
   return { ...envelope, message_id: parsed.messageId || null, references_json: (Array.isArray(parsed.references) ? parsed.references : parsed.references ? [parsed.references] : []).filter((v: unknown) => typeof v === "string"), in_reply_to: parsed.inReplyTo || null,
     from_email: from, to_emails: addresses([...(parsed.to?.value || []), ...(parsed.cc?.value || [])].map((a: Row) => a.address)),
     subject: parsed.subject || "", when: stamp(parsed.date) || stamp(envelope.internalDate), headerDate: stamp(parsed.date), internalTime: stamp(envelope.internalDate), bodyLength: body.length, bodyDigest: digest(body),
@@ -92,7 +77,7 @@ export function analyze(f: Facts) {
     changed = false;
     for (const m of f.mailbox) {
       guard();
-      if (!m.message_id || m.bounceKind !== "none") continue;
+      if (!m.message_id || m.bounceKind !== "none" || m.autoReply) continue;
       const set = threadOwners.get(m.message_id) || new Set<string>();
       const previous = set.size;
       for (const ref of [m.in_reply_to, ...(m.references_json || [])].filter(Boolean)) for (const id of threadOwners.get(ref) || []) set.add(id);
@@ -155,7 +140,7 @@ export function analyze(f: Facts) {
       // Historical newest-40 cannot be reconstructed from today's retained folder order.
       if (!f.firstSync || !m.internalTime || m.internalTime >= f.firstSync - 31 * 86_400_000) reasons.within_old_window_unexplained++;
     }
-    const simulatedInbound = Math.max(inbound, ...unique.filter(m => m.direction === "inbound" && m.bounceKind === "none" && m.match.id === p.id && m.match.confidence === "exact_thread").map(m => m.when));
+    const simulatedInbound = Math.max(inbound, ...unique.filter(m => m.direction === "inbound" && m.bounceKind === "none" && !m.autoReply && m.match.id === p.id && m.match.confidence === "exact_thread").map(m => m.when));
     const simulatedOutbound = Math.max(outbound, ...exact.map(m => m.when));
     const simulated = simulatedInbound ? simulatedOutbound > simulatedInbound ? "Waiting_chronology_only" : "Needs_reply_chronology_only" : "unknown";
     return { leadName, complete: true, currentNeedsReplyByChronology: inbound > outbound, portalInbound: db.filter(m => m.direction === "inbound").length, portalOutbound: db.filter(m => m.direction === "outbound").length,
@@ -184,13 +169,13 @@ export function analyze(f: Facts) {
       if (currentDigest === mail[0].bodyDigest && currentLength === mail[0].bodyLength) legacyCounts.currentEqualsMailbox++; else legacyCounts.currentDiffersFromMailbox++;
     } else { legacyCounts.identifiedNeedsMatchingCohort++; if (db.length === 1 && owner(db[0], f.conversations) && db[0].conversation_id) legacyCounts.nowMatched++; }
   }
-  const aliases = unique.filter(m => m.direction === "inbound" && m.bounceKind === "none" && !f.emails.some(e => e.normalized_email === m.from_email)).map((m, index) => {
+  const aliases = unique.filter(m => m.direction === "inbound" && m.bounceKind === "none" && !m.autoReply && !f.emails.some(e => e.normalized_email === m.from_email)).map((m, index) => {
     guard();
     const current = new Set(f.messages.filter(d => m.occurrences.some((x: Row) => stored(x, [d], f.accountId))).map(d => owner(d, f.conversations)).filter(Boolean));
     const domain = m.from_email.split("@")[1];
     const domainIds = /^(gmail|outlook|yahoo|hotmail|icloud|protonmail)\./i.test(domain || "") ? [] : f.leads.filter(p => p.domain_key === domain).map(p => p.id);
     const candidates = m.match.confidence === "exact_thread" ? [m.match.id] : [...new Set([...domainIds, ...m.signatureCandidates])];
-    return { ordinal: index + 1, currentOwner: current.size === 1 ? name([...current][0]) : null, candidates: candidates.map((id: string) => name(id)).filter(Boolean), confidence: m.match.confidence === "exact_thread" ? "exact_thread" : candidates.length === 1 ? domainIds.length ? "domain_candidate_only" : "signature_name_candidate_only" : candidates.length ? "ambiguous_candidate" : "no_candidate", linked: current.size === 1 };
+    return { ordinal: index + 1, currentOwner: current.size === 1 ? name([...current][0]) : null, candidates: candidates.map((id: string) => name(id)).filter(Boolean), confidence: m.match.confidence === "exact_thread" ? "exact_thread" : candidates.length === 1 ? domainIds.length ? "domain_candidate_only" : "signature_name_candidate_only" : candidates.length ? "ambiguous_candidate" : "no_candidate", threadMatched: current.size === 1, linked: false };
   });
   return { scannedOccurrences: f.mailbox.length, uniqueMessages: unique.length, ambiguousMessages: unique.filter(m => m.match.ambiguous).length,
     unattributedOutbound: unique.filter(m => m.direction === "outbound" && !m.match.id).length,

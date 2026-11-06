@@ -25,6 +25,8 @@ export interface BounceReport {
   status: string | null;
   /** The human diagnostic, trimmed and bounded. Never rendered as a link or acted on. */
   diagnostic: string | null;
+  /** Recognized report without reconstructable failure classification. */
+  incomplete?: boolean;
 }
 
 /** How many transient failures one address may collect before it is suppressed. */
@@ -43,7 +45,66 @@ const REPORT_SENDER = /^(mailer-?daemon|postmaster|no-?reply|bounces?|mail-daemo
 const BOUNCE_SUBJECT =
   /(undeliverable|undelivered|delivery (status|failure|has failed|notification)|returned mail|mail delivery (failed|subsystem)|failure notice|delivery report|non[- ]?delivery)/i;
 
-const COMPLAINT_SUBJECT = /(abuse report|complaint about message|feedback report)/i;
+export interface BounceInput {
+  fromEmail: string;
+  subject: string;
+  bodyText: string;
+  contentType?: string | null;
+  headers?: Record<string, string | null | undefined>;
+}
+
+/** Extract machine-readable parts before mailparser discards their MIME structure. */
+export function getParsedBounceInput(parsed: import("mailparser").ParsedMail): BounceInput {
+  const headers: Record<string, string> = {};
+  for (const name of [...HEADERS, "auto-submitted", "content-type", "x-autoreply", "x-autorespond"]) {
+    const value = parsed.headers.get(name);
+    if (typeof value === "string") headers[name] = value;
+    else if (value && typeof value === "object" && "value" in value) {
+      const entry = value as { value: string; params?: Record<string, string> };
+      headers[name] = entry.value + Object.entries(entry.params ?? {}).map(([k, v]) => `; ${k}=${v}`).join("");
+    }
+  }
+  const parts = (parsed.attachments ?? []).filter((a) => /message\/(delivery-status|feedback-report)/i.test(a.contentType));
+  const contentType = parts.some((a) => /feedback-report/i.test(a.contentType))
+    ? "multipart/report; report-type=feedback-report"
+    : parts.length ? "multipart/report; report-type=delivery-status" : headers["content-type"];
+  return {
+    fromEmail: parsed.from?.value[0]?.address ?? "",
+    subject: parsed.subject ?? "",
+    bodyText: [parsed.text ?? "", ...parts.map((a) => a.content.toString("utf8"))].join("\n\n"),
+    contentType,
+    headers,
+  };
+}
+
+export function isAutoReply(value: BounceInput | import("mailparser").ParsedMail): boolean {
+  const input = "bodyText" in value ? value : getParsedBounceInput(value);
+  const headers = Object.fromEntries(Object.entries(input.headers ?? {}).filter(([, v]) => typeof v === "string").map(([k, v]) => [k.toLowerCase(), v]));
+  const auto = headers["auto-submitted"]?.trim().toLowerCase();
+  return Boolean((auto && auto !== "no") || headers["x-autoreply"] ||
+    headers["x-autorespond"] || /out[ -]of[ -]office|automatic reply|auto[ -]?reply|vacation/i.test(input.subject));
+}
+
+/** One independent decision per recipient block; never borrow another recipient's status. */
+export function parseBounceReports(input: BounceInput): BounceReport[] {
+  const headers = Object.fromEntries(Object.entries(input.headers ?? {}).filter(([, v]) => typeof v === "string").map(([k, v]) => [k.toLowerCase(), v]));
+  input = { ...input, headers, contentType: input.contentType ?? headers["content-type"] };
+  const mimeDsn = /message\/delivery-status|report-type\s*=\s*["']?delivery-status/i.test(input.contentType ?? "");
+  const structuredFields = /^Final-Recipient\s*:/im.test(input.bodyText) && /^(Status\s*:\s*[245]\.|Action\s*:\s*(failed|delayed))/im.test(input.bodyText);
+  const vacationSubject = /out[ -]of[ -]office|vacation|automatic reply|auto[ -]?reply/i.test(input.subject);
+  if (isAutoReply(input) && !mimeDsn && !(structuredFields && REPORT_SENDER.test(input.fromEmail) && !vacationSubject)) return [];
+  if (structuredFields && REPORT_SENDER.test(input.fromEmail) && !vacationSubject) input = { ...input, contentType: input.contentType ?? "message/delivery-status" };
+  const body = input.bodyText.replace(/\r\n/g, "\n").replace(/\n[ \t]+/g, " ");
+  const blocks = body.split(/(?=^Final-Recipient\s*:)/im);
+  const recipientBlocks = blocks.filter((b) => /^Final-Recipient\s*:/im.test(b));
+  const reports = (recipientBlocks.length ? recipientBlocks : [body]).map((bodyText) => parseSingleBounce({ ...input, bodyText }));
+  return reports.filter((r) => r.kind !== "none").filter((r, i, all) => all.findIndex((other) => other.recipient === r.recipient) === i);
+}
+
+/** Compatibility wrapper for existing single-recipient callers. */
+export function parseBounce(input: BounceInput): BounceReport {
+  return parseBounceReports(input)[0] ?? { kind: "none", recipient: null, status: null, diagnostic: null };
+}
 
 const HEADERS = [
   "x-failed-recipients",
@@ -99,13 +160,7 @@ function kindFromAction(action: string | null): BounceKind | null {
  * the content type. Nothing is fetched and nothing is assumed about the shape of a provider's report;
  * a message that looks human is `none`, which is the safe answer.
  */
-export function parseBounce(input: {
-  fromEmail: string;
-  subject: string;
-  bodyText: string;
-  contentType?: string | null;
-  headers?: Record<string, string | null | undefined>;
-}): BounceReport {
+function parseSingleBounce(input: BounceInput): BounceReport {
   const subject = input.subject ?? "";
   const body = input.bodyText ?? "";
   const from = (input.fromEmail ?? "").toLowerCase();
@@ -113,8 +168,8 @@ export function parseBounce(input: {
 
   // A complaint (ARF) is read the same way and outranks the DSN reading when both appear.
   const complaint =
-    /report-type\s*=\s*feedback-report/i.test(input.contentType ?? "") ||
-    COMPLAINT_SUBJECT.test(subject);
+    /report-type\s*=\s*["']?feedback-report|message\/feedback-report/i.test(input.contentType ?? "") ||
+    /^Feedback-Type\s*:\s*(abuse|fraud)/im.test(body);
   const looksLikeBounce = dsnType || BOUNCE_SUBJECT.test(subject);
   const fromReportMachine = REPORT_SENDER.test(from);
 
@@ -172,6 +227,7 @@ export function parseBounce(input: {
     recipient: recipient ?? addressFrom(bodyField("X-Failed-Recipients")),
     status,
     diagnostic: diagnostic ? clean(diagnostic).slice(0, 300) : null,
+    ...(!kindFromStatus(status) && !kindFromAction(action) ? { incomplete: true } : {}),
   };
 }
 
