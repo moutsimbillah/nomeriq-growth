@@ -409,6 +409,7 @@ export async function suggestConversationReply(
     classification: conversation.classification,
     turns,
     settings,
+    conversationId: id,
   });
   return { ...suggestion, recipient: conversation.replyTo };
 }

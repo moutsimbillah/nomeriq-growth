@@ -23,6 +23,63 @@ import {
 import { apiRequest, InlineError, Modal, SubmitBar } from "./client-ui";
 import { Notice } from "./ui";
 
+/** "Written by <provider> · <model>", noting a fallback when the assigned provider did not answer. */
+export function writtenByLabel(result: { provider?: string | null; model?: string | null; fallbackUsed?: string | null }): string | null {
+  const who = [result.provider, result.model].filter((part) => part && String(part).trim()).join(" · ");
+  if (!who) return null;
+  return `Written by ${who}${result.fallbackUsed ? " (fallback — the assigned provider did not answer)" : ""}`;
+}
+
+/** The body with each sentence that needs the founder's confirmation highlighted in place. */
+export function HighlightedDraft({ body, sentences }: { body: string; sentences: string[] }) {
+  const parts: { text: string; mark: boolean }[] = [];
+  let rest = body;
+  while (rest) {
+    const hits = sentences
+      .map((sentence) => ({ sentence, at: rest.indexOf(sentence) }))
+      .filter((hit) => hit.at >= 0)
+      .sort((a, b) => a.at - b.at);
+    const first = hits[0];
+    if (!first) { parts.push({ text: rest, mark: false }); break; }
+    if (first.at > 0) parts.push({ text: rest.slice(0, first.at), mark: false });
+    parts.push({ text: first.sentence, mark: true });
+    rest = rest.slice(first.at + first.sentence.length);
+  }
+  return (
+    <div className="whitespace-pre-wrap break-anywhere rounded-lg border border-amber/30 bg-[#fffaf0] px-3 py-2 text-12 leading-5 text-ink" data-confirm-preview>
+      {parts.map((part, index) =>
+        part.mark
+          ? <mark key={index} className="rounded bg-amber/30 px-0.5 text-ink" data-confirm-sentence>{part.text}</mark>
+          : <span key={index}>{part.text}</span>,
+      )}
+    </div>
+  );
+}
+
+/** A small link that opens exactly what the AI received. */
+export function ContextUsedLink({ context }: { context: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" className="text-12 font-semibold text-muted underline underline-offset-4 hover:text-ink" onClick={() => setOpen(true)} data-context-used>
+        Context used
+      </button>
+      <Modal open={open} onClose={() => setOpen(false)} title="Context used" description="Exactly what the AI received for this result: instructions first, then the request." width="lg">
+        <pre className="max-h-[65dvh] overflow-auto whitespace-pre-wrap break-anywhere rounded-lg border border-line bg-white/70 p-3 text-12 leading-5 text-ink">{context}</pre>
+      </Modal>
+    </>
+  );
+}
+
+interface SuggestionMeta {
+  writtenBy: string | null;
+  englishBody: string | null;
+  language: string | null;
+  confirmSentences: string[];
+  context: string | null;
+  aiBody: string;
+}
+
 export function MarkConversationRead({ conversationId }: { conversationId: string }) {
   const sent = useRef(false);
   useEffect(() => {
@@ -138,6 +195,7 @@ export function ReplyComposer({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [suggestionNote, setSuggestionNote] = useState<string | null>(null);
+  const [meta, setMeta] = useState<SuggestionMeta | null>(null);
   const [copied, setCopied] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -145,6 +203,7 @@ export function ReplyComposer({
     setPending("suggest");
     setError(null);
     setSuggestionNote(null);
+    setMeta(null);
     try {
       const result = await apiRequest(
         `/api/conversations/${conversationId}/suggest-reply`,
@@ -153,6 +212,14 @@ export function ReplyComposer({
       if (result.body) {
         setSubject(result.subject || defaultSubject);
         setBody(result.body);
+        setMeta(result.usedAi ? {
+          writtenBy: writtenByLabel(result),
+          englishBody: result.englishBody ?? null,
+          language: result.language ?? null,
+          confirmSentences: Array.isArray(result.confirmSentences) ? result.confirmSentences : [],
+          context: result.context ?? null,
+          aiBody: result.body,
+        } : null);
         setSuggestionNote(
           result.note ||
             (result.usedAi
@@ -220,6 +287,7 @@ export function ReplyComposer({
       setBody("");
       setAttachments([]);
       setSuggestionNote(null);
+      setMeta(null);
       setNotice(
         sandbox || result.status === "sandbox"
           ? "Reply recorded in the sandbox mailbox. No message left Growth."
@@ -313,6 +381,36 @@ export function ReplyComposer({
         {suggestionNote && (
           <div className="rounded-lg border border-line bg-lime/10 px-2.5 py-2 text-12 leading-4 text-forest">
             {suggestionNote}
+          </div>
+        )}
+
+        {meta && (
+          <div className="space-y-2" data-suggestion-meta>
+            {meta.confirmSentences.length > 0 && body === meta.aiBody && (
+              <div className="space-y-1">
+                <p className="text-12 font-semibold text-amber">
+                  Highlighted: {meta.confirmSentences.length === 1 ? "this sentence needs" : "these sentences need"} your confirmation before sending.
+                </p>
+                <HighlightedDraft body={body} sentences={meta.confirmSentences} />
+              </div>
+            )}
+            {meta.confirmSentences.length > 0 && body !== meta.aiBody && (
+              <p className="text-12 text-amber">
+                Needs your confirmation: {meta.confirmSentences.map((sentence) => `“${sentence}”`).join(" ")}
+              </p>
+            )}
+            {meta.englishBody && (
+              <details className="rounded-lg border border-line bg-white/60 px-2.5 py-2 text-12" open>
+                <summary className="cursor-pointer font-semibold text-ink">
+                  English version (for you — the reply above is in {meta.language ?? "the prospect's language"} and is what gets sent)
+                </summary>
+                <p className="mt-1.5 whitespace-pre-wrap break-anywhere leading-5 text-muted">{meta.englishBody}</p>
+              </details>
+            )}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-12 text-faint">
+              {meta.writtenBy && <span data-written-by>{meta.writtenBy}</span>}
+              {meta.context && <ContextUsedLink context={meta.context} />}
+            </div>
           </div>
         )}
 
@@ -417,6 +515,22 @@ export function SimulateReplyButton({
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [drafting, setDrafting] = useState(false);
+  const [aiMeta, setAiMeta] = useState<{ writtenBy: string | null; context: string; text: string } | null>(null);
+
+  async function draftWithAi() {
+    setDrafting(true);
+    setError(null);
+    try {
+      const result = await apiRequest(`/api/conversations/${conversationId}/simulate-reply/draft`, { method: "POST" });
+      setBody(result.body);
+      setAiMeta({ writtenBy: writtenByLabel(result), context: result.context, text: result.body });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not draft a test reply.");
+    } finally {
+      setDrafting(false);
+    }
+  }
 
   async function simulate() {
     setPending(true);
@@ -456,12 +570,24 @@ export function SimulateReplyButton({
             It is not a real prospect reply.
           </Notice>
           <div>
-            <label className="label">Test message</label>
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <label className="label">Test message</label>
+              <button type="button" className="btn-secondary btn-xs" onClick={draftWithAi} disabled={drafting || pending} data-simulate-ai>
+                {drafting ? <LoaderCircle size={10} className="spin" /> : <WandSparkles size={10} />}
+                {drafting ? "Writing as the prospect…" : "Draft with AI (as the prospect)"}
+              </button>
+            </div>
             <textarea
               className="textarea min-h-[130px]"
               value={body}
               onChange={(event) => setBody(event.target.value)}
             />
+            {aiMeta && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-12 text-faint">
+                <span data-written-by>{body === aiMeta.text ? aiMeta.writtenBy : `${aiMeta.writtenBy ?? "AI draft"} — edited by you`}</span>
+                <ContextUsedLink context={aiMeta.context} />
+              </div>
+            )}
           </div>
           <InlineError>{error}</InlineError>
           <SubmitBar>

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Languages, Mail, Paperclip, Reply } from "lucide-react";
+import { Languages, Mail, Paperclip, Reply, Undo2 } from "lucide-react";
 import { apiRequest } from "@/components/client-ui";
 import { TextWithLinks } from "@/components/message-links";
 import { translationViewState } from "@/lib/email/translation-view";
@@ -143,6 +143,19 @@ export function ConversationMessage(props: ConversationMessageProps) {
               {pending ? "Translating…" : "Translate"}
             </button>
           )}
+          {view.canFlip && (
+            <button
+              type="button"
+              onClick={() => setShowingOriginal(view.showingTranslation)}
+              className="btn-secondary btn-xs whitespace-nowrap"
+              data-translation-flip
+              aria-pressed={view.showingTranslation}
+              title={view.showingTranslation ? "Show the message exactly as it arrived" : "Show the English translation again"}
+            >
+              {view.showingTranslation ? <Undo2 size={10} /> : <Languages size={10} />}
+              {view.showingTranslation ? "Show original" : "Show translation"}
+            </button>
+          )}
           <div>
             {timeLabel}
             {!inbound && (
@@ -156,16 +169,12 @@ export function ConversationMessage(props: ConversationMessageProps) {
         <div className="mb-2 text-12 font-semibold text-ink">{subject}</div>
 
         {view.showingTranslation && (
-          <p className="mb-1.5 flex flex-wrap items-center gap-1.5 text-12 text-muted">
-            <span>{view.translatedLabel}</span>
-            <span className="text-faint">·</span>
-            <button
-              type="button"
-              onClick={() => setShowingOriginal(true)}
-              className="font-semibold text-ink underline underline-offset-4"
-            >
-              Show original
-            </button>
+          <p
+            className="mb-2 inline-flex flex-wrap items-center gap-1.5 rounded-full border border-forest/20 bg-lime/15 px-2.5 py-0.5 text-12 font-semibold text-forest"
+            data-translated-badge
+          >
+            <Languages size={11} />
+            <span>{view.translatedLabel} — showing English</span>
           </p>
         )}
         {inbound && !view.showingTranslation && bodyKind !== "pending" && (
@@ -176,6 +185,12 @@ export function ConversationMessage(props: ConversationMessageProps) {
         <div className="email-body min-w-0 break-anywhere text-muted">
           <TextWithLinks text={view.text} />
         </div>
+
+        {view.producedBy && (
+          <p className="mt-1.5 text-12 text-faint" data-translated-by>
+            {view.producedBy}
+          </p>
+        )}
 
         {bodyKind === "excerpt" && (
           <p className="mt-1 text-12 text-faint">

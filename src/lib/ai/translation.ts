@@ -235,7 +235,9 @@ async function translateViaRegistry(original: string, runner?: DbClient): Promis
       if (outcome.code === 'provider_unavailable') return null;
       return failure(outcome.code, outcome.reason);
     }
-    return validateTranslation(outcome.text, outcome.provider, outcome.model, original);
+    // The provider is recorded by its Settings name (e.g. "Growth-Chat-Search"), which is what the
+    // founder recognises — and it is the one that actually answered, fallback included.
+    return validateTranslation(outcome.text, outcome.providerName ?? outcome.provider, outcome.model, original);
   } catch (error) {
     // A refusal from Settings (a search-only provider chosen for translation, say) is reported; a
     // database that cannot be reached falls through to the environment rather than breaking.

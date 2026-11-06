@@ -177,6 +177,8 @@ export interface Draft {
   recipientEmail: string;
   aiGenerated: boolean;
   aiModel: string | null;
+  /** The provider that wrote it, by its Settings name (migration 025's `ai_provider`). */
+  aiProvider?: string | null;
   /** The connector that saved this draft, as it named itself. Reporting only. */
   sourceClient: string | null;
   sourceAgent: AgentTag | null;

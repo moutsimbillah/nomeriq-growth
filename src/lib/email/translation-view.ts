@@ -18,6 +18,10 @@ export interface TranslationViewState {
   showTranslateButton: boolean;
   /** The `Translated from <language> · Show original` line, or null when the body is the original. */
   translatedLabel: string | null;
+  /** "Translated by <provider> · <model>", whenever a stored translation exists. */
+  producedBy: string | null;
+  /** True when a stored translation exists, so the header can offer Show original / Show translation. */
+  canFlip: boolean;
 }
 
 function languageName(code: string): string {
@@ -47,6 +51,9 @@ export function translationViewState(input: {
   // A blank translation would empty the message, which is worse than showing the original.
   const translated = stored && stored.translatedText.trim().length > 0 ? stored : null;
   const english = input.stored?.status === "english";
+  const producedBy = translated
+    ? `Translated by ${[translated.provider, translated.model].filter((part) => part && String(part).trim()).join(" · ") || "an AI provider"}`
+    : null;
 
   if (translated && !input.showingOriginal) {
     const language = translated.sourceLanguage
@@ -57,6 +64,8 @@ export function translationViewState(input: {
       showingTranslation: true,
       showTranslateButton: false,
       translatedLabel: language ? `Translated from ${language}` : "Translated",
+      producedBy,
+      canFlip: true,
     };
   }
 
@@ -65,7 +74,10 @@ export function translationViewState(input: {
     showingTranslation: false,
     // An English result settles it: the provider said so, so no button. Otherwise the server's hint
     // decides, and it has already excluded outbound messages and empty bodies.
-    showTranslateButton: input.offers && !english,
+    // With a stored translation the header offers "Show translation" instead of a second Translate.
+    showTranslateButton: input.offers && !english && !translated,
     translatedLabel: null,
+    producedBy,
+    canFlip: Boolean(translated),
   };
 }

@@ -311,7 +311,7 @@ export async function generateDraftForProspect(input: {
       await tx.query(
         `UPDATE drafts SET
           subject = $1, body = $2, recipient_email = $3, status = 'draft',
-          ai_generated = $4, ai_model = $5, product_truth_version = $6,
+          ai_generated = $4, ai_model = $5, ai_provider = $10, product_truth_version = $6,
           warnings = $7::jsonb, founder_edited = false, approved_at = null,
           approved_by = null, updated_at = $8
          WHERE id = $9`,
@@ -325,6 +325,7 @@ export async function generateDraftForProspect(input: {
           JSON.stringify(warnings),
           now,
           existing.id,
+          generated.provider ?? null,
         ],
       );
     });
@@ -334,9 +335,9 @@ export async function generateDraftForProspect(input: {
       await db.query(
         `INSERT INTO drafts (
           id, prospect_id, research_job_id, kind, sequence, status, subject, body,
-          recipient_email, ai_generated, ai_model, product_truth_version, warnings,
+          recipient_email, ai_generated, ai_model, ai_provider, product_truth_version, warnings,
           created_by_type, created_by_user_id, created_at, updated_at
-        ) VALUES ($1, $2, $3, 'first_contact', 0, 'draft', $4, $5, $6, $7, $8,
+        ) VALUES ($1, $2, $3, 'first_contact', 0, 'draft', $4, $5, $6, $7, $8, $14,
           $9, $10::jsonb, $11, $12, $13, $13)`,
         [
           draftId,
@@ -352,6 +353,7 @@ export async function generateDraftForProspect(input: {
           input.actorType,
           input.actorUserId ?? null,
           now,
+          generated.provider ?? null,
         ],
       );
     } catch (error) {

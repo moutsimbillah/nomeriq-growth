@@ -54,10 +54,15 @@ describe("the Translate button sits in the message header", () => {
     expect(thread).toContain('text: body.kind === "pending" ? "" : body.text');
   });
 
-  it("labels a translated body and offers Show original", () => {
+  it("labels a translated body and offers Show original as a header button, both ways", () => {
     expect(message).toContain("view.translatedLabel");
-    expect(message).toContain("Show original");
-    expect(message).toContain("onClick={() => setShowingOriginal(true)}");
+    expect(message).toContain("data-translated-badge");
+    // One header button flips both ways, in the same style as Translate.
+    expect(message).toContain("data-translation-flip");
+    expect(message).toContain('"Show original" : "Show translation"');
+    expect(message).toContain("onClick={() => setShowingOriginal(view.showingTranslation)}");
+    // Who produced the translation is shown under the body.
+    expect(message).toContain("view.producedBy");
   });
 
   it("flips the body in place from one text value", () => {

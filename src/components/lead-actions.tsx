@@ -809,8 +809,8 @@ export function DraftEditor({
             {draft.sourceAgent
               ? `Drafted by ${agentPillLabel(draft.sourceAgent, draft.sourceClient)}`
               : draft.aiGenerated
-                ? `AI-assisted · ${draft.sourceClient || draft.aiModel || "model"}`
-                : "Deterministic writer"}{" "}
+                ? `Written by ${[draft.aiProvider, draft.aiModel].filter(Boolean).join(" · ") || draft.sourceClient || "AI"}`
+                : "No-AI fallback — standard template"}{" "}
             · {words} words
             {draft.founderEdited ? " · founder-edited" : ""}
           </p>

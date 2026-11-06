@@ -118,6 +118,7 @@ export function mapDraft(row: any): Draft {
     recipientEmail: row.recipient_email,
     aiGenerated: Boolean(row.ai_generated),
     aiModel: row.ai_model,
+    aiProvider: row.ai_provider ?? null,
     sourceClient: row.source_client ?? null,
     sourceAgent: (row.source_agent ?? null) as AgentTag | null,
     sourceChannel: (row.source_channel ?? null) as ChannelTag | null,

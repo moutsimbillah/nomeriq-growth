@@ -79,9 +79,11 @@ describe("the body flips in place", () => {
     expect(view.text).toBe(ORIGINAL);
     expect(view.showingTranslation).toBe(false);
     expect(view.translatedLabel).toBeNull();
-    // Flipping back leaves the way to flip forward again: the button returns, and pressing it
-    // serves the cached row rather than calling the AI a second time.
-    expect(view.showTranslateButton).toBe(true);
+    // Flipping back leaves the way to flip forward again: "Show translation" serves the cached row,
+    // so there is no second Translate button that could call the AI again.
+    expect(view.canFlip).toBe(true);
+    expect(view.showTranslateButton).toBe(false);
+    expect(view.producedBy).toMatch(/^Translated by /);
   });
 });
 

@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db/client";
-import { buildFollowUp } from "@/lib/ai/writer";
+import { generateFollowUp } from "@/lib/ai/writer";
 import { validateDraft } from "@/lib/ai/claims";
 import { AppError, iso, normalizeEmail, truncate } from "@/lib/utils";
 import { addedWindow, calendarDaysBetween } from "@/lib/dates/timezone";
@@ -192,7 +192,7 @@ export async function prepareFollowUpDraftOutcome(input: {
        AND status IN ('sent', 'draft', 'approved') ORDER BY sequence ASC`,
       [prospect.id],
     );
-    const generated = buildFollowUp({
+    const generated = await generateFollowUp({
       prospect,
       originalSubject: original.subject,
       previousBody: original.body,
@@ -205,7 +205,7 @@ export async function prepareFollowUpDraftOutcome(input: {
       body: generated.body,
       recipientEmail: candidate.contactEmail,
       truth,
-      aiGenerated: false,
+      aiGenerated: generated.usedAi,
     });
     const comparable = generated.body.replace(/\s+/g, " ").trim();
     if (
@@ -220,9 +220,9 @@ export async function prepareFollowUpDraftOutcome(input: {
       await db.query(
         `INSERT INTO drafts (
           id, prospect_id, research_job_id, kind, sequence, status, subject, body,
-          recipient_email, ai_generated, ai_model, product_truth_version, warnings,
+          recipient_email, ai_generated, ai_model, ai_provider, product_truth_version, warnings,
           created_by_type, created_by_user_id, created_at, updated_at
-        ) VALUES ($1, $2, $3, 'follow_up', $4, 'draft', $5, $6, $7, false, null,
+        ) VALUES ($1, $2, $3, 'follow_up', $4, 'draft', $5, $6, $7, $11, $12, $13,
           $8, $9::jsonb, 'founder', $10, now(), now())`,
         [
           id,
@@ -235,6 +235,9 @@ export async function prepareFollowUpDraftOutcome(input: {
           truth.version,
           JSON.stringify(warnings),
           input.userId,
+          generated.usedAi,
+          generated.model,
+          generated.provider ?? null,
         ],
       );
       await db.query(
