@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireEditor } from "@/lib/auth/session";
 import { assertSameOrigin } from "@/lib/auth/request";
 import { getProspect, updateProspect } from "@/lib/services/prospects";
+import { getLeadModel } from "@/lib/services/lead-model";
 import { fail, readJson } from "@/lib/api";
 import type { Category, PipelineStatus } from "@/lib/types";
 
@@ -22,7 +23,8 @@ export async function GET(
         { status: 404 },
       );
     }
-    return NextResponse.json({ ok: true, data: prospect });
+    const leadModel = await getLeadModel(prospect.id);
+    return NextResponse.json({ ok: true, data: { ...prospect, leadModel } });
   } catch (error) {
     return fail(error);
   }

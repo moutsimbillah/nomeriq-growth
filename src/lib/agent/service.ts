@@ -17,6 +17,8 @@ import {
 } from "@/lib/services/research";
 import { getProductTruth, getWorkspaceSettings } from "@/lib/services/settings";
 import { savePreparedFirstContactDraft } from "@/lib/services/drafts";
+import { getLeadModel } from "@/lib/services/lead-model";
+import { leadIntakeSchema, intakeAssessmentSchema, intakeAudienceSchema, intakeContactRouteSchema } from "@/lib/leads/intake";
 import {
   getConversation,
   listConversations,
@@ -59,15 +61,15 @@ const sourceSchema = z.object({
 
 const saveProspectSchema = z.object({
   businessName: z.string().min(2),
-  websiteUrl: z.string().min(3),
+  websiteUrl: z.string().min(3).optional().nullable(),
   country: z.string().optional().nullable(),
-  categories: z.array(categoryEnum).min(1),
+  categories: z.array(categoryEnum),
   signalDescription: z.string().min(10),
   pricingDetails: z.string().optional().nullable(),
   evidenceSummary: z.string().optional().nullable(),
   researchNotes: z.string().optional().nullable(),
-  email: z.string().min(3),
-  emailSourceUrl: z.string().min(4),
+  email: z.string().min(3).optional().nullable(),
+  emailSourceUrl: z.string().min(4).optional().nullable(),
   emailSourceType: z
     .enum(["official_website", "official_social", "official_directory", "public_profile"])
     .optional(),
@@ -82,7 +84,8 @@ const saveProspectSchema = z.object({
   aliases: z.array(z.string()).optional(),
   researchJobId: z.string().uuid().optional().nullable(),
   qualificationStatus: z.enum(["verified", "candidate"]).optional(),
-});
+  ...leadIntakeSchema.shape,
+}).strict();
 
 const saveDraftSchema = z.object({
   prospectId: z.string().uuid(),
@@ -306,7 +309,7 @@ async function executeAgentAction(
       if (!prospectId) throw new AppError("prospectId is required.");
       const prospect = await getProspect(prospectId);
       if (!prospect) throw new AppError("Prospect not found.", 404, "prospect_not_found");
-      result = { prospect };
+      result = { prospect: { ...prospect, leadModel: await getLeadModel(prospect.id) } };
       break;
     }
     case "check_duplicate": {
@@ -339,7 +342,7 @@ async function executeAgentAction(
       const parsed = saveProspectSchema.safeParse(args);
       if (!parsed.success) failValidation(parsed.error);
       const data = parsed.data;
-      if (!isEmail(data.email)) {
+      if (data.email ? !isEmail(data.email) : !data.leadAssessment) {
         throw new AppError("A valid published contact email is required.");
       }
       const saved = await saveProspect({
@@ -359,9 +362,13 @@ async function executeAgentAction(
         duplicate: saved.duplicate,
         matchedOn: saved.matchedOn ?? [],
         prospect: saved.prospect,
+        leadModel: saved.leadModel ?? null,
         message: saved.duplicate
           ? "A matching prospect already existed. Return this existing record; do not create another."
-          : "Prospect saved. Create one personalized first-contact draft next.",
+          : saved.leadModel?.tier === "category_b" ? "Alternative-contact research record saved. Never prepare or send email for Category B."
+          : saved.leadModel?.tier === "excluded" ? "Excluded business saved with its reason. Do not research it again or prepare outreach."
+          : saved.leadModel?.eligibility === "eligible" ? "Evidence-backed prospect saved. Review its existing setup and credible product-fit benefit before proposing a draft for founder review."
+          : "Record saved without complete modern qualification. Do not invent a tier, platform gap or priority; complete its evidence assessment before outreach.",
       };
       break;
     }
@@ -712,24 +719,24 @@ export const TOOL_DEFINITIONS = [
   {
     name: "save_prospect",
     description:
-      "Save a verified commercial trading-signal provider with public evidence, published email and email source URL. Returns an existing record instead of creating a duplicate.",
+      "Save an evidence-backed signal seller, an alternative-contact research record or an excluded business with its reason. Tier and fit are derived from sourced leadAssessment, audiences and contactRoutes. No email is required for Category B/excluded records. Existing duplicates are returned unchanged; this tool cannot send, override founder decisions or run jobs.",
     inputSchema: {
       type: "object",
       properties: {
         businessName: { type: "string" },
-        websiteUrl: { type: "string" },
+        websiteUrl: { type: ["string", "null"] },
         country: { type: "string" },
         categories: {
           type: "array",
           items: { type: "string", enum: CATEGORIES.map((c) => c.value) },
-          minItems: 1,
+          minItems: 0,
         },
         signalDescription: { type: "string" },
         pricingDetails: { type: "string" },
         evidenceSummary: { type: "string" },
         researchNotes: { type: "string" },
-        email: { type: "string" },
-        emailSourceUrl: { type: "string" },
+        email: { type: ["string", "null"] },
+        emailSourceUrl: { type: ["string", "null"] },
         emailSourceType: {
           type: "string",
           enum: ["official_website", "official_social", "official_directory", "public_profile"],
@@ -744,6 +751,9 @@ export const TOOL_DEFINITIONS = [
         aliases: { type: "array", items: { type: "string" } },
         researchJobId: { type: "string" },
         qualificationStatus: { type: "string", enum: ["verified", "candidate"] },
+        leadAssessment: z.toJSONSchema(intakeAssessmentSchema, {io:"input"}),
+        audiences: {type:"array",maxItems:100,items:z.toJSONSchema(intakeAudienceSchema,{io:"input"})},
+        contactRoutes: {type:"array",maxItems:100,items:z.toJSONSchema(intakeContactRouteSchema,{io:"input"})},
         sources: {
           type: "array",
           minItems: 1,
@@ -762,11 +772,8 @@ export const TOOL_DEFINITIONS = [
       },
       required: [
         "businessName",
-        "websiteUrl",
         "categories",
         "signalDescription",
-        "email",
-        "emailSourceUrl",
         "sources",
       ],
       additionalProperties: false,

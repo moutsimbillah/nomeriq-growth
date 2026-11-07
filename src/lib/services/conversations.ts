@@ -24,6 +24,7 @@ import { saveSentCopyForMessage } from "@/lib/email/sent-copy";
 import { getProspect } from "./prospects";
 import { newestMessageFirst } from "./message-order";
 import { getRecipientPolicy, isRealProspectMessage } from "./recipient-policy";
+import { assertLeadOutreachAllowed } from "./lead-outreach-guard";
 import { getMessageTranslation } from "./message-translations";
 import { getProductTruth, getWorkspaceSettings } from "./settings";
 import {
@@ -431,6 +432,7 @@ export async function sendReply(input: SendReplyInput) {
   }
   const conversation = await getConversation(input.conversationId);
   if (!conversation) throw new AppError("Conversation not found.", 404);
+  await assertLeadOutreachAllowed(conversation.prospect.id);
   if (!conversation.sendable) {
     throw new AppError(
       conversation.blockedReason ?? "No eligible linked recipient. No email can be sent.",
@@ -802,6 +804,7 @@ export async function simulateInboundReply(input: {
   if (!body) throw new AppError("Write the simulated reply.");
   const now = new Date().toISOString();
   const messageId = `<sim-${crypto.randomUUID()}@growth.local>`;
+  const messageDbId = crypto.randomUUID();
   await db.query(
     `INSERT INTO messages (
       id, conversation_id, prospect_id, account_id, direction, source,
@@ -814,7 +817,7 @@ export async function simulateInboundReply(input: {
       '[]'::jsonb, false, 'sandbox_simulation'
     )`,
     [
-      crypto.randomUUID(),
+      messageDbId,
       conversation.id,
       conversation.prospect.id,
       lastOutbound.rows[0].account_id,
@@ -836,6 +839,7 @@ export async function simulateInboundReply(input: {
     body,
     `Re: ${lastOutbound.rows[0].subject}`,
     now,
+    messageDbId,
   );
   await db.query(
     `INSERT INTO audit_log

@@ -78,6 +78,7 @@ const FOLLOW_UP_CANDIDATE_SQL = `
     ) activity ON true
     WHERE ($1::uuid IS NULL OR p.id=$1) AND p.archived_at IS NULL
       AND NOT p.do_not_contact AND NOT p.follow_up_excluded
+      AND NOT EXISTS (SELECT 1 FROM prospect_rejection_recommendations r WHERE r.prospect_id=p.id)
       AND p.status NOT IN ('replied','interested','demo','proposal','won','lost')
       AND NOT EXISTS (SELECT 1 FROM conversations co WHERE co.prospect_id=p.id AND co.classification IN ('unsubscribe','not_interested'))
       AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.active=true AND s.reason <> 'bounce'

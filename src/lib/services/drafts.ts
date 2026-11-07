@@ -20,6 +20,7 @@ import { getProductTruth, getWorkspaceSettings } from "./settings";
 import { recordDraftSaved } from "./research";
 import { recordResearchUsage } from "./research-usage";
 import { mapDraft } from "./mappers";
+import { assertLeadOutreachAllowed } from "./lead-outreach-guard";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -232,6 +233,7 @@ export async function generateDraftForProspect(input: {
 }): Promise<Draft> {
   const prospect = await getProspect(input.prospectId);
   if (!prospect) throw new AppError("Prospect not found.", 404, "prospect_not_found");
+  await assertLeadOutreachAllowed(prospect.id);
   if (prospect.qualificationStatus !== "verified") {
     throw new AppError(
       "A draft can only be prepared for a verified prospect.",
@@ -413,6 +415,7 @@ export async function savePreparedFirstContactDraft(input: {
 }): Promise<{ draft: Draft; preserved: boolean }> {
   const prospect = await getProspect(input.prospectId);
   if (!prospect) throw new AppError("Prospect not found.", 404, "prospect_not_found");
+  await assertLeadOutreachAllowed(prospect.id);
   if (prospect.qualificationStatus !== "verified" || !prospect.contactEmail) {
     throw new AppError(
       "A draft needs a verified prospect with a source-confirmed email.",
@@ -536,6 +539,7 @@ export async function saveDraft(input: {
   if (draft.status === "cancelled" || draft.status === "discarded") {
     throw new AppError("This draft is no longer active.", 409);
   }
+  await assertLeadOutreachAllowed(draft.prospectId);
   if (input.actorType !== "founder" && draft.founderEdited) {
     throw new AppError(
       "The founder has edited this draft. Research assistants cannot overwrite it.",

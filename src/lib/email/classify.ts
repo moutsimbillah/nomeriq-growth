@@ -56,6 +56,8 @@ const RULES: {
       /\bpass (?:for now|on this)\b/i,
       /\bwe(?:'re| are) (?:all )?(?:set|good)\b/i,
       /\bno need\b/i,
+      /\bnot (?:currently )?(?:looking|seeking|open) (?:for|to) (?:any |new |external )?(?:partnerships?|integrations?|platforms?)\b/i,
+      /\b(?:do not|don't|don’t|won't|won’t) (?:want|need|accept|pursue) (?:any |new |external )?(?:partnerships?|integrations?|platforms?)\b/i,
     ],
   },
   {

@@ -25,6 +25,13 @@ export interface LeadFilters {
   addedFrom?: string;
   addedTo?: string;
   hasEmail?: boolean;
+  /** Evidence-backed reach/contactability, independent of product fit. */
+  tier?: "tier_1" | "other" | "email_no_website" | "category_b" | "excluded" | "unassessed";
+  productFit?: "high" | "medium" | "unknown" | "low";
+  minPriority?: number;
+  /** "unknown" selects no verified audience; numbers are a minimum largest single account. */
+  audience?: "unknown" | number;
+  sort?: "priority" | "updated";
 }
 
 export type LeadFilterParams = Record<string, string | undefined>;
@@ -35,6 +42,14 @@ const ADDED_SET = new Set<string>(ADDED_RANGES);
 const STATUS_SET = new Set<string>(PIPELINE);
 const CATEGORY_SET = new Set<string>(CATEGORIES.map((category) => category.value));
 const QUALIFICATION_SET = new Set<string>(["candidate", "verified", "rejected"]);
+const TIER_SET = new Set(["tier_1", "other", "email_no_website", "category_b", "excluded", "unassessed"]);
+const FIT_SET = new Set(["high", "medium", "unknown", "low"]);
+
+function nonNegativeInteger(value: string | undefined, max: number): number | undefined {
+  if (!value || !/^\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed <= max ? parsed : undefined;
+}
 
 /** A profile id, or the word "default" for a lead that is not tied to one yet. */
 const SENDER_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -83,6 +98,11 @@ export function readLeadFilters(params: LeadFilterParams): LeadFilters {
     addedFrom: added === "custom" ? addedFrom : undefined,
     addedTo: added === "custom" ? addedTo : undefined,
     hasEmail: params.hasEmail === "yes" ? true : params.hasEmail === "no" ? false : undefined,
+    tier: params.tier && TIER_SET.has(params.tier) ? params.tier as LeadFilters["tier"] : undefined,
+    productFit: params.productFit && FIT_SET.has(params.productFit) ? params.productFit as LeadFilters["productFit"] : undefined,
+    minPriority: nonNegativeInteger(params.minPriority, 100),
+    audience: params.audience === "unknown" ? "unknown" : nonNegativeInteger(params.audience, Number.MAX_SAFE_INTEGER),
+    sort: params.sort === "updated" || params.sort === "priority" ? params.sort : undefined,
   };
 }
 
@@ -99,6 +119,11 @@ export function leadFilterQuery(filters: LeadFilters): string {
   if (filters.added) search.set("added", filters.added);
   if (filters.sender) search.set("sender", filters.sender);
   if (filters.hasEmail !== undefined) search.set("hasEmail", filters.hasEmail ? "yes" : "no");
+  if (filters.tier) search.set("tier", filters.tier);
+  if (filters.productFit) search.set("productFit", filters.productFit);
+  if (filters.minPriority !== undefined) search.set("minPriority", String(filters.minPriority));
+  if (filters.audience !== undefined) search.set("audience", String(filters.audience));
+  if (filters.sort) search.set("sort", filters.sort);
   if (filters.added === "custom") {
     if (filters.addedFrom) search.set("from", filters.addedFrom);
     if (filters.addedTo) search.set("to", filters.addedTo);
@@ -119,5 +144,9 @@ export function countActiveFilters(filters: LeadFilters): number {
     filters.added,
     filters.sender,
     filters.hasEmail !== undefined ? "hasEmail" : undefined,
+    filters.tier,
+    filters.productFit,
+    filters.minPriority !== undefined ? "minPriority" : undefined,
+    filters.audience !== undefined ? "audience" : undefined,
   ].filter(Boolean).length;
 }

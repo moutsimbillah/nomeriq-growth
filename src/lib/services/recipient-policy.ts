@@ -1,5 +1,6 @@
 import { getDb, type DbClient } from "@/lib/db/client";
 import { AppError, isEmail, json, normalizeEmail } from "@/lib/utils";
+import { getLeadOutreachBlock } from "./lead-outreach-guard";
 
 /** Data only: never creates address associations or clears historical suppressions. */
 export interface RecipientEmail {
@@ -43,8 +44,9 @@ export async function getRecipientPolicy(prospectId: string, client?: DbClient):
   const suppressions = (await db.query<Row>(`SELECT * FROM suppressions WHERE active = true AND
     (prospect_id = $1 OR normalized_email = ANY($2::text[]))`, [prospectId, stored.map(e => e.normalized_email)])).rows;
   const unsubscribed = (await db.query(`SELECT 1 FROM conversations WHERE prospect_id = $1 AND classification = 'unsubscribe' LIMIT 1`, [prospectId])).rows.length > 0;
+  const outreachBlock = await getLeadOutreachBlock(prospectId, db);
   const wholeStop = prospect.archived_at ? 'This lead is archived.' : prospect.do_not_contact ? 'Sending is suppressed: this lead is marked do not contact.'
-    : unsubscribed || suppressions.some(s => s.reason !== 'bounce') ? 'This lead has an active opt-out, complaint or manual suppression.' : null;
+    : unsubscribed || suppressions.some(s => s.reason !== 'bounce') ? 'This lead has an active opt-out, complaint or manual suppression.' : outreachBlock?.reason ?? null;
   const emails: RecipientEmail[] = stored.map(e => {
     const addressStop = suppressions.some(s => s.normalized_email === e.normalized_email);
     const active = linked(e.id);

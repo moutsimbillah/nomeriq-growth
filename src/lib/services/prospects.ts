@@ -30,6 +30,12 @@ import type {
 } from "@/lib/types";
 import { mapEmail, mapProspect, mapProspectDetail, mapSource } from "./mappers";
 import { newestMessageFirst } from "./message-order";
+import { leadModelConditions, leadPriorityOrderSql } from "@/lib/leads/query";
+import type { LeadFilters } from "@/lib/leads/leadFilters";
+import { leadIntakeSchema, type LeadIntake } from "@/lib/leads/intake";
+import type { LeadModel } from "@/lib/leads/model";
+import { saveLeadAssessment, saveAudienceObservation, saveContactRoute } from "./lead-model";
+import { businessDomain, sharedProfileKey, socialKeys as identitySocialKeys, isSharedIdentityHost, type SocialIdentity } from "@/lib/leads/identity";
 import { refreshResearchJobStatus } from "./research";
 import { getWorkspaceSettings } from "./settings";
 
@@ -62,9 +68,10 @@ export async function checkDuplicate(input: {
   youtubeUrl?: string | null;
   xUrl?: string | null;
   telegramUrl?: string | null;
-}): Promise<DuplicateMatch[]> {
-  const db = await getDb();
-  const domainKeys = [domainFromUrl(input.websiteUrl)].filter(
+  socialAccounts?: SocialIdentity[];
+}, client?: DbClient): Promise<DuplicateMatch[]> {
+  const db = client ?? await getDb();
+  const domainKeys = [businessDomain(input.websiteUrl)].filter(
     (value): value is string => Boolean(value),
   );
   const allEmails = (input.emails ?? [])
@@ -94,7 +101,7 @@ export async function checkDuplicate(input: {
   if (domainKeys.length) {
     const rows = await db.query<any>(
       `${PROSPECT_SELECT}
-       WHERE p.archived_at IS NULL AND p.domain_key = ANY($1::text[])
+       WHERE p.domain_key = ANY($1::text[])
        LIMIT 5`,
       [domainKeys],
     );
@@ -104,8 +111,7 @@ export async function checkDuplicate(input: {
   if (emails.length) {
     const rows = await db.query<any>(
       `${PROSPECT_SELECT}
-       WHERE p.archived_at IS NULL
-         AND EXISTS (
+       WHERE EXISTS (
            SELECT 1 FROM prospect_emails pe
            WHERE pe.prospect_id = p.id
              AND pe.normalized_email = ANY($1::text[])
@@ -119,8 +125,7 @@ export async function checkDuplicate(input: {
   if (aliasKeys.length) {
     const rows = await db.query<any>(
       `${PROSPECT_SELECT}
-       WHERE p.archived_at IS NULL
-         AND EXISTS (
+       WHERE p.name_key = ANY($1::text[]) OR EXISTS (
            SELECT 1 FROM prospect_aliases pa
            WHERE pa.prospect_id = p.id
              AND pa.alias_key = ANY($1::text[])
@@ -131,39 +136,39 @@ export async function checkDuplicate(input: {
     addRows(rows.rows, "business name or alias");
   }
 
-  const socials = {
-    instagram_key: normalizeHandle(input.instagramUrl, "instagram"),
-    youtube_key: normalizeHandle(input.youtubeUrl, "youtube"),
-    x_key: normalizeHandle(input.xUrl, "x"),
-    telegram_key: normalizeHandle(input.telegramUrl, "telegram"),
-  };
+  const accounts = identitySocialKeys(input);
+  const socials = { instagram_key: accounts.instagram, youtube_key: accounts.youtube, x_key: accounts.x, telegram_key: accounts.telegram };
   const socialLabels: Record<string, string> = {
     instagram_key: "Instagram handle",
     youtube_key: "YouTube channel",
     x_key: "X handle",
     telegram_key: "Telegram handle",
   };
-  const activeSocials = Object.entries(socials).filter(([, value]) => value);
+  const activeSocials = Object.entries(socials).filter(([, values]) => values.length);
   if (activeSocials.length) {
     const rows = await db.query<any>(
       `${PROSPECT_SELECT}
-       WHERE p.archived_at IS NULL AND (
+       WHERE (
          p.instagram_key = ANY($1::text[]) OR
          p.youtube_key = ANY($2::text[]) OR
          p.x_key = ANY($3::text[]) OR
-         p.telegram_key = ANY($4::text[])
+         p.telegram_key = ANY($4::text[]) OR
+         EXISTS (SELECT 1 FROM prospect_audience_observations a WHERE a.prospect_id=p.id AND (
+           (a.platform='instagram' AND a.account_key=ANY($1::text[])) OR
+           (a.platform='youtube' AND a.account_key=ANY($2::text[])) OR
+           (a.platform='telegram' AND a.account_key=ANY($4::text[]))))
        )
        LIMIT 5`,
       [
-        socials.instagram_key ? [socials.instagram_key] : [],
-        socials.youtube_key ? [socials.youtube_key] : [],
-        socials.x_key ? [socials.x_key] : [],
-        socials.telegram_key ? [socials.telegram_key] : [],
+        accounts.instagram,
+        accounts.youtube,
+        accounts.x,
+        accounts.telegram,
       ],
     );
     for (const row of rows.rows) {
       const reasons = activeSocials
-        .filter(([column, value]) => row[column] && row[column] === value)
+        .filter(([column, values]) => row[column] && values.includes(row[column]))
         .map(([column]) => socialLabels[column]);
       addRows([row], reasons[0] ?? "social identity");
       const match = found.get(row.id);
@@ -175,10 +180,14 @@ export async function checkDuplicate(input: {
     }
   }
 
+  const profiles = [...new Set([input.websiteUrl,input.instagramUrl,input.youtubeUrl,input.telegramUrl,input.xUrl,...(input.socialAccounts??[]).map(a=>a.url)].map(sharedProfileKey).filter((v):v is string=>Boolean(v)))];
+  if (profiles.length) addRows((await db.query<any>(`${PROSPECT_SELECT} WHERE lower(regexp_replace(regexp_replace(split_part(p.website_url,'?',1),'^https?://(www\\.)?','','i'),'/$',''))=ANY($1::text[]) LIMIT 5`, [profiles])).rows, "official shared-host profile");
   return [...found.values()];
 }
 
-export interface SaveProspectInput {
+class ConcurrentProspectDuplicate extends Error {}
+
+export interface SaveProspectInput extends LeadIntake {
   businessName: string;
   websiteUrl?: string | null;
   country?: string | null;
@@ -215,6 +224,7 @@ export interface SaveProspectResult {
   duplicate: boolean;
   prospect: ProspectSummary | ProspectDetail;
   matchedOn?: string[];
+  leadModel?: LeadModel;
 }
 
 function httpUrl(value: string | null | undefined, field: string): string {
@@ -237,7 +247,8 @@ export async function saveProspect(
   if (!businessName || businessName.length < 2) {
     throw new AppError("A genuine business name is required.");
   }
-  if (!Array.isArray(input.categories) || input.categories.length === 0) {
+  const intake = leadIntakeSchema.parse({leadAssessment:input.leadAssessment,audiences:input.audiences,contactRoutes:input.contactRoutes});
+  if (!Array.isArray(input.categories) || !input.categories.length && !intake.leadAssessment) {
     throw new AppError("Select at least one verified trading category.");
   }
   const allowedCategories = new Set([
@@ -251,17 +262,24 @@ export async function saveProspect(
     throw new AppError("One or more trading categories are invalid.");
   }
 
-  const qualification = input.qualificationStatus ?? "verified";
+  const qualification = intake.leadAssessment ? "candidate" : input.qualificationStatus ?? "verified";
+  let savedQualification: "candidate" | "verified" | "rejected" = qualification;
+  let leadModel: LeadModel | undefined;
   // Every row records where it came from. An explicit tag wins; otherwise the actor type decides.
   const tags = tagsFromActorType(input.actorType);
   const websiteUrl = input.websiteUrl
     ? normalizeWebsiteUrl(input.websiteUrl)
     : null;
-  const domainKey = domainFromUrl(websiteUrl);
+  const domainKey = businessDomain(websiteUrl);
   const email = input.email?.trim() ? normalizeEmail(input.email) : null;
+  if (intake.leadAssessment && email) {
+    if (!isEmail(email)) throw new AppError("Only a valid, publicly published business email can be saved.");
+    httpUrl(input.emailSourceUrl,"Published email source URL");
+  }
+  const socialAccounts = intake.audiences.map(a=>({platform:a.platform,url:a.accountUrl}));
 
   if (qualification === "verified") {
-    if (!websiteUrl) {
+    if (!websiteUrl || isSharedIdentityHost(websiteUrl)) {
       throw new AppError("A verified lead needs an official website.");
     }
     if (!email || !isEmail(email)) {
@@ -293,6 +311,7 @@ export async function saveProspect(
     youtubeUrl: input.youtubeUrl,
     xUrl: input.xUrl,
     telegramUrl: input.telegramUrl,
+    socialAccounts,
   });
   if (duplicate.length) {
     if (input.researchJobId) {
@@ -328,6 +347,10 @@ export async function saveProspect(
 
   try {
     await db.transaction(async (tx) => {
+      // Serialize identity writers and recheck through THIS tx, including archived/excluded leads.
+      await tx.query("LOCK TABLE prospects IN SHARE ROW EXCLUSIVE MODE");
+      const raced = await checkDuplicate({ businessName, websiteUrl, emails: email ? [email] : [], aliases: input.aliases, instagramUrl: input.instagramUrl, youtubeUrl: input.youtubeUrl, xUrl: input.xUrl, telegramUrl: input.telegramUrl, socialAccounts }, tx);
+      if (raced.length) throw new ConcurrentProspectDuplicate();
       await tx.query(
         `INSERT INTO prospects (
           id, business_name, name_key, website_url, domain_key, country, categories,
@@ -443,6 +466,18 @@ export async function saveProspect(
         );
       }
 
+      if (intake.leadAssessment) {
+        for (const audience of intake.audiences) await saveAudienceObservation(id,{...audience,provenanceKey:crypto.randomUUID()},tx);
+        for (const route of intake.contactRoutes) await saveContactRoute(id,{...route,provenanceKey:crypto.randomUUID()},tx);
+        leadModel = await saveLeadAssessment(id,{
+          ...intake.leadAssessment, sourceKind:"research", sourceAgent:input.sourceAgent ?? tags.agent,
+          sourceReference:input.actorUserId ? `portal-user:${input.actorUserId}` : input.actorKeyId ? `agent-key:${input.actorKeyId}` : null,
+          provenanceKey:crypto.randomUUID(),
+        },tx);
+        savedQualification = leadModel.eligibility === "eligible" ? "verified" : leadModel.eligibility === "excluded" ? "rejected" : "candidate";
+        await tx.query(`UPDATE prospects SET qualification_status=$2,verified_at=CASE WHEN $2='verified' THEN now() ELSE NULL END,
+          status=CASE WHEN $2='verified' THEN 'verified' ELSE 'new' END,rejection_reason=$3 WHERE id=$1`,[id,savedQualification,leadModel.exclusionReason]);
+      }
       if (input.researchJobId) {
         await tx.query(
           `INSERT INTO research_events
@@ -451,7 +486,7 @@ export async function saveProspect(
           [
             crypto.randomUUID(),
             input.researchJobId,
-            qualification === "verified" ? "verified_saved" : "candidate_saved",
+            savedQualification === "verified" ? "verified_saved" : "candidate_saved",
             id,
             JSON.stringify({ businessName, categories: input.categories }),
             input.actorType ?? "founder",
@@ -460,7 +495,7 @@ export async function saveProspect(
       }
     });
   } catch (error) {
-    if (isUniqueViolation(error)) {
+    if (isUniqueViolation(error) || error instanceof ConcurrentProspectDuplicate) {
       const afterRace = await checkDuplicate({
         businessName,
         websiteUrl,
@@ -470,6 +505,7 @@ export async function saveProspect(
         youtubeUrl: input.youtubeUrl,
         xUrl: input.xUrl,
         telegramUrl: input.telegramUrl,
+        socialAccounts,
       });
       if (afterRace.length) {
         if (input.researchJobId) {
@@ -504,7 +540,7 @@ export async function saveProspect(
   }
   const created = await getProspect(id);
   if (!created) throw new AppError("Prospect could not be loaded.", 500);
-  return { created: true, duplicate: false, prospect: created };
+  return { created: true, duplicate: false, prospect: created, ...(leadModel ? {leadModel} : {}) };
 }
 
 async function recordDuplicateRejection(
@@ -558,6 +594,11 @@ export async function getProspect(
 }
 
 export interface ProspectFilters {
+  tier?: LeadFilters["tier"];
+  productFit?: LeadFilters["productFit"];
+  minPriority?: number;
+  audience?: "unknown" | number;
+  sort?: "priority" | "updated";
   query?: string;
   status?: string;
   qualification?: string;
@@ -656,6 +697,7 @@ export async function getProspectOriginFacets(
     conditions.push(`NOT EXISTS (SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id)`);
   }
 
+  conditions.push(leadModelConditions(filters, params));
   const where = conditions.join(" AND ");
 
   // Each filter as a clause another axis can carry. A clause pushes its parameter onto the array it
@@ -849,6 +891,7 @@ function prospectWhere(filters: ProspectFilters): {
   }
   const added = addedCondition(filters, "p.created_at", params);
   if (added) conditions.push(added);
+  conditions.push(leadModelConditions(filters, params));
   return { conditions, params };
 }
 
@@ -879,7 +922,7 @@ export async function listProspects(
   const result = await db.query<any>(
     `${PROSPECT_SELECT}
      WHERE ${conditions.join(" AND ")}
-     ORDER BY p.updated_at DESC
+     ORDER BY ${filters.sort === "priority" ? leadPriorityOrderSql() : "p.updated_at DESC,p.id"}
      LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}`,
     queryParams,
   );
@@ -928,7 +971,7 @@ export async function listProspectsPage(
   const result = await db.query<any>(
     `${PROSPECT_SELECT}
      WHERE ${conditions.join(" AND ")}
-     ORDER BY p.updated_at DESC
+     ORDER BY ${filters.sort === "priority" ? leadPriorityOrderSql() : "p.updated_at DESC,p.id"}
      LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length}`,
     queryParams,
   );
@@ -1041,7 +1084,7 @@ export async function updateProspect(
       ? normalizeWebsiteUrl(input.websiteUrl)
       : null;
     add("website_url", website);
-    add("domain_key", domainFromUrl(website));
+    add("domain_key", businessDomain(website));
   }
   for (const [field, column] of Object.entries(FIELD_MAP)) {
     if (field in input) {
@@ -1073,6 +1116,11 @@ export async function updateProspect(
   params.push(id);
   try {
     await db.transaction(async (tx) => {
+      if (["businessName","websiteUrl","instagramUrl","youtubeUrl","xUrl","telegramUrl"].some(key => key in input)) {
+        await tx.query("LOCK TABLE prospects IN SHARE ROW EXCLUSIVE MODE");
+        const raced = await checkDuplicate({ businessName: input.businessName ?? existing.businessName, websiteUrl: input.websiteUrl === undefined ? existing.websiteUrl : input.websiteUrl, aliases: existing.aliases, instagramUrl: input.instagramUrl === undefined ? existing.instagramUrl : input.instagramUrl, youtubeUrl: input.youtubeUrl === undefined ? existing.youtubeUrl : input.youtubeUrl, xUrl: input.xUrl === undefined ? existing.xUrl : input.xUrl, telegramUrl: input.telegramUrl === undefined ? existing.telegramUrl : input.telegramUrl }, tx);
+        if (raced.some(match => match.prospect.id !== id)) throw new AppError("Those changes match another existing business.", 409, "duplicate");
+      }
       await tx.query(
         `UPDATE prospects SET ${sets.join(", ")} WHERE id = $${params.length}`,
         params,

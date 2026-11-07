@@ -30,6 +30,9 @@ import {
   StatusBadge,
 } from "@/components/ui";
 import { AddLeadButton } from "@/components/lead-actions";
+import { LeadQualificationPills, AudiencePills, PriorityLabel } from "@/components/lead-qualification";
+import { LeadModelFilterFields } from "@/components/lead-model-filter-fields";
+import { getLeadModels } from "@/lib/services/lead-model";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { CATEGORIES, PIPELINE, PIPELINE_LABELS, type Category } from "@/lib/types";
 
@@ -59,6 +62,7 @@ export default async function LeadsPage({
     listEmailAccounts(),
   ]);
   const prospects = page.rows;
+  const models = await getLeadModels(prospects.map(p => p.id));
   const total = page.total;
   const moreSearch = new URLSearchParams(leadFilterQuery(filters).replace(/^\?/, ""));
   moreSearch.set("limit", String(Math.min(page.limit + PROSPECT_PAGE_SIZE, total)));
@@ -275,6 +279,7 @@ export default async function LeadsPage({
               Unknown ({facets.channels.unknown ?? 0})
             </option>
           </select>
+          <LeadModelFilterFields params={params} />
           <button type="submit" className="btn-secondary">
             <Filter size={13} />
             Apply
@@ -305,7 +310,7 @@ export default async function LeadsPage({
         </div>
         <div className="flex items-center gap-1.5 text-12 text-faint">
           <SlidersHorizontal size={11} />
-          Sorted by most recently updated
+          {filters.sort === "priority" ? "Sorted by priority · fit breaks ties" : "Sorted by most recently updated"}
         </div>
       </div>
 
@@ -336,20 +341,18 @@ export default async function LeadsPage({
             <table className="table min-w-[640px]">
               <thead>
                 <tr>
-                  {/* Widths total 100%, sized so no cell and no header label has to clip at 1024: the
-                      stage pill and the UPDATED header are the two that set the floor. */}
-                  <th className="w-[16%]">Business</th>
-                  <th className="w-[18%]">Agent</th>
-                  <th className="w-[12%]">Markets</th>
-                  <th className="w-[14%]">Contact</th>
-                  <th className="w-[16%]">Stage</th>
-                  <th className="w-[11%]">Next action</th>
-                  <th className="w-[13%] text-right">Updated</th>
+                  <th className="w-[26%]">Business · fit · priority</th>
+                  <th className="w-[15%]">Agent</th>
+                  <th className="w-[8%]">Markets</th>
+                  <th className="w-[15%]">Contact · audience</th>
+                  <th className="w-[12%]">Stage</th>
+                  <th className="w-[12%]">Next action</th>
+                  <th className="w-[12%] text-right">Updated</th>
                 </tr>
               </thead>
               <tbody>
                 {prospects.map((prospect) => (
-                  <tr key={prospect.id}>
+                  <tr key={prospect.id} data-lead-id={prospect.id} className={models.get(prospect.id)!.productFit === "high" ? "bg-emerald-50/40" : undefined}>
                     <td>
                       <Link href={`/leads/${prospect.id}`} className="group flex items-start gap-2.5">
                         <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-paper text-12 font-bold text-forest">
@@ -378,6 +381,10 @@ export default async function LeadsPage({
                           </span>
                         </span>
                       </Link>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <LeadQualificationPills model={models.get(prospect.id)!} />
+                        <PriorityLabel model={models.get(prospect.id)!} />
+                      </div>
                     </td>
                     <td className="align-top">
                       <div className="flex flex-col items-start gap-1">
@@ -424,6 +431,7 @@ export default async function LeadsPage({
                           No email
                         </span>
                       )}
+                      <div className="mt-2"><AudiencePills accounts={models.get(prospect.id)!.audiences} /></div>
                     </td>
                     <td>
                       <StatusBadge status={prospect.status} />

@@ -56,6 +56,10 @@ import {
   PipelineCard,
 } from "@/components/lead-actions";
 import { formatDate, formatDateTime, relativeTime } from "@/lib/utils";
+import { LeadQualificationPills, AudiencePills, PriorityLabel, ProductFitPanel, ContactRoutes } from "@/components/lead-qualification";
+import { getLeadModel } from "@/lib/services/lead-model";
+import { latestOfferRejection } from "@/lib/services/lead-rejections";
+import { getLeadOutreachBlock } from "@/lib/services/lead-outreach-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -68,13 +72,15 @@ export default async function LeadDetailPage({
   const prospect = await getProspect(id);
   if (!prospect) notFound();
 
-  const [draft, conversation, drafts, account, settings, addressStatuses] = await Promise.all([
+  const [draft, conversation, drafts, account, settings, addressStatuses, model, rejection] = await Promise.all([
     getFirstContactDraft(id),
     getConversationForProspect(id),
     listDraftsForProspect(id),
     getDefaultEmailAccount().catch(() => null),
     getWorkspaceSettings(),
     getAddressDeliveryStatuses(prospect.id),
+    getLeadModel(id),
+    latestOfferRejection(id),
   ]);
   const profileAccounts = await listEmailAccounts();
   const profileLabelById = senderLabels(profileAccounts);
@@ -97,6 +103,8 @@ export default async function LeadDetailPage({
   const sandboxMode = envSandbox || sendingProfile?.provider === "sandbox";
   const followUps = drafts.filter((item) => item.kind === "follow_up");
   const blockedReasons: string[] = [];
+  const tierBlock = await getLeadOutreachBlock(prospect.id);
+  if (tierBlock) blockedReasons.push(tierBlock.reason);
   if (!sendingProfile)
     blockedReasons.push(
       "This lead has no sending profile yet. Pick the mailbox it is sent from on the lead page.",
@@ -161,6 +169,8 @@ export default async function LeadDetailPage({
         title={prospect.businessName}
         titleAside={
           <span className="flex flex-wrap items-center gap-x-2.5 gap-y-2">
+            <LeadQualificationPills model={model} />
+            <PriorityLabel model={model} />
             {prospect.qualificationStatus === "verified" && (
               <span className="inline-flex items-center gap-1 rounded-full border border-forest/15 bg-lime/35 px-2.5 py-1 text-12 font-bold uppercase tracking-[0.1em] text-forest">
                 <BadgeCheck size={11} /> Verified business
@@ -194,17 +204,17 @@ export default async function LeadDetailPage({
               >
                 Locked to {pinnedLabel} — already emailed from it
               </span>
-            ) : (
+            ) : !tierBlock ? (
               <SendingProfileControl
                 prospectId={prospect.id}
                 currentId={prospect.sendingProfileId ?? ""}
                 profiles={profileOptions}
               />
-            )}
-            <FollowUpExclusionControl
+            ) : null}
+            {!tierBlock && !rejection ? <FollowUpExclusionControl
               prospectId={prospect.id}
               excluded={prospect.followUpExcluded}
-            />
+            /> : <span className="text-13 font-medium text-muted">Automatic follow-ups stopped</span>}
             {prospect.sourceChannel ? (
               <span className="text-13 font-medium text-muted">
                 via {CHANNEL_LABELS[prospect.sourceChannel]}
@@ -245,6 +255,14 @@ export default async function LeadDetailPage({
 
       <div className="grid gap-4 xl:grid-cols-[1.45fr_1fr] [&>*]:min-w-0">
         <div className="space-y-4">
+          {rejection && <section className="rounded-2xl border border-amber-700/25 bg-amber-50 p-5" aria-label="Closed Lost recommendation">
+            <h2 className="text-16 font-bold text-ink">Recommend Closed/Lost — awaiting your confirmation</h2>
+            <p className="mt-2 text-13 text-muted">{rejection.reason}</p>
+            <blockquote className="mt-3 whitespace-pre-wrap border-l-2 border-amber-700/30 pl-3 text-13 text-ink">{rejection.objection}</blockquote>
+            <p className="mt-2 text-12 text-faint">Original reply preserved · {formatDateTime(rejection.recordedAt, settings.timezone)} · Confirm Lost using the stage controls; no automatic stage change.</p>
+          </section>}
+          <ProductFitPanel model={model} />
+          {(model.tier === "category_b" || model.tier === "email_no_website" || model.contactRoutes.length > 0) && <ContactRoutes routes={model.contactRoutes} />}
           <Card className="p-5">
             <SectionHeading
               title="Contact and verification"
@@ -267,12 +285,12 @@ export default async function LeadDetailPage({
                         </div>
                       </div>
                     </div>
-                    <a
+                    {!tierBlock && <a
                       href={`mailto:${prospect.contactEmail}`}
                       className="btn-secondary btn-xs"
                     >
                       <Mail size={11} /> Compose externally
-                    </a>
+                    </a>}
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-12 text-muted">
                     <span className="inline-flex items-center gap-1">
@@ -306,6 +324,7 @@ export default async function LeadDetailPage({
             </div>
 
             <div className="mt-4">
+              <AudiencePills accounts={model.audiences} />
               <dl>
                 <DataRow label="Address delivery status">
                   <ul className="min-w-0 space-y-2 break-anywhere">
@@ -533,8 +552,11 @@ export default async function LeadDetailPage({
         </div>
 
         <div className="space-y-4">
-          <LeadReplyRecipient prospectId={prospect.id} />
-          <DraftEditor
+          {!tierBlock && <LeadReplyRecipient prospectId={prospect.id} />}
+          {tierBlock ? <Card className="p-5">
+            <SectionHeading title="Email outreach blocked" description={tierBlock.reason} />
+            {draft && <details className="mt-3 text-12 text-muted"><summary>Retained historical draft — read only</summary><p className="mt-2 font-semibold">{draft.subject}</p><p className="mt-2 whitespace-pre-wrap">{draft.body}</p></details>}
+          </Card> : <DraftEditor
             prospectId={prospect.id}
             businessName={prospect.businessName}
             initialDraft={draft}
@@ -543,7 +565,7 @@ export default async function LeadDetailPage({
             canSend={blockedReasons.length === 0}
             sendBlockedReason={blockedReasons[0] || null}
             liveMode={!sandboxMode}
-          />
+          />}
 
           <PipelineCard prospect={prospect} />
 

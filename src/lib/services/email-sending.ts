@@ -32,6 +32,7 @@ import { messageRealTime, newestMessageFirst } from "./message-order";
 import { recordFounderEnteredEmail } from "./prospects";
 import { getWorkspaceSettings } from "./settings";
 import { getRecipientPolicy } from "./recipient-policy";
+import { assertLeadOutreachAllowed } from "./lead-outreach-guard";
 import { realFollowUpInboundSql } from "./agent-followups";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -219,6 +220,7 @@ async function checkRecipientSafety(
     [prospectId],
   );
   if (!prospect.rows[0]) throw new AppError("Prospect not found.", 404);
+  await assertLeadOutreachAllowed(prospectId, db);
   if (prospect.rows[0].do_not_contact) {
     throw new AppError(
       "This prospect is marked do not contact.",
@@ -325,6 +327,7 @@ export async function hasReplySinceLastOutbound(
 
 async function hasFollowUpStoppingReply(prospectId: string): Promise<boolean> {
   const db = await getDb();
+  if ((await db.query("SELECT id FROM prospect_rejection_recommendations WHERE prospect_id=$1 LIMIT 1", [prospectId])).rows.length) return true;
   const { rows } = await db.query(`SELECT 1 FROM messages m LEFT JOIN conversations c ON c.id=m.conversation_id
     WHERE (m.prospect_id=$1 OR c.prospect_id=$1) AND m.direction='inbound'
       AND (${realFollowUpInboundSql()} OR COALESCE(m.received_at,m.sent_at) IS NULL) LIMIT 1`, [prospectId]);

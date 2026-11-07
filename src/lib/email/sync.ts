@@ -15,6 +15,7 @@ import {
   type EmailAccountRecord,
 } from "./accounts";
 import { classifyReply, stripQuotedReply } from "./classify";
+import { recordOfferRejection } from "@/lib/services/lead-rejections";
 import { translateOnArrival } from "@/lib/services/message-translations";
 import { recordBounceIfAny } from "./bounce-handling";
 import { mayAssociateMessage } from "@/lib/services/message-linking";
@@ -212,10 +213,13 @@ export async function applyInboundEffect(
   body: string,
   subject: string,
   receivedAt: string,
+  messageDbId?: string,
 ): Promise<void> {
   const db = await getDb();
   const classification = classifyReply(body);
   await db.transaction(async (tx) => {
+    // Record even an out-of-order genuine rejection. Chronology must not erase its objection/hold.
+    if (messageDbId) await recordOfferRejection(tx, prospectId, messageDbId);
     const clock = await tx.query<{ last_message_at: string | null }>(
       `SELECT last_message_at FROM conversations WHERE id = $1 FOR UPDATE`, [conversationId]);
     if (clock.rows[0]?.last_message_at && new Date(clock.rows[0].last_message_at).getTime() > new Date(receivedAt).getTime()) {
@@ -254,10 +258,10 @@ export async function applyInboundEffect(
       [receivedAt, prospectId],
     );
 
-    if (
-      classification.classification === "unsubscribe" ||
-      classification.classification === "not_interested"
-    ) {
+    if (classification.classification === "not_interested") {
+      await tx.query(`UPDATE prospects SET next_action = 'Review rejection and confirm Closed/Lost; automatic follow-ups stopped', updated_at=now() WHERE id=$1`, [prospectId]);
+    }
+    if (classification.classification === "unsubscribe") {
       const emailResult = await tx.query<{ email: string }>(
         `SELECT email FROM prospect_emails WHERE prospect_id = $1
          ORDER BY is_primary DESC LIMIT 1`,
@@ -275,7 +279,7 @@ export async function applyInboundEffect(
             crypto.randomUUID(),
             normalizeEmail(email),
             email,
-            classification.classification === "unsubscribe" ? "unsubscribe" : "opt_out",
+            "unsubscribe",
             prospectId,
             truncate(body, 400),
           ],
@@ -604,6 +608,7 @@ export async function storeParsedMessage(input: {
         stripQuotedReply(text),
         subject,
         date.toISOString(),
+        messageDbId,
       );
       // Fire-and-forget: never blocks or fails message ingest.
       void translateOnArrival(messageDbId);
