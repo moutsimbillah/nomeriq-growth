@@ -90,6 +90,7 @@ interface PoolEntry {
  */
 export class FailoverResearchProvider implements ResearchProvider {
   lastUsedProvider: string | null = null;
+  readonly lastUsedProviderFor: Partial<Record<"search" | "fetch" | "chat", string>> = {};
 
   constructor(private readonly entries: PoolEntry[]) {}
 
@@ -102,13 +103,14 @@ export class FailoverResearchProvider implements ResearchProvider {
     return this.entries.map((entry) => entry.name);
   }
 
-  private async attempt<T>(run: (provider: ResearchProvider) => Promise<T>): Promise<T> {
+  private async attempt<T>(operation: "search" | "fetch" | "chat", run: (provider: ResearchProvider) => Promise<T>): Promise<T> {
     let lastError: unknown = null;
 
     for (const entry of this.entries) {
       try {
         const value = await run(entry.provider);
-        this.lastUsedProvider = entry.name;
+        this.lastUsedProvider = entry.provider.lastUsedProvider ?? entry.name;
+        this.lastUsedProviderFor[operation] = entry.provider.lastUsedProviderFor?.[operation] ?? this.lastUsedProvider;
         return value;
       } catch (error) {
         lastError = error;
@@ -121,15 +123,15 @@ export class FailoverResearchProvider implements ResearchProvider {
   }
 
   search(input: { query: string; count: number }) {
-    return this.attempt((provider) => provider.search(input));
+    return this.attempt("search", (provider) => provider.search(input));
   }
 
   fetch(input: { url: string }) {
-    return this.attempt((provider) => provider.fetch(input));
+    return this.attempt("fetch", (provider) => provider.fetch(input));
   }
 
   chatJson<T>(input: { system: string; user: string; maxTokens?: number }) {
-    return this.attempt((provider) => provider.chatJson<T>(input));
+    return this.attempt("chat", (provider) => provider.chatJson<T>(input));
   }
 }
 

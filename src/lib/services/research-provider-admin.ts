@@ -389,13 +389,13 @@ export async function updateResearchProvider(id: string, patch: ProviderInput): 
   if (result.rowCount === 0) throw new AppError("Provider not found.", 404, "provider_not_found");
 }
 
-export async function testResearchProvider(id: string): Promise<{
+export async function testResearchProvider(id: string, options: { model?: string; researchTools?: boolean; searchOnly?: boolean } = {}): Promise<{
   ok: boolean;
   message: string;
   models: string[];
 }> {
   const db = await getDb();
-  const result = await db.query<ProviderRow>(`SELECT * FROM research_providers WHERE id = $1`, [id]);
+  const result = await db.query<ProviderRow>(`SELECT * FROM research_providers WHERE id = $1 AND deleted_at IS NULL`, [id]);
   const row = result.rows[0];
   if (!row) throw new AppError("Provider not found.", 404, "provider_not_found");
 
@@ -406,13 +406,13 @@ export async function testResearchProvider(id: string): Promise<{
   };
 
   try {
-    const config = configFor(row);
-    if (row.kinds !== "search") {
-      const chat = await testProviderChat({ provider: row.provider, baseUrl: config.baseUrl, model: row.model }, config.apiKey);
+    const config = configFor({ ...row, model: options.model ?? row.model });
+    if (row.kinds !== "search" && !options.searchOnly) {
+      const chat = await testProviderChat({ provider: row.provider, baseUrl: config.baseUrl, model: config.model }, config.apiKey);
       outcome = chat;
       // Native search adapters for other vendors are part of the research-engine phase.
       // A model-only row is tested for chat, not rejected for lacking proprietary DeepSeek tools.
-      if (chat.ok && (row.provider === "deepseek" || (row.provider === "custom" && row.kinds === "both"))) {
+      if (chat.ok && options.researchTools !== false && (row.provider === "deepseek" || (row.provider === "custom" && row.kinds === "both"))) {
         const research = await testDeepSeekConnection(config);
         outcome = { ok: research.ok && research.fetchOk, message: `${chat.message} ${research.message}`, models: chat.models };
         discovered = { searchPath: research.searchPath, fetchPath: research.fetchPath };
@@ -430,7 +430,8 @@ export async function testResearchProvider(id: string): Promise<{
     };
   }
 
-  await db.query(
+  // A task override/partial-role test cannot certify the row's default/full Test.
+  if ((!options.model || options.model === row.model) && options.researchTools !== false && !options.searchOnly) await db.query(
     `UPDATE research_providers
         SET last_test_ok = $1, last_test_message = $2, last_tested_at = now(),
             search_path = COALESCE(search_path, $3),

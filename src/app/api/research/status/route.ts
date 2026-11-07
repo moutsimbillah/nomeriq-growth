@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireEditor } from "@/lib/auth/session";
 import { listResearchJobs } from "@/lib/services/research";
 import { getAllResearchUsage } from "@/lib/services/research-usage";
-import { getDeepSeekPublicSettings } from "@/lib/deepseek/provider";
+import { getResearchConfiguration } from "@/lib/services/research-routing";
 import { fail } from "@/lib/api";
 
 export const runtime = "nodejs";
@@ -15,17 +15,17 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     await requireEditor();
-    const [jobs, usage, deepseek] = await Promise.all([
+    const [jobs, usage, configuration] = await Promise.all([
       listResearchJobs(),
       getAllResearchUsage(),
-      getDeepSeekPublicSettings(),
+      getResearchConfiguration(),
     ]);
     return NextResponse.json({
       ok: true,
       data: {
         jobs,
         usage,
-        deepseek,
+        configuration,
         engineJobs: jobs.filter((job) => job.engine === "deepseek").length,
         activeEngineJobs: jobs.filter(
           (job) => job.engine === "deepseek" && job.status === "active",

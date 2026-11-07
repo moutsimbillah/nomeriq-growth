@@ -15,7 +15,8 @@ import {
   listResearchJobs,
 } from "@/lib/services/research";
 import { listEmailAccounts } from "@/lib/email/accounts";
-import { getDeepSeekPublicSettings } from "@/lib/deepseek/provider";
+import { getResearchConfiguration } from "@/lib/services/research-routing";
+import { ResearchConnectionCard } from "@/components/research-connection";
 import { listResearchRuns } from "@/lib/services/research-runs";
 import {
   Card,
@@ -39,11 +40,11 @@ export default async function ResearchPage({
   searchParams: Promise<{ new?: string }>;
 }) {
   const params = await searchParams;
-  const [jobs, events, accounts, deepseek] = await Promise.all([
+  const [jobs, events, accounts, configuration] = await Promise.all([
     listResearchJobs(),
     getRecentResearchEvents(14),
     listEmailAccounts(),
-    getDeepSeekPublicSettings(),
+    getResearchConfiguration(),
   ]);
   const activeJobs = jobs.filter((job) => job.status !== "archived");
   const totalTarget = activeJobs.reduce((sum, job) => sum + job.targetCount, 0);
@@ -67,7 +68,7 @@ export default async function ResearchPage({
       <PageHeader
         eyebrow="Persistent lead discovery"
         title="The search, made repeatable."
-        description="Start autonomous DeepSeek discovery that runs on the server without an open browser or chat session. ChatGPT and Claude research the same database, and every verified lead keeps a saved draft."
+        description="Start autonomous research that runs on the server without an open browser or chat session. ChatGPT and Claude research the same database, and every verified lead keeps a saved draft."
         actions={
           <>
             {brief && (
@@ -82,9 +83,10 @@ export default async function ResearchPage({
         }
       />
 
+      <ResearchConnectionCard configuration={configuration} />
       {engineJob ? (
         <section className="mb-4">
-          <ResearchEnginePanel job={engineJob} configured={deepseek.configured} />
+          <ResearchEnginePanel job={engineJob} configured={configuration.configured} />
           {recentRuns.length > 0 && (
             <Card className="mt-3 p-4">
               <SectionHeading

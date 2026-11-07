@@ -35,7 +35,7 @@ import {
 } from "@/lib/services/research-runs";
 import { planResearchQueries } from "@/lib/services/research-queries";
 import { verifyCandidate } from "@/lib/deepseek/verify-candidate";
-import { resolveResearchProviders } from "@/lib/deepseek/provider-pool";
+import { resolveLeadResearch } from "@/lib/services/research-routing";
 import type { ResearchProvider } from "@/lib/deepseek/research-provider";
 import type { Category, ResearchJob, ResearchTickResult } from "@/lib/types";
 import { domainFromUrl } from "@/lib/utils";
@@ -46,7 +46,7 @@ const SEARCH_RESULTS_PER_QUERY = 10;
 const MAX_QUERIES_PER_TICK = 3;
 
 export interface EngineOptions {
-  /** Injected in tests; resolved from stored/env credentials when omitted. */
+  /** Injected in tests; otherwise resolved from the Lead research task assignment. */
   provider?: ResearchProvider;
   workerId?: string;
   /** Caps verification work in one tick so a cron invocation stays bounded. */
@@ -184,13 +184,13 @@ async function runLeasedTick(
   const settings = await getWorkspaceSettings();
   let provider = options.provider ?? null;
   if (!provider) {
-    const resolved = await resolveResearchProviders({
+    const resolved = await resolveLeadResearch({
       searchQps: options.searchQps ?? settings.deepseekSearchQps,
       fetchQps: options.fetchQps ?? settings.deepseekFetchQps,
     });
     if (!resolved.provider) {
       const message =
-        resolved.error ?? "DeepSeek is not configured for autonomous research.";
+        resolved.error ?? "Lead research is not configured. Check Settings → AI providers.";
       await pauseForProviderFailure(jobId, message, notes);
       result.status = "paused";
       result.stopReason = message;
@@ -464,7 +464,7 @@ async function discoverMore(input: {
       result.notes.push(`Search failed for "${planned.query}": ${message}`);
       await recordResearchUsage({
         jobId: job.id,
-        provider: provider.lastUsedProvider ?? "deepseek",
+        provider: provider.lastUsedProviderFor?.search ?? provider.lastUsedProvider ?? "deepseek",
         operation: "search",
         model: provider.model,
         requestCount: 0,
@@ -488,7 +488,7 @@ async function discoverMore(input: {
 
     await recordResearchUsage({
       jobId: job.id,
-      provider: provider.lastUsedProvider ?? "deepseek",
+      provider: provider.lastUsedProviderFor?.search ?? provider.lastUsedProvider ?? "deepseek",
       operation: "search",
       model: provider.model,
       costUsd: search.costUsd,
@@ -688,7 +688,7 @@ async function researchCandidate(input: {
   if (verified.fetchCostUsd > 0 || verified.usage) {
     await recordResearchUsage({
       jobId: job.id,
-      provider: provider.lastUsedProvider ?? "deepseek",
+      provider: provider.lastUsedProviderFor?.fetch ?? provider.lastUsedProvider ?? "deepseek",
       operation: "fetch",
       model: provider.model,
       requestCount: verified.pages.length,
@@ -702,7 +702,7 @@ async function researchCandidate(input: {
   if (verified.usage) {
     await recordResearchUsage({
       jobId: job.id,
-      provider: provider.lastUsedProvider ?? "deepseek",
+      provider: provider.lastUsedProviderFor?.chat ?? provider.lastUsedProvider ?? "deepseek",
       operation: "chat",
       model: verified.usage.model,
       inputTokens: verified.usage.inputTokens,

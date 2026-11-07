@@ -163,7 +163,7 @@ export function ResearchEnginePanel({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-forest/20 bg-forest/[0.05] px-2.5 py-1 text-12 font-bold uppercase tracking-[0.12em] text-forest">
-              <Sparkles size={10} /> DeepSeek engine
+              <Sparkles size={10} /> Research engine
             </span>
             <span
               className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-12 font-bold uppercase tracking-[0.12em] ${statusTone(current.status)}`}
@@ -218,7 +218,7 @@ export function ResearchEnginePanel({
               type="button"
               onClick={() => act(current.status === "budget_paused" ? "resume" : "start")}
               disabled={pending !== null || !canStart}
-              title={!configured ? "Add a DeepSeek API key first" : undefined}
+              title={!configured ? "Configure Lead research in Settings → AI providers first" : undefined}
               className="btn-primary btn-sm"
             >
               {pending === "start" || pending === "resume" ? (
@@ -265,10 +265,10 @@ export function ResearchEnginePanel({
 
       {!configured && (
         <div className="mt-4">
-          <Notice tone="warning" title="DeepSeek is not configured.">
-            Autonomous research needs a DeepSeek API key. Add one under{" "}
-            <span className="font-semibold">Settings → AI integrations</span>, then
-            start the job. Nothing will be researched or spent until then.
+          <Notice tone="warning" title="Research engine is unavailable.">
+            Check the Lead research assignment and supported search source in{" "}
+            <a href="/settings#providers" className="font-semibold underline">Settings → AI providers</a>.
+            The configuration card above shows the reason.
           </Notice>
         </div>
       )}
@@ -314,7 +314,7 @@ export function ResearchEnginePanel({
       <div className="mt-5 grid gap-3 sm:grid-cols-2">
         <div className="rounded-xl border border-line bg-paper/60 p-3">
           <div className="flex items-center gap-1.5 text-12 font-bold uppercase tracking-[0.12em] text-faint">
-            <CircleDollarSign size={11} /> DeepSeek spend
+            <CircleDollarSign size={11} /> Research spend
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-20 leading-none text-ink">

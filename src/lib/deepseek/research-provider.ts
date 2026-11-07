@@ -19,6 +19,8 @@ export interface ResearchProvider {
   readonly model: string;
   /** Set by a failover pool after a call, so usage is attributed to whoever served it. */
   readonly lastUsedProvider?: string | null;
+  /** Separate sources keep operation attribution after a later chat call changes lastUsedProvider. */
+  readonly lastUsedProviderFor?: Partial<Record<"search" | "fetch" | "chat", string>>;
   search(input: {
     query: string;
     count: number;
