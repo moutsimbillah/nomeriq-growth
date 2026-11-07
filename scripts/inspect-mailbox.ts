@@ -9,7 +9,7 @@ import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import { config } from "dotenv";
 import { decryptSecret } from "../src/lib/auth/crypto";
-import { analyze, digest, folderKind, folderLabel, LIMITS, mailFacts, stamp, type Row } from "../src/lib/email/mailbox-inspector";
+import { analyze, digest, folderKind, folderLabel, LIMITS, mailFacts, stamp, type Facts, type Row } from "../src/lib/email/mailbox-inspector";
 
 export interface AuditDb {
   query(sql: string, values?: any[]): Promise<{ rows: Row[] }>;
@@ -43,7 +43,7 @@ async function pages(db: AuditDb, table: string, columns = "*") {
     for (const row of page) {
       // Preserve just the digest/length, not accumulated complete database bodies.
       if (typeof row.body_text === "string") {
-        row.bodyDigest = digest(row.body_text); row.bodyLength = row.body_text.length;
+        row.bodyDigest = digest(row.body_text); row.bodyLength = row.body_text.length; row.bodyBlank = !row.body_text.trim();
         delete row.body_text;
       }
       bytes += Buffer.byteLength(JSON.stringify(row));
@@ -54,7 +54,11 @@ async function pages(db: AuditDb, table: string, columns = "*") {
     if (page.length < LIMITS.dbPage) return rows;
   }
 }
-export async function inspectWithClients(db: AuditDb, createImap: (account: Row) => ReadOnlyImap, parse = simpleParser) {
+export interface InspectionOptions {
+  /** Trusted in-process analyzer: return counts/names only; never attach facts verbatim. */
+  analyzeFacts?: (facts: Facts, snapshot: Row) => Promise<Row>;
+}
+export async function inspectWithClients(db: AuditDb, createImap: (account: Row) => ReadOnlyImap, parse = simpleParser, options: InspectionOptions = {}) {
   const report: Row = { schemaVersion: 1, complete: false, errors: [], inventory: [], coverage: [], before: null, after: null, snapshotsEqual: false,
     limits: LIMITS, invariants: { database: "direct_pg_BEGIN_READ_ONLY_SELECT_ROLLBACK", imap: "EXAMINE_BODY.PEEK", output: "counts_leadnames_only", writes: 0, historicalSkipReasonsReconstructable: false },
     limitations: ["Only retained INBOX and every LIST-discovered Sent candidate are content-scanned; other folders inventoried only.", "No deleted/expunged history; folder changes during scan invalidate completeness.", "Old newest-40 membership and exact historical skip reasons cannot be reconstructed; reason counters are nonexclusive evidence, not causal claims.", "Old 30-day evidence uses sync-state creation as a first-sync proxy and INTERNALDATE with an extra conservative day for IMAP date granularity; near-boundary cases remain unexplained.", "Bounce kind counts are recipient-level report outcomes; reportMessages counts deduplicated DSN/ARF messages.", "Weak address/subject, domain and signature-tail candidates never become links or enter chronology simulation; quoted text can produce weak name candidates.", "Waiting simulation compares exact-thread chronology only, not all portal folder precedence; no live fix.", "Before/after counts detect concurrent changes, not equal-content replacements; no claim that production is quiescent.", "Resource/time/oversize/parse failures are explicit incomplete coverage, never silent caps."] };
@@ -75,8 +79,8 @@ export async function inspectWithClients(db: AuditDb, createImap: (account: Row)
     const account = accounts[0];
     phase = "database_facts";
     const leads = await pages(db, "prospects", "id, business_name, domain_key, archived_at");
-    const conversations = await pages(db, "conversations", "id, prospect_id, last_inbound_at, last_outbound_at");
-    const messages = await pages(db, "messages", "id, account_id, prospect_id, conversation_id, direction, source, folder, uidvalidity, uid, message_id, in_reply_to, references_json, from_email, to_emails, subject, body_text, sent_at, received_at");
+    const conversations = await pages(db, "conversations", "id, prospect_id, subject, last_inbound_at, last_outbound_at");
+    const messages = await pages(db, "messages", "id, account_id, prospect_id, conversation_id, direction, source, folder, uidvalidity, uid, message_id, in_reply_to, references_json, from_email, to_emails, subject, body_text, error, sent_at, received_at");
     const emails = await pages(db, "prospect_emails", "id, prospect_id, normalized_email");
     const suppressions = await pages(db, "suppressions", "id, normalized_email, reason, active");
     const bounces = await pages(db, "email_bounces", "id, message_id, normalized_email, kind");
@@ -102,6 +106,10 @@ export async function inspectWithClients(db: AuditDb, createImap: (account: Row)
     phase = "imap_list";
     const folders = await imap.list();
     const candidates = folders.filter(f => folderKind(f));
+    if (options.analyzeFacts) {
+      const order = (path: string) => path === "Sent Items" ? 0 : path === "INBOX" ? 1 : 2;
+      candidates.sort((a, b) => order(a.path) - order(b.path));
+    }
     report.inventory = folders.map((f, i) => ({ ordinal: i + 1, folder: folderLabel(f.path, i + 1), kind: folderKind(f) || "inventory_only", selectable: !f.flags?.has("\\Noselect") }));
     if (!candidates.some(f => folderKind(f) === "inbound")) report.errors.push("inbox_not_listed");
     if (!candidates.some(f => folderKind(f) === "outbound")) report.errors.push("sent_not_listed");
@@ -175,10 +183,24 @@ export async function inspectWithClients(db: AuditDb, createImap: (account: Row)
     }
     const firstSync = Math.min(...states.filter(s => s.account_id === account.id).map(s => stamp(s.created_at)).filter(Boolean), Infinity);
     phase = "analysis";
-    report.analysis = analyze({ accountId: account.id, leads, conversations, messages, emails, suppressions, bounces, legacy, states, mailbox,
-      firstSync: Number.isFinite(firstSync) ? firstSync : 0, primarySent: primarySent?.path || null });
-    if (report.analysis.legacy.identifiedExcerptCohort !== 19 || report.analysis.legacy.identifiedNeedsMatchingCohort !== 8) report.errors.push("legacy_cohort_count_mismatch");
-    if (report.analysis.needsReply.some((r: Row) => !r.complete)) report.errors.push("needs_reply_cohort_incomplete");
+    const facts: Facts = { recoveryAccountEmail: account.email_address, inventoryFolders: folders.filter(f => !f.flags?.has("\\Noselect")).map(f => f.path), accountId: account.id, leads, conversations, messages, emails, suppressions, bounces, legacy, states, mailbox,
+      firstSync: Number.isFinite(firstSync) ? firstSync : 0, primarySent: primarySent?.path || null };
+    if (options.analyzeFacts) {
+      phase = "recovery_analysis";
+      facts.auditDecisions = (await db.query(`SELECT DISTINCT ON (entity_id, metadata->>'prospectId')
+        entity_id, metadata->>'prospectId' AS prospect_id, action FROM audit_log
+        WHERE actor_type = 'founder' AND entity_type = 'message'
+        AND action IN ('message.linked','message.unlinked','message.rejected')
+        ORDER BY entity_id, metadata->>'prospectId', created_at DESC, id DESC LIMIT $1`, [LIMITS.maxRows + 1])).rows;
+      if (facts.auditDecisions.length > LIMITS.maxRows) throw new Error("audit_resource_limit");
+      report.recovery = await options.analyzeFacts(facts, report.before);
+      if (!report.recovery.complete || report.recovery.errors?.length) report.errors.push("recovery_analysis_incomplete");
+      checkTime();
+    } else {
+      report.analysis = analyze(facts);
+      if (report.analysis.legacy.identifiedExcerptCohort !== 19 || report.analysis.legacy.identifiedNeedsMatchingCohort !== 8) report.errors.push("legacy_cohort_count_mismatch");
+      if (report.analysis.needsReply.some((r: Row) => !r.complete)) report.errors.push("needs_reply_cohort_incomplete");
+    }
   } catch { report.errors.push(timedOut ? "audit_timeout" : `${phase}_failed`); }
   finally {
     if (imap) { try { await imap.logout(); } catch { imap.close(); report.errors.push("imap_cleanup_failed"); } }
@@ -193,7 +215,7 @@ export async function inspectWithClients(db: AuditDb, createImap: (account: Row)
     finally { if (transaction) { try { await db.query("ROLLBACK"); } catch { report.errors.push("database_cleanup_failed"); } } }
     clearTimeout(timer);
   }
-  report.complete = !report.errors.length && !!report.analysis && report.coverage.length > 0 && report.coverage.every((c: Row) => c.complete);
+  report.complete = !report.errors.length && (!options.analyzeFacts ? !!report.analysis : !!report.recovery?.complete) && report.coverage.length > 0 && report.coverage.every((c: Row) => c.complete);
   return report;
 }
 

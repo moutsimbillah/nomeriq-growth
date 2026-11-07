@@ -22,7 +22,7 @@ vi.mock("imapflow", () => ({ ImapFlow: class {
   async logout() {}
   async list() { return [{ path: "INBOX" }, { path: "Sent Items", specialUse: "\\Sent" }, { path: "Sent Archive" }]; }
   async mailboxOpen(path: string, options: unknown) {
-    fake.folder = path; fake.opens.push([path, options]); return { uidValidity: fake.uidValidity };
+    fake.folder = path; fake.opens.push([path, options]); return { uidValidity: fake.uidValidity, readOnly: true };
   }
   async search(query: { uid?: string; since?: Date }) {
     fake.searches.push(query);
@@ -114,6 +114,7 @@ describe("explicit import-only mailbox recovery", () => {
     expect(first.errors).toEqual([]);
     expect(first.progress?.find(row => row.folder === "Sent Items")).toMatchObject({ lastUid: 100, remaining: 53, complete: false });
     expect(first.historyIncomplete).toBe(true);
+    expect(first.complete).toBe(false);
     const db = await getDb();
     const examples = await db.query<{ sent_at: string; external: boolean; conversation_id: string }>(
       `SELECT sent_at,external,conversation_id FROM messages WHERE account_id=$1 AND uid IN (1,2) ORDER BY uid`, [accountId]);
@@ -127,11 +128,13 @@ describe("explicit import-only mailbox recovery", () => {
     fake.failUid = 105;
     const failed = await syncEmailAccount(accountId, { mode: "backfill", founderUserId: userId });
     expect(failed.historyIncomplete).toBe(true);
+    expect(failed.complete).toBe(false);
     expect(failed.progress?.find(row => row.folder === "Sent Items")).toMatchObject({ lastUid: 104, complete: false });
     expect(failed.errors).toHaveLength(1);
     fake.failUid = 0;
     const resumed = await syncEmailAccount(accountId, { mode: "backfill", founderUserId: userId });
     expect(resumed.historyIncomplete).toBe(false);
+    expect(resumed.complete).toBe(true);
     expect(resumed.progress?.every(row => row.complete)).toBe(true);
     expect((await syncEmailAccount(accountId, { mode: "backfill", founderUserId: userId })).imported).toBe(0);
     const total = await db.query<{ n: number }>(`SELECT count(*)::int n FROM messages WHERE account_id=$1 AND source='imap' AND direction='outbound'`, [accountId]);

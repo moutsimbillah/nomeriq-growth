@@ -21,10 +21,13 @@ import { mayAssociateMessage } from "@/lib/services/message-linking";
 import { listUncopiedSentMessages, saveSentCopyForMessage } from "./sent-copy";
 import { recomputeConversationChronology } from "./conversation-chronology";
 import { getParsedBounceInput, isAutoReply, parseBounceReports } from "./bounces";
+import { matchRecoveryOwner, recoverySqlLookups } from "./recovery-matching";
 
 export interface SyncOptions {
   mode?: "incremental" | "backfill";
   founderUserId?: string;
+  /** Explicit physical-folder stage; omitted retains legacy all-folder recovery. */
+  recoveryFolder?: "Sent Items" | "INBOX";
   linkCertainAddresses?: boolean;
   processHistoricalBounces?: boolean;
 }
@@ -39,6 +42,8 @@ const INITIAL_DAYS = 30;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 export interface SyncResult {
+  /** Backfill coverage only: false on caps, missing folders or any failure. */
+  complete?: boolean;
   mode?: "incremental" | "backfill";
   filled?: number;
   progress?: { folder: string; uidValidity: number; lastUid: number; remaining: number; complete: boolean }[];
@@ -68,22 +73,9 @@ async function findThreadConversation(
 ): Promise<{ conversationId: string; prospectId: string } | null> {
   const ids = messageIds.filter(Boolean);
   if (!ids.length) return null;
-  const db = await getDb();
-  const result = await db.query<any>(
-    `SELECT DISTINCT c.id AS conversation_id, c.prospect_id FROM messages m
-     JOIN conversations c ON c.id = m.conversation_id
-     WHERE m.message_id = ANY($1::text[])
-       AND (m.prospect_id IS NULL OR m.prospect_id = c.prospect_id)
-     LIMIT 2`,
-    [ids],
-  );
-  if (result.rows.length > 1) return { conversationId: "", prospectId: "" };
-  return result.rows.length === 1 && result.rows[0].prospect_id
-    ? {
-        conversationId: result.rows[0].conversation_id,
-        prospectId: result.rows[0].prospect_id,
-      }
-    : null;
+  const threads = await recoverySqlLookups(await getDb()).threads(ids);
+  if (threads.length > 1) return { conversationId: "", prospectId: "" };
+  return threads.length === 1 && threads[0].prospectId ? threads[0] : null;
 }
 
 async function findProspectByEmail(email: string) {
@@ -147,6 +139,7 @@ async function resolveMessageOwner(input: {
   conversationId: string | null;
   matchedBy: string;
 }> {
+  if (input.recovery) return matchRecoveryOwner(input, recoverySqlLookups(await getDb()));
   const threadMessageIds = [
     ...(input.inReplyTo ? [input.inReplyTo] : []),
     ...input.references,
@@ -175,24 +168,8 @@ async function resolveMessageOwner(input: {
   const candidates = new Set(exact.rows.map(row => row.id));
   if (candidates.size === 1) {
     const prospectId = [...candidates][0];
-    if (input.recovery) {
-      const db = await getDb();
-      const prior = await db.query<{ id: string; subject: string }>(
-        `SELECT id, subject FROM conversations WHERE prospect_id = $1`, [prospectId]);
-      const normalizeSubject = (value: string) => value.replace(/^(\s*(re|fw|fwd)\s*:\s*)+/gi, "").trim().toLowerCase();
-      if (prior.rows.length !== 1 || !normalizeSubject(input.subject) || normalizeSubject(input.subject) === '(no subject)' ||
-          normalizeSubject(prior.rows[0].subject) !== normalizeSubject(input.subject)) {
-        return { prospectId: null, conversationId: null, matchedBy: "unmatched" };
-      }
-      return { prospectId, conversationId: prior.rows[0].id, matchedBy: "unique_address_subject" };
-    } else {
-      const conversationId = await conversationForProspect(
-        prospectId,
-        input.subject,
-        input.when,
-      );
-      return { prospectId, conversationId, matchedBy: "exact_email" };
-    }
+    const conversationId = await conversationForProspect(prospectId, input.subject, input.when);
+    return { prospectId, conversationId, matchedBy: "exact_email" };
   }
 
 
@@ -695,10 +672,19 @@ async function recoverMailbox(
 ): Promise<SyncResult> {
   const db = await getDb();
   const sent = mailboxes.filter(box => /\\Sent/i.test(box.specialUse ?? "") || /sent/i.test(box.path));
-  const folders = [{ label: "INBOX" as const, path: "INBOX" },
-    ...sent.map(box => ({ label: "Sent" as const, path: box.path }))]
-    .filter((box, index, all) => all.findIndex(other => other.path === box.path) === index);
-  if (!sent.length) {
+  result.complete = false;
+  // Staged recovery never substitutes a special-use or similarly named mailbox.
+  if (options.recoveryFolder !== undefined && !mailboxes.some(box => box.path === options.recoveryFolder)) {
+    result.errors.push(`Requested recovery folder ${options.recoveryFolder} not found; recovery is incomplete.`);
+    result.historyIncomplete = true;
+    return result;
+  }
+  const folders = options.recoveryFolder !== undefined
+    ? [{ label: options.recoveryFolder === "INBOX" ? "INBOX" as const : "Sent" as const, path: options.recoveryFolder }]
+    : [{ label: "INBOX" as const, path: "INBOX" },
+      ...sent.map(box => ({ label: "Sent" as const, path: box.path }))]
+      .filter((box, index, all) => all.findIndex(other => other.path === box.path) === index);
+  if (options.recoveryFolder === undefined && !sent.length) {
     result.errors.push("No Sent folder found; recovery is incomplete.");
     result.historyIncomplete = true;
   }
@@ -715,6 +701,7 @@ async function recoverMailbox(
       const mailbox = await client.mailboxOpen(folder.path, { readOnly: true });
       uidValidity = Number(mailbox.uidValidity);
       if (!Number.isSafeInteger(uidValidity) || uidValidity <= 0) throw new Error("Invalid UIDVALIDITY");
+      if (mailbox.readOnly !== true) throw new Error("Recovery folder did not confirm read-only access; checkpoint held");
       const saved = await db.query<{ uidvalidity: string; last_uid: string }>(
         `SELECT uidvalidity, last_uid FROM mailbox_sync_state WHERE account_id = $1 AND folder = $2`, [account.id, key]);
       if (Number(saved.rows[0]?.uidvalidity) === uidValidity) lastUid = Number(saved.rows[0]?.last_uid) || 0;
@@ -728,8 +715,15 @@ async function recoverMailbox(
         for await (const message of client.fetch(String(uid), { source: true, flags: true, internalDate: true }, { uid: true })) {
           if (message.uid !== uid || !message.source) throw new Error(`UID ${uid} source unavailable`);
           if (message.source.length > 32 * 1024 * 1024) throw new Error(`UID ${uid} exceeds the recovery message-size limit; checkpoint held`);
+          const parsed = await simpleParser(message.source);
+          if (options.recoveryFolder === "Sent Items") {
+            const senders = parsed.from?.value ?? [];
+            if (senders.length !== 1 || normalizeEmail(senders[0].address ?? "") !== normalizeEmail(account.emailAddress)) {
+              throw new Error(`UID ${uid} is not from the selected founder mailbox; checkpoint held`);
+            }
+          }
           const stored = await storeParsedMessage({
-            parsed: await simpleParser(message.source), account,
+            parsed, account,
             direction: folder.label === "INBOX" ? "inbound" : "outbound",
             folderPath: folder.path, folderLabel: folder.label, uid, uidValidity,
             isSeen: message.flags?.has("\\Seen") ?? false,
@@ -760,11 +754,19 @@ async function recoverMailbox(
     if (!complete) result.historyIncomplete = true;
     result.folders.push({ folder: folder.path, imported, scanned });
     result.progress!.push({ folder: folder.path, uidValidity, lastUid, remaining, complete });
+    if (error) break; // A failure never proceeds to another physical folder.
   }
+  result.complete = !result.historyIncomplete && result.errors.length === 0;
   return result;
 }
 
 export async function syncEmailAccount(accountId: string, options: SyncOptions = {}): Promise<SyncResult> {
+  if (options.recoveryFolder !== undefined) {
+    if (options.mode !== "backfill") throw new AppError("Recovery folder requires explicit backfill mode.", 400, "backfill_required");
+    if (options.recoveryFolder !== "Sent Items" && options.recoveryFolder !== "INBOX") {
+      throw new AppError("Recovery folder must be exactly Sent Items or INBOX.", 400, "invalid_recovery_folder");
+    }
+  }
   if (options.linkCertainAddresses) throw new AppError(
     "Address-book linking is a separate explicitly approved operation.", 400, "address_linking_separate_operation");
   if (options.mode === "backfill") {

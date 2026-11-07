@@ -233,11 +233,12 @@ async function historicalRows(db: DbClient, accountId: string) {
     ORDER BY coalesce(m.received_at,m.sent_at),m.id`, [accountId])).rows;
 }
 /** SELECT-only: no settings getters, defaults, logging, or mailbox connection. Counts/names only. */
-export async function previewHistoricalBounces(accountId: string) {
-  const db = await getDb();
+export async function previewHistoricalBounces(accountId: string, options: { suppliedDbClient?: DbClient; includeAddresses?: boolean } = {}) {
+  const db = options.suppliedDbClient ?? await getDb();
   const rows = await historicalRows(db, accountId);
   const summary = { scanned: rows.length, reports: 0, replayed: 0, wouldNewlySuppress: 0, alreadySuppressed: 0, unattributable: 0, incomplete: 0, leads: [] as string[] };
   const planned = new Set<string>(), leadNames = new Set<string>();
+  const addresses = new Map<string, Set<string>>();
   const soft = new Map<string, number>();
   for (const row of rows) {
     const input = historicalInput(row, accountId);
@@ -253,11 +254,21 @@ export async function previewHistoricalBounces(accountId: string) {
       if (suppression.rows.length || planned.has(email)) { summary.alreadySuppressed++; continue; }
       const prior = soft.get(email) ?? await countPriorSoftBounces(email, db);
       if (report.kind === "transient") soft.set(email, prior + 1);
-      if (bounceDecision({ kind: report.kind, priorSoftBounces: prior }) === "suppress") { summary.wouldNewlySuppress++; planned.add(email); }
+      if (bounceDecision({ kind: report.kind, priorSoftBounces: prior }) === "suppress") {
+        summary.wouldNewlySuppress++; planned.add(email);
+        if (options.includeAddresses) {
+          const names = new Set<string>();
+          const owners = await db.query<{ business_name: string }>(`SELECT DISTINCT p.business_name FROM prospects p
+            JOIN prospect_emails pe ON pe.prospect_id = p.id WHERE pe.normalized_email = $1`, [email]);
+          for (const owner of owners.rows) names.add(owner.business_name);
+          if (!names.size && row.lead_name) names.add(row.lead_name);
+          addresses.set(email, names);
+        }
+      }
     }
   }
   summary.leads = [...leadNames].sort();
-  return summary;
+  return { ...summary, ...(options.includeAddresses ? { newlySuppressed: [...addresses].sort(([a], [b]) => a.localeCompare(b)).map(([address, names]) => ({ address, leadNames: [...names].sort() })) } : {}) };
 }
 /** Manual-only entry point; never called from initialization or cron. */
 export async function applyHistoricalBounces(input: { accountId: string; founderUserId: string; confirmation: string }) {

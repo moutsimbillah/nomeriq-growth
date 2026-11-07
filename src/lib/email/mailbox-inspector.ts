@@ -28,6 +28,10 @@ export function folderLabel(path: string, ordinal: number) { return /^[\w ./\\-]
 /** Extract just facts/digests. MIME/raw content stays in the caller's process, never in the report. */
 export function mailFacts(parsed: Row, raw: Buffer, envelope: Row, leads: Row[]): Row {
   const body = parsed.text || (typeof parsed.html === "string" ? parsed.html.replace(/<[^>]+>/g, " ") : "");
+  // Match storeParsedMessage's bodyText hydration eligibility without retaining content.
+  const recoveryBody = parsed.text?.trim() ? parsed.text.trim() : typeof parsed.html === "string" ? parsed.html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+/g, " ").trim() : "";
   const from = addresses(parsed.from?.value?.map((a: Row) => a.address))[0] || "";
   // Parse authoritative MIME parts before excluding automatic replies. Real DSNs may carry
   // Auto-Submitted: auto-replied and a quoted report-type; their attached original is not evidence.
@@ -37,13 +41,13 @@ export function mailFacts(parsed: Row, raw: Buffer, envelope: Row, leads: Row[])
   const autoReply = !deliveryReports.length && isAutoReply(input);
   const signature = body.slice(-4000).toLowerCase();
   const signatureCandidates = leads.filter(p => p.business_name?.length >= 5 && signature.includes(p.business_name.toLowerCase())).map(p => p.id);
-  return { ...envelope, message_id: parsed.messageId || null, references_json: (Array.isArray(parsed.references) ? parsed.references : parsed.references ? [parsed.references] : []).filter((v: unknown) => typeof v === "string"), in_reply_to: parsed.inReplyTo || null,
-    from_email: from, to_emails: addresses([...(parsed.to?.value || []), ...(parsed.cc?.value || [])].map((a: Row) => a.address)),
-    subject: parsed.subject || "", when: stamp(parsed.date) || stamp(envelope.internalDate), headerDate: stamp(parsed.date), internalTime: stamp(envelope.internalDate), bodyLength: body.length, bodyDigest: digest(body),
+  return { ...envelope, recoveryBodyLength: recoveryBody.length, recoveryBodyBlank: !recoveryBody, recoveryBodyDigest: digest(recoveryBody), message_id: parsed.messageId?.trim() || null, references_json: (Array.isArray(parsed.references) ? parsed.references : parsed.references ? [parsed.references] : []).filter((v: unknown) => typeof v === "string"), in_reply_to: parsed.inReplyTo || null,
+    from_email: from, recoveryFromCount: parsed.from?.value?.length ?? 0, to_emails: addresses([...(parsed.to?.value || []), ...(parsed.cc?.value || [])].map((a: Row) => a.address)),
+    subject: parsed.subject || "", recoveryToEmails: addresses((parsed.to?.value || []).map((a: Row) => a.address)), deliveryReport: deliveryReports.length > 0 || /multipart\/report|message\/delivery-status|feedback-report/i.test(input.contentType || ""), bodyBlank: !body.trim(), when: stamp(parsed.date) || stamp(envelope.internalDate), headerDate: stamp(parsed.date), internalTime: stamp(envelope.internalDate), bodyLength: body.length, bodyDigest: digest(body),
     bounceKind: report.kind, bounceRecipient: report.recipient, deliveryReports, autoReply, signatureCandidates };
 }
 
-export interface Facts { accountId: string; leads: Row[]; conversations: Row[]; messages: Row[]; emails: Row[]; suppressions: Row[]; bounces: Row[]; legacy: Row[]; states: Row[]; mailbox: Row[]; firstSync: number; primarySent: string | null; }
+export interface Facts { recoveryAccountEmail?: string; inventoryFolders?: string[]; auditDecisions?: Row[]; accountId: string; leads: Row[]; conversations: Row[]; messages: Row[]; emails: Row[]; suppressions: Row[]; bounces: Row[]; legacy: Row[]; states: Row[]; mailbox: Row[]; firstSync: number; primarySent: string | null; }
 export function analyze(f: Facts) {
   const deadline = Date.now() + LIMITS.analysisTimeoutMs;
   let steps = 0;
