@@ -7,7 +7,7 @@ import { AppError, isEmail, iso, truncate } from "@/lib/utils";
 import type { AgentTag, ChannelTag } from "@/lib/types";
 import { mapDraft, mapProductTruth } from "./mappers";
 import type { FollowUpCandidate } from "./followups";
-import { getRecipientPolicy } from "./recipient-policy";
+import { getRecipientPolicy, getRecipientPoliciesBatch } from "./recipient-policy";
 
 /** SQL counterpart of stored real-reply facts; never let a DSN/OOO restart or stop a sequence. */
 export function realFollowUpInboundSql(alias = "m"): string {
@@ -100,12 +100,16 @@ const FOLLOW_UP_CANDIDATE_SQL = `
 /** One row per lead. Actual mail chronology wins over cached/imported conversation timestamps. */
 export async function readFollowUpCandidates(db: DbClient, settings: FollowUpSettings, prospectId?: string): Promise<FollowUpCandidate[]> {
   const { rows } = await db.query<any>(FOLLOW_UP_CANDIDATE_SQL, [prospectId ?? null]);
+  // Sequence-cap filtering first: cheap, in-memory, and shrinks the set before the one batched
+  // recipient-policy fetch below. Calling getRecipientPolicy once per row here used to turn a
+  // page of a few hundred leads into thousands of individual queries against the connection pool.
+  const underCap = rows.filter((row: any) => Math.max(Number(row.sent_follow_ups), Number(row.last_sequence ?? 0)) + 1 <= settings.followUpMax);
+  const policies = await getRecipientPoliciesBatch(underCap.map((row: any) => row.prospect_id), db);
   const candidates: FollowUpCandidate[] = [];
-  for (const row of rows) {
+  for (const row of underCap) {
     const nextSequence = Math.max(Number(row.sent_follow_ups), Number(row.last_sequence ?? 0)) + 1;
-    if (nextSequence > settings.followUpMax) continue;
-    const policy = await getRecipientPolicy(row.prospect_id, db);
-    if (policy.blocked || !policy.recipient || !isEmail(policy.recipient)) continue;
+    const policy = policies.get(row.prospect_id);
+    if (!policy || policy.blocked || !policy.recipient || !isEmail(policy.recipient)) continue;
     const delayDays = nextSequence === 1 ? settings.followUpDelay1Days : settings.followUpDelay2Days;
     const days = calendarDaysBetween(new Date(row.last_outbound_at), new Date(), settings.timezone);
     candidates.push({ conversationId: row.conversation_id, prospectId: row.prospect_id, businessName: row.business_name,

@@ -213,8 +213,8 @@ export async function listFollowUpDrafts(): Promise<Draft[]> {
  * counters come from the candidate list itself, which is already uncapped (every contacted thread is
  * considered, and the list is filtered in code by reply state and suppression).
  */
-export async function getFollowUpOverview() {
-  const candidates = await listFollowUpCandidates();
+export async function getFollowUpOverview(candidates?: FollowUpCandidate[]) {
+  const resolved = candidates ?? (await listFollowUpCandidates());
   const db = await getDb();
   const counted = await db.query<{
     ready: number;
@@ -231,8 +231,8 @@ export async function getFollowUpOverview() {
   );
   const row = counted.rows[0];
   return {
-    waiting: candidates.length,
-    due: candidates.filter((candidate) => candidate.due).length,
+    waiting: resolved.length,
+    due: resolved.filter((candidate) => candidate.due).length,
     readyDrafts: Number(row?.ready ?? 0),
     approvedDrafts: Number(row?.approved ?? 0),
     sent: Number(row?.sent ?? 0),

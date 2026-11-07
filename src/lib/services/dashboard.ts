@@ -2,7 +2,7 @@ import { getDb } from "@/lib/db/client";
 import { iso, number } from "@/lib/utils";
 import type { Classification, PipelineStatus } from "@/lib/types";
 import { listConversations } from "./conversations";
-import { listFollowUpCandidates, getFollowUpOverview } from "./followups";
+import { getFollowUpOverview } from "./followups";
 import { listResearchJobs, getResearchOverview } from "./research";
 import { listProspects } from "./prospects";
 import { getProductTruth } from "./settings";
@@ -21,7 +21,6 @@ export async function getDashboardData() {
     jobs,
     researchOverview,
     followUps,
-    candidates,
     accounts,
     truth,
     latestSent,
@@ -53,7 +52,6 @@ export async function getDashboardData() {
     listResearchJobs(),
     getResearchOverview(),
     getFollowUpOverview(),
-    listFollowUpCandidates(),
     listEmailAccounts(),
     getProductTruth(),
     db.query<any>(
@@ -101,7 +99,7 @@ export async function getDashboardData() {
     researchOverview,
     followUps: {
       ...followUps,
-      dueCandidates: candidates.filter((candidate) => candidate.due).length,
+      dueCandidates: followUps.due,
     },
     account: accounts[0] ?? null,
     syncHealth,

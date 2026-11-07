@@ -39,3 +39,48 @@ export async function assertLeadOutreachAllowed(prospectId: string, client?: DbC
   const block = await getLeadOutreachBlock(prospectId, client);
   if (block) throw new AppError(block.reason, 409, block.code);
 }
+
+/**
+ * Same rule as {@link getLeadOutreachBlock}, batched: one set of queries for every id instead of
+ * one round trip per lead. A caller that would otherwise call the single-id function once per row
+ * in a list (e.g. the follow-up candidate scan) should use this instead; the per-row result is
+ * identical because both read the same latest-assessment/latest-override facts and apply the same
+ * tier/eligibility rule.
+ */
+export async function getLeadOutreachBlocksBatch(prospectIds: string[], client?: DbClient): Promise<Map<string, LeadOutreachBlock | null>> {
+  const result = new Map<string, LeadOutreachBlock | null>();
+  if (!prospectIds.length) return result;
+  const db = client ?? await getDb();
+  const rows = (await db.query<{ prospect_id: string; assessment_id: string | null; eligibility: string; tier: string | null }>(
+    `WITH ids AS (SELECT unnest($1::uuid[]) AS prospect_id),
+      assessment_ranked AS (
+        SELECT a.*, row_number() OVER (PARTITION BY a.prospect_id ORDER BY a.assessed_at DESC, a.created_at DESC, a.id DESC) AS rn
+        FROM prospect_assessments a WHERE a.prospect_id IN (SELECT prospect_id FROM ids)),
+      assessment_latest AS (SELECT * FROM assessment_ranked WHERE rn = 1),
+      override_ranked AS (
+        SELECT o.*, row_number() OVER (PARTITION BY o.prospect_id, o.field_name ORDER BY o.decided_at DESC, o.id DESC) AS rn
+        FROM prospect_assessment_overrides o
+        WHERE o.prospect_id IN (SELECT prospect_id FROM ids) AND o.field_name IN ('eligibility','tier')),
+      override_latest AS (SELECT * FROM override_ranked WHERE rn = 1)
+    SELECT ids.prospect_id::text AS prospect_id, al.id AS assessment_id,
+      COALESCE(
+        (SELECT CASE WHEN oe.decision = 'set' THEN oe.value #>> '{}' ELSE NULL END FROM override_latest oe WHERE oe.prospect_id = ids.prospect_id AND oe.field_name = 'eligibility'),
+        al.eligibility, 'unknown') AS eligibility,
+      COALESCE(
+        (SELECT CASE WHEN ot.decision = 'set' THEN ot.value #>> '{}' ELSE NULL END FROM override_latest ot WHERE ot.prospect_id = ids.prospect_id AND ot.field_name = 'tier'),
+        al.tier) AS tier
+    FROM ids LEFT JOIN assessment_latest al ON al.prospect_id = ids.prospect_id`,
+    [prospectIds],
+  )).rows;
+  for (const row of rows) {
+    if (row.eligibility === "excluded") { result.set(row.prospect_id, outreachBlockForTier("excluded")); continue; }
+    const block = outreachBlockForTier(row.tier ?? null);
+    if (block) { result.set(row.prospect_id, block); continue; }
+    if (row.assessment_id && (row.eligibility !== "eligible" || !row.tier)) {
+      result.set(row.prospect_id, { code: "unqualified_lead", reason: "The new assessment has not verified the mandatory signal-seller requirements. Complete qualification before drafting or sending outreach." });
+      continue;
+    }
+    result.set(row.prospect_id, null);
+  }
+  return result;
+}

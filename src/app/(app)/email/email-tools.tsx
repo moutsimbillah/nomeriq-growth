@@ -107,13 +107,13 @@ export async function EmailToolsPage({
   const sentWindow = windowFromUrl(SENT_PAGE_SIZE);
   const followUpDraftWindow = windowFromUrl(FOLLOW_UP_DRAFT_PAGE_SIZE);
 
+  const followCandidates = await listFollowUpCandidates();
   const [
     conversations,
     sentPage,
     draftPage,
     campaigns,
     followOverview,
-    followCandidates,
     followDraftPage,
     accounts,
     unknown,
@@ -132,8 +132,7 @@ export async function EmailToolsPage({
       now: filters.now,
     }),
     listCampaigns(),
-    getFollowUpOverview(),
-    listFollowUpCandidates(),
+    getFollowUpOverview(followCandidates),
     listFollowUpDraftsPage(followUpDraftWindow),
     listEmailAccounts(),
     listUnknownInbound(20),
