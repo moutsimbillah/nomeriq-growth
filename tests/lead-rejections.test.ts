@@ -95,7 +95,16 @@ it("an older rejection is recorded despite newer thread activity; automatic and 
   await db.query("UPDATE prospects SET status='demo' WHERE id=$1",[f.id]);
   await applyInboundEffect(f.conversationId,f.id,f.body,"Re: Nomeriq question",f.receivedAt,f.messageId);
   expect(await latestOfferRejection(f.id)).not.toBeNull();
-  expect((await db.query("SELECT status FROM prospects WHERE id=$1",[f.id])).rows[0]).toMatchObject({status:"demo"});
+  expect((await db.query("SELECT status,do_not_contact FROM prospects WHERE id=$1",[f.id])).rows[0]).toMatchObject({status:"demo",do_not_contact:true});
+  expect((await getRecipientPolicy(f.id)).blocked).toBe(true);
+  await expect(sendDraft({ draftId:f.firstContactDraftId, actorUserId:crypto.randomUUID(), allowFounderRecipient:true })).rejects.toMatchObject({code:"do_not_contact"});
+  expect((await db.query("SELECT id FROM outbound_sends WHERE draft_id=$1",[f.firstContactDraftId])).rows).toHaveLength(0);
+  await applyInboundEffect(f.conversationId,f.id,f.body,"Re: Nomeriq question",f.receivedAt,f.messageId);
+  expect((await db.query("SELECT metadata FROM audit_log WHERE action='lead.rejection_hold_set' AND entity_id=$1",[f.id])).rows).toHaveLength(1);
+  // A replay cannot silently overturn a founder's subsequent clear.
+  await db.query("UPDATE prospects SET do_not_contact=false WHERE id=$1",[f.id]);
+  await applyInboundEffect(f.conversationId,f.id,f.body,"Re: Nomeriq question",f.receivedAt,f.messageId);
+  expect((await db.query("SELECT do_not_contact FROM prospects WHERE id=$1",[f.id])).rows[0]).toMatchObject({do_not_contact:false});
   const auto=await fixture("Not interested.");
   await db.query(`UPDATE messages SET raw_headers='{"autoReply":true}'::jsonb WHERE id=$1`,[auto.messageId]);
   expect(await db.transaction(tx=>recordOfferRejection(tx,auto.id,auto.messageId))).toBe(false);

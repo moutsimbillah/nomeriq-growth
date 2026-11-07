@@ -218,8 +218,32 @@ export async function applyInboundEffect(
   const db = await getDb();
   const classification = classifyReply(body);
   await db.transaction(async (tx) => {
-    // Record even an out-of-order genuine rejection. Chronology must not erase its objection/hold.
-    if (messageDbId) await recordOfferRejection(tx, prospectId, messageDbId);
+    // The rejection hold is independent of thread chronology: a late-imported rejection must
+    // block every send, including a hand-written first contact, before the early return below.
+    const isOfferRejection = messageDbId
+      ? await recordOfferRejection(tx, prospectId, messageDbId)
+      : classification.classification === "not_interested";
+    if (isOfferRejection) {
+      const prior = (await tx.query<{ do_not_contact: boolean; next_action: string | null }>(
+        `SELECT do_not_contact, next_action FROM prospects WHERE id = $1 FOR UPDATE`, [prospectId],
+      )).rows[0];
+      // Serializing on the prospect makes the snapshot and hold idempotent per message. Replaying
+      // an already-reviewed rejection must not reinstate a hold the founder personally cleared.
+      const alreadyApplied = messageDbId && (await tx.query(
+        `SELECT id FROM audit_log WHERE action='lead.rejection_hold_set' AND entity_type='prospect'
+          AND entity_id=$1 AND metadata->>'messageId'=$2 LIMIT 1`, [prospectId, messageDbId],
+      )).rows.length > 0;
+      if (prior && !alreadyApplied && (messageDbId || !prior.do_not_contact)) {
+        await tx.query(`UPDATE prospects SET do_not_contact = true,
+            next_action = 'Review rejection and confirm Closed/Lost; no further contact until you clear the hold',
+            updated_at=now() WHERE id=$1`, [prospectId]);
+        await tx.query(`INSERT INTO audit_log (id,actor_type,actor_id,action,entity_type,entity_id,metadata)
+          VALUES ($1,'system',NULL,'lead.rejection_hold_set','prospect',$2,$3::jsonb)`,
+          [crypto.randomUUID(), prospectId, JSON.stringify({
+            previousDoNotContact: prior.do_not_contact, previousNextAction: prior.next_action, messageId: messageDbId ?? null,
+          })]);
+      }
+    }
     const clock = await tx.query<{ last_message_at: string | null }>(
       `SELECT last_message_at FROM conversations WHERE id = $1 FOR UPDATE`, [conversationId]);
     if (clock.rows[0]?.last_message_at && new Date(clock.rows[0].last_message_at).getTime() > new Date(receivedAt).getTime()) {
@@ -251,34 +275,15 @@ export async function applyInboundEffect(
           WHEN status IN ('new', 'verified', 'draft_prepared', 'contacted', 'replied') THEN 'replied'
           ELSE status END,
         next_action = CASE
+          WHEN $3::boolean THEN next_action
           WHEN status IN ('new', 'verified', 'draft_prepared', 'contacted', 'replied') THEN 'Read and respond to the reply'
           ELSE next_action END,
         updated_at = now()
        WHERE id = $2`,
-      [receivedAt, prospectId],
+      [receivedAt, prospectId, isOfferRejection],
     );
 
-    if (classification.classification === "not_interested") {
-      // Founder decision (7 Nov 2026): an ordinary offer rejection stays a hard send block, same as
-      // an opt-out — do_not_contact, not merely an automatic-follow-up pause — until the founder
-      // clears it from the lead page. It is not relabelled a formal unsubscribe/opt-out: no
-      // suppression row, no automatic Lost, so it is never shown in the "opted out" folder and the
-      // founder still confirms Lost explicitly. Record the prior values first so this is undoable
-      // without a backup restore.
-      const prior = (await tx.query<{ do_not_contact: boolean; next_action: string | null }>(
-        `SELECT do_not_contact, next_action FROM prospects WHERE id = $1`, [prospectId],
-      )).rows[0];
-      await tx.query(`UPDATE prospects SET do_not_contact = true,
-          next_action = 'Review rejection and confirm Closed/Lost; no further contact until you clear the hold',
-          updated_at=now() WHERE id=$1`, [prospectId]);
-      if (prior) {
-        await tx.query(`INSERT INTO audit_log (id,actor_type,actor_id,action,entity_type,entity_id,metadata)
-          VALUES ($1,'system',NULL,'lead.rejection_hold_set','prospect',$2,$3::jsonb)`,
-          [crypto.randomUUID(), prospectId, JSON.stringify({
-            previousDoNotContact: prior.do_not_contact, previousNextAction: prior.next_action, messageId: messageDbId ?? null,
-          })]);
-      }
-    }
+
     if (classification.classification === "unsubscribe") {
       const emailResult = await tx.query<{ email: string }>(
         `SELECT email FROM prospect_emails WHERE prospect_id = $1

@@ -478,11 +478,13 @@ export async function saveProspect(
         // Record what this row held before the assessment superseded it. Harmless today (this row
         // was inserted a few lines above, in this same transaction), and required once a later
         // reassessment calls this same path against an already-saved lead.
-        const beforeAssessment = (await tx.query<{ qualification_status: string; status: string; rejection_reason: string | null }>(
-          `SELECT qualification_status, status, rejection_reason FROM prospects WHERE id=$1`, [id],
+        const beforeAssessment = (await tx.query<{ qualification_status: string; status: string; rejection_reason: string | null; verified_at: string | null }>(
+          `SELECT qualification_status, status, rejection_reason, verified_at FROM prospects WHERE id=$1`, [id],
         )).rows[0];
-        await tx.query(`UPDATE prospects SET qualification_status=$2,verified_at=CASE WHEN $2='verified' THEN now() ELSE NULL END,
-          status=CASE WHEN $2='verified' THEN 'verified' ELSE 'new' END,rejection_reason=$3 WHERE id=$1`,[id,savedQualification,leadModel.exclusionReason]);
+        const afterAssessment = (await tx.query<{ status: string; verified_at: string | null }>(
+          `UPDATE prospects SET qualification_status=$2,verified_at=CASE WHEN $2='verified' THEN now() ELSE NULL END,
+          status=CASE WHEN $2='verified' THEN 'verified' ELSE 'new' END,rejection_reason=$3 WHERE id=$1
+          RETURNING status, verified_at`,[id,savedQualification,leadModel.exclusionReason])).rows[0];
         if (beforeAssessment) {
           await tx.query(`INSERT INTO audit_log (id,actor_type,actor_id,action,entity_type,entity_id,metadata)
             VALUES ($1,$2,$3,'lead.assessment_applied','prospect',$4,$5::jsonb)`,
@@ -490,8 +492,11 @@ export async function saveProspect(
               previousQualificationStatus: beforeAssessment.qualification_status,
               previousStatus: beforeAssessment.status,
               previousRejectionReason: beforeAssessment.rejection_reason,
+              previousVerifiedAt: beforeAssessment.verified_at,
               newQualificationStatus: savedQualification,
               newRejectionReason: leadModel.exclusionReason,
+              newStatus: afterAssessment.status,
+              newVerifiedAt: afterAssessment.verified_at,
             })]);
         }
       }

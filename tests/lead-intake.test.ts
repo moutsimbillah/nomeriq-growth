@@ -52,6 +52,12 @@ it("saves a website/email lead, its per-account audience and derived tier atomic
  expect(saved).toMatchObject({created:true,leadModel:{tier:"tier_1",eligibility:"eligible",productFit:"unknown"}});
  expect(saved.prospect.qualificationStatus).toBe("verified");expect(saved.leadModel!.audiences).toHaveLength(1);
  expect((await getLeadModel(saved.prospect.id)).assessmentId).toBe(saved.leadModel!.assessmentId);
+ const db=await getDb();
+ const audit=(await db.query<{metadata:Record<string,unknown>}>("SELECT metadata FROM audit_log WHERE action='lead.assessment_applied' AND entity_id=$1",[saved.prospect.id])).rows[0].metadata;
+ expect(audit).toMatchObject({previousVerifiedAt:null,newQualificationStatus:"verified",newStatus:"verified"});
+ expect(audit.newVerifiedAt).toEqual(expect.any(String));
+ expect(audit).toHaveProperty("previousQualificationStatus");
+ expect(audit).toHaveProperty("previousRejectionReason");
 });
 it("a published official-profile email without a website remains outreach-eligible under its own non-counted tier",async()=>{
  const input=payload("email_only"),saved=await saveProspect(input);ids.push(saved.prospect.id);

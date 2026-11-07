@@ -18,8 +18,8 @@ const leads: string[] = [];
 beforeAll(async () => {
   await ensureWorkspaceDefaults();
   const db = await getDb();
-  // The exact approved additive SQL; useful while 030 is being prepared for the migration runner.
-  await db.exec(readFileSync("docs/lead-model-migration-proposal.sql", "utf8"));
+  // Exercise the committed migration, never an untracked approval-stage proposal.
+  await db.exec(readFileSync("src/db/migrations/030_lead_model.sql", "utf8"));
 });
 afterEach(() => expect(transport.calls).toBe(0));
 afterAll(async () => {
