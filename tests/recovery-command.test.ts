@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { getDb, closeDb, type DbClient } from "@/lib/db/client";
 import { previewHistoricalBounces } from "@/lib/email/bounce-handling";
-import { checkSent, checkpointComplete, importFolder, forbiddenSnapshot, runRecoveryCommand, NEEDS_REPLY_NAMES, ONWARD_UTC } from "../scripts/recover-mailbox";
+import { checkSent, checkpointComplete, importFolder, forbiddenSnapshot, runRecoveryCommand, NEEDS_REPLY_NAMES, ONWARD_MESSAGE_IDS } from "../scripts/recover-mailbox";
 import type { SyncResult } from "@/lib/email/sync";
 
 let db: DbClient;
@@ -14,10 +14,10 @@ function page(complete = true): SyncResult {
     folders: [{ folder: "Sent Items", imported: 0, scanned: 0 }],
     progress: [{ folder: "Sent Items", uidValidity: 1, lastUid: 1, remaining: complete ? 0 : 1, complete }] };
 }
-async function message(time: string, direction = "outbound", body = "", name = "Sent Items") {
+async function message(time: string, direction = "outbound", body = "", name = "Sent Items", messageId = `<${crypto.randomUUID()}@example.test>`) {
   const id = crypto.randomUUID(); ids.push(id);
-  await db.query(`INSERT INTO messages (id,account_id,prospect_id,conversation_id,direction,source,folder,from_email,body_text,sent_at,received_at)
-    VALUES ($1,$2,$3,$4,$5,'imap',$6,'mailer-daemon@example.test',$7,$8,$8)`, [id, accountId, prospectId, conversationId, direction, name, body, time]);
+  await db.query(`INSERT INTO messages (id,account_id,prospect_id,conversation_id,direction,source,folder,from_email,body_text,sent_at,received_at,message_id)
+    VALUES ($1,$2,$3,$4,$5,'imap',$6,'mailer-daemon@example.test',$7,$8,$8,$9)`, [id, accountId, prospectId, conversationId, direction, name, body, time, messageId]);
   return id;
 }
 beforeAll(async () => {
@@ -50,19 +50,37 @@ describe("real PGlite staged recovery guards", () => {
     expect(sync).not.toHaveBeenCalled();
     expect(await forbiddenSnapshot(db)).toEqual(before);
   });
-  it("requires checkpoint and both exact Onward times in the same conversation", async () => {
+  it("requires checkpoint and both verified Message-IDs in the same Onward thread, not rounded times", async () => {
     expect(await checkpointComplete(db, accountId, "Sent Items")).toBe(false);
     await db.query(`INSERT INTO mailbox_sync_state (id,account_id,folder,uidvalidity,last_uid,history_complete) VALUES ($1,$2,'backfill:Sent Items',1,1,true)`, [crypto.randomUUID(), accountId]);
-    for (const time of ONWARD_UTC) await message(time);
+    await message("2026-10-17T23:25:11Z", "outbound", "", "Sent Items", ONWARD_MESSAGE_IDS[0]);
+    await message("2026-10-24T09:47:02Z", "outbound", "", "Sent Items", ONWARD_MESSAGE_IDS[1]);
     const result = await checkSent(db, accountId, reader);
     expect(result.complete).toBe(true);
     expect(result.onward.map(r => r.count)).toEqual([1, 1]);
     expect(Object.keys(result.folders)).toHaveLength(11);
-    const extra = await message("2026-10-24T09:47:00.001Z");
+    const extra = await message("2026-10-24T09:47:02Z");
     expect((await checkSent(db, accountId, reader)).onward.map(r => r.count)).toEqual([1, 1]);
-    await db.query(`UPDATE messages SET sent_at = $2 WHERE id = $1`, [extra, ONWARD_UTC[1]]);
-    expect((await checkSent(db, accountId, reader)).complete).toBe(false);
+    await expect(db.query(`UPDATE messages SET message_id = $2 WHERE id = $1`, [extra, ONWARD_MESSAGE_IDS[1]]))
+      .rejects.toThrow('messages_account_message_unique');
+    expect((await checkSent(db, accountId, reader)).complete).toBe(true);
     await db.query(`DELETE FROM messages WHERE id = $1`, [extra]);
+  });
+  it("rejects missing identities, wrong account, wrong lead, wrong thread and wrong direction", async () => {
+    const row = (await db.query<{ id: string }>(`SELECT id FROM messages WHERE account_id=$1 AND message_id=$2`, [accountId, ONWARD_MESSAGE_IDS[0]])).rows[0];
+    for (const [column, badValue, original] of [
+      ["message_id", "<unrelated@example.test>", ONWARD_MESSAGE_IDS[0]],
+      ["account_id", null, accountId],
+      ["prospect_id", null, prospectId],
+      ["conversation_id", null, conversationId],
+      ["direction", "inbound", "outbound"],
+      ["folder", "INBOX", "Sent Items"],
+    ] as const) {
+      await db.query(`UPDATE messages SET ${column}=$2 WHERE id=$1`, [row.id, badValue]);
+      expect((await checkSent(db, accountId, reader)).complete, column).toBe(false);
+      await db.query(`UPDATE messages SET ${column}=$2 WHERE id=$1`, [row.id, original]);
+    }
+    expect((await checkSent(db, accountId, reader)).complete).toBe(true);
   });
   it("stops on errors and never treats a capped run as complete", async () => {
     const failed = { ...page(), errors: ["redacted"] };

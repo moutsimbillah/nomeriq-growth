@@ -27,7 +27,11 @@ import { assertTarget } from "./inspect-mailbox";
 
 export const NEEDS_REPLY_NAMES = ["CryptoSense AI", "FXPULSE", "Forex Cipher", "Forexearlywarning", "Money Bells",
   "NeverSleep Forex Signals", "OnwardBTC", "Scope Signals", "Y7Signals", "Zak FX Hub Academy"] as const;
-export const ONWARD_UTC = ["2026-10-17T23:25:00.000Z", "2026-10-24T09:47:00.000Z"] as const;
+// Verified from the retained replies; minute-only display times are not message identities.
+export const ONWARD_MESSAGE_IDS = [
+  "<2120060310.654233.1792279511850@email.ionos.com>",
+  "<1624507139.686297.1792835222296@email.ionos.com>",
+] as const;
 const MAX_PASSES = 60;
 
 export type Command = "dry-run" | "sent" | "check-sent" | "inbox" | "bounces-preview" | "bounces-apply";
@@ -65,21 +69,21 @@ export async function readFolders(db: RecoveryDb, getFolderInbox: FolderReader) 
 }
 export async function checkSent(db: RecoveryDb, accountId: string, getFolderInbox: FolderReader, options: { requireAnsweredFolders?: boolean } = {}) {
   const folders = await readFolders(db, getFolderInbox);
-  const onward = (await db.query<{ sent_at: string; conversation_id: string; prospect_id: string }>(`SELECT m.sent_at,m.conversation_id,c.prospect_id
+  const onward = (await db.query<{ message_id: string; conversation_id: string; prospect_id: string }>(`SELECT m.message_id,m.conversation_id,c.prospect_id
     FROM messages m JOIN conversations c ON c.id = m.conversation_id JOIN prospects p ON p.id = c.prospect_id
     WHERE p.business_name = 'OnwardBTC' AND p.archived_at IS NULL AND m.prospect_id = p.id
       AND m.account_id = $1 AND m.direction = 'outbound' AND m.folder = 'Sent Items'
-      AND m.sent_at = ANY($2::timestamptz[])`, [accountId, [...ONWARD_UTC]])).rows;
-  const exactTimes = ONWARD_UTC.map(time => onward.filter(r => new Date(r.sent_at).toISOString() === time).length);
+      AND m.message_id = ANY($2::text[])`, [accountId, [...ONWARD_MESSAGE_IDS]])).rows;
+  const identities = ONWARD_MESSAGE_IDS.map(messageId => onward.filter(r => r.message_id === messageId).length);
   const duplicates = (await db.query<{ message_ids: number; physical_uids: number; conversations: number }>(`SELECT
     (SELECT count(*)::int FROM (SELECT account_id,message_id FROM messages WHERE message_id IS NOT NULL AND message_id <> '' GROUP BY account_id,message_id HAVING count(*) > 1) d) AS message_ids,
     (SELECT count(*)::int FROM (SELECT account_id,folder,uidvalidity,uid FROM messages WHERE uid IS NOT NULL AND uidvalidity IS NOT NULL GROUP BY account_id,folder,uidvalidity,uid HAVING count(*) > 1) d) AS physical_uids,
     (SELECT count(*)::int FROM (SELECT prospect_id FROM conversations GROUP BY prospect_id HAVING count(*) > 1) d) AS conversations`)).rows[0];
   const checkpoint = await checkpointComplete(db, accountId, "Sent Items");
   const complete = checkpoint && (options.requireAnsweredFolders === false || CONVERSATION_NAMES.every(name => folders[name] === "in_conversation"))
-    && exactTimes.every(n => n === 1) && new Set(onward.map(r => r.conversation_id)).size === 1
+    && identities.every(n => n === 1) && new Set(onward.map(r => r.conversation_id)).size === 1
     && new Set(onward.map(r => r.prospect_id)).size === 1 && !!duplicates && Object.values(duplicates).every(n => Number(n) === 0);
-  return { complete, checkpoint, folders, onward: exactTimes.map((count, i) => ({ time: ONWARD_UTC[i], count })), duplicates };
+  return { complete, checkpoint, folders, onward: identities.map((count, i) => ({ reply: i + 1, count })), duplicates };
 }
 export async function forbiddenSnapshot(db: RecoveryDb) {
   return (await db.query(`SELECT
