@@ -70,6 +70,27 @@ it("the founder's own doNotContact clear releases a rejection hold for the next 
   // fixture), never the "do_not_contact" code this test exists to prove is released.
   await expect(sendDraft({ draftId: f.firstContactDraftId, actorUserId: crypto.randomUUID(), allowFounderRecipient: true })).rejects.not.toMatchObject({ code: "do_not_contact" });
 });
+it("a rejection retains address-wide protection across shared-address leads and newly typed recipients",async()=>{
+  const first=await fixture("Not interested in integrations.");
+  const second=await fixture("A different business using the same generic contact.");
+  const typed=await fixture("Another separate business.");
+  const db=await getDb(); const shared=`info@${crypto.randomUUID()}.example.test`;
+  for(const f of [first,second]) {
+    await db.query("UPDATE prospect_emails SET email=$2,normalized_email=$2 WHERE prospect_id=$1",[f.id,shared]);
+    await db.query("UPDATE drafts SET recipient_email=$2 WHERE id=$1",[f.firstContactDraftId,shared]);
+  }
+  await db.query("UPDATE messages SET from_email=$2 WHERE id=$1",[first.messageId,shared]);
+  await applyInboundEffect(first.conversationId,first.id,first.body,"Re: Nomeriq question",first.receivedAt,first.messageId);
+  expect((await getRecipientPolicy(second.id)).blocked).toBe(true);
+  await expect(sendDraft({draftId:second.firstContactDraftId,actorUserId:crypto.randomUUID(),allowFounderRecipient:true})).rejects.toMatchObject({code:"rejection_hold"});
+  await db.query("UPDATE drafts SET recipient_email=$2 WHERE id=$1",[typed.firstContactDraftId,shared]);
+  await expect(sendDraft({draftId:typed.firstContactDraftId,actorUserId:crypto.randomUUID(),allowFounderRecipient:true})).rejects.toMatchObject({code:"rejection_hold"});
+  expect((await db.query("SELECT id FROM prospect_emails WHERE prospect_id=$1 AND normalized_email=$2",[typed.id,shared])).rows).toHaveLength(0);
+  expect((await db.query("SELECT id FROM outbound_sends WHERE prospect_id=ANY($1::uuid[])",[[first.id,second.id,typed.id]])).rows).toHaveLength(0);
+  // Only the founder clearing the original rejection hold releases its address-wide projection.
+  await db.query("UPDATE prospects SET do_not_contact=false WHERE id=$1",[first.id]);
+  expect((await getRecipientPolicy(second.id)).blocked).toBe(false);
+});
 it("a real opt-out still suppresses contact, and quoted rejection does not turn a normal response into an opt-out",async()=>{
   const f=await fixture("Stop emailing us. Unsubscribe.");
   await applyInboundEffect(f.conversationId,f.id,f.body,"Re: Nomeriq question",f.receivedAt,f.messageId);

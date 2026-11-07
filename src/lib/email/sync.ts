@@ -234,6 +234,11 @@ export async function applyInboundEffect(
           AND entity_id=$1 AND metadata->>'messageId'=$2 LIMIT 1`, [prospectId, messageDbId],
       )).rows.length > 0;
       if (prior && !alreadyApplied && (messageDbId || !prior.do_not_contact)) {
+        // Retain the former address-wide protection without labelling an offer rejection an
+        // unsubscribe. Snapshot the same primary address the previous suppression path used.
+        const blockedAddress = (await tx.query<{ normalized_email: string }>(
+          `SELECT normalized_email FROM prospect_emails WHERE prospect_id=$1 ORDER BY is_primary DESC LIMIT 1`, [prospectId],
+        )).rows[0]?.normalized_email ?? null;
         await tx.query(`UPDATE prospects SET do_not_contact = true,
             next_action = 'Review rejection and confirm Closed/Lost; no further contact until you clear the hold',
             updated_at=now() WHERE id=$1`, [prospectId]);
@@ -241,6 +246,7 @@ export async function applyInboundEffect(
           VALUES ($1,'system',NULL,'lead.rejection_hold_set','prospect',$2,$3::jsonb)`,
           [crypto.randomUUID(), prospectId, JSON.stringify({
             previousDoNotContact: prior.do_not_contact, previousNextAction: prior.next_action, messageId: messageDbId ?? null,
+            blockedNormalizedEmail: blockedAddress,
           })]);
       }
     }

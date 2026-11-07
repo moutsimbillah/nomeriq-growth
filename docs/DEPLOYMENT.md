@@ -327,3 +327,32 @@ Reviewed `scripts/deploy.sh` sha256:
 ```text
 bb86e975a211864901579eee24a31a3aeab395a25c715aac3f1bac101358f8b6  scripts/deploy.sh
 ```
+
+### Pending Part 1 deployment-safety revision — NOT authorized until founder approval
+
+The previously reviewed hash above remains the authorized server copy until the founder explicitly
+approves this revision and independent review passes. Candidate `scripts/deploy.sh` SHA-256:
+
+```text
+a8cc605ca1dfe323f1b3b7ce1d123e1ae3f8197268fc9339399b2d37b593f8c6  scripts/deploy.sh
+```
+
+This revision adds `prepare`: it takes and verifies a fresh database dump, fetches the committed
+source and checks it out, but does **not** rebuild `.next`, install dependencies or restart the
+running service. It refuses dependency changes before checkout. Its `build` also checks the migration
+ledger **before** touching `.next`, not merely before restart.
+
+For the approved Part 1 migration, the order with this revision is:
+
+1. Verify the exact approved script bytes and sibling `SHA256SUMS` outside the checkout.
+2. Run `deploy.sh prepare`; verify the dump and expected checkout, and verify the existing `.next`
+   build identifier and running process start time are unchanged.
+3. Use the existing target assertion and env-loaded `npm run db:migrate` command in **Applying
+   migrations to production** above. The runner applies each file and its ledger insert in one
+   transaction; do not hand-write the ledger. Require only migration 030 newly applied, then verify
+   its five tables/RLS/indexes and the 30-row ledger with a separate read-only call.
+4. Only after those checks, run `deploy.sh build` followed by `deploy.sh restart`, verify the exact
+   commit, health, service, timers and baseline counts. Do not invoke sync, send or research as a probe.
+
+There is no migration-in-restart or new schema-write mechanism. A failure stops before the next
+step; retain additive schema and recipient holds, and use only an independently reviewed rollback.

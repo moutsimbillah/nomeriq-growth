@@ -3,6 +3,15 @@ import { classifyReply, stripQuotedReply } from "@/lib/email/classify";
 import { iso } from "@/lib/utils";
 
 export const OFFER_REJECTION_REASON = "Prospect explicitly declined the offer, partnerships, integrations or a new platform. Recommend Closed/Lost for founder confirmation; automatic follow-ups are stopped. This is not a formal unsubscribe.";
+/** The rejection's original primary address remains blocked across leads until its founder hold is cleared. */
+export async function rejectionHeldAddresses(emails: string[], client?: DbClient): Promise<string[]> {
+  if (!emails.length) return [];
+  const db = client ?? await getDb();
+  return (await db.query<{ email: string }>(`SELECT DISTINCT a.metadata->>'blockedNormalizedEmail' AS email
+    FROM audit_log a JOIN prospects p ON p.id::text=a.entity_id
+    WHERE a.action='lead.rejection_hold_set' AND a.entity_type='prospect' AND p.do_not_contact
+      AND a.metadata->>'blockedNormalizedEmail'=ANY($1::text[])`, [emails])).rows.map(row=>row.email);
+}
 export async function recordOfferRejection(db: DbClient, prospectId: string, messageId: string): Promise<boolean> {
   const row = (await db.query<{ body_text: string }>(`SELECT m.body_text FROM messages m
     WHERE m.id=$1 AND m.prospect_id=$2 AND m.direction='inbound'

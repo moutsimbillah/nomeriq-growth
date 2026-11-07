@@ -33,6 +33,7 @@ import { recordFounderEnteredEmail } from "./prospects";
 import { getWorkspaceSettings } from "./settings";
 import { getRecipientPolicy } from "./recipient-policy";
 import { assertLeadOutreachAllowed } from "./lead-outreach-guard";
+import { rejectionHeldAddresses } from "./lead-rejections";
 import { realFollowUpInboundSql } from "./agent-followups";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -231,6 +232,9 @@ async function checkRecipientSafety(
   // Check the whole lead BEFORE recording a newly typed address. Bounce-only suppression is
   // address-specific; every other suppression and an unsubscribe classification stop all aliases.
   const policy = await getRecipientPolicy(prospectId, db);
+  if ((await rejectionHeldAddresses([normalizeEmail(email), ...policy.emails.map(e=>normalizeEmail(e.email))], db)).length) {
+    throw new AppError("This address is blocked by an offer-rejection hold, including across linked leads.", 409, "rejection_hold");
+  }
   const suppressed = await db.query(
     `SELECT 1 FROM suppressions s WHERE s.active = true AND
       (s.normalized_email = $2 OR (s.reason <> 'bounce' AND

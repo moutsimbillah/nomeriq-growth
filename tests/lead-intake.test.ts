@@ -58,6 +58,7 @@ it("saves a website/email lead, its per-account audience and derived tier atomic
  expect(audit.newVerifiedAt).toEqual(expect.any(String));
  expect(audit).toHaveProperty("previousQualificationStatus");
  expect(audit).toHaveProperty("previousRejectionReason");
+ expect((await db.query("SELECT verified_at=($2::timestamptz) AS exact FROM prospects WHERE id=$1",[saved.prospect.id,audit.newVerifiedAt])).rows[0].exact).toBe(true);
 });
 it("a published official-profile email without a website remains outreach-eligible under its own non-counted tier",async()=>{
  const input=payload("email_only"),saved=await saveProspect(input);ids.push(saved.prospect.id);

@@ -19,11 +19,10 @@
 #   - touch .env, .growth.env or .env.production
 #   - delete anything, drop a database, or restore a dump
 #   - run a migration (that is a separate, explicitly approved step; when one is pending the
-#     script stops before the restart and prints the order: dump, build, the approved migration,
-#     restart)
+#     script stops before the build/restart until the approved migration has run)
 #   - proceed when the server checkout is dirty after the hard reset
 #
-# Usage:  deploy.sh dump | build | restart | all      (default: all)
+# Usage:  deploy.sh dump | prepare | build | restart | all      (default: all)
 set -euo pipefail
 
 APP=/home/growth/app
@@ -79,7 +78,7 @@ require_migrations_applied() {
   if [ -n "$missing" ]; then
     echo "REFUSING: $step needs every migration applied, but these files are not in _migrations:"
     printf '%s\n' "$missing"
-    echo "Order for a deploy with a migration: dump, build, the approved migration, then restart."
+    echo "Order for a deploy with a migration: prepare (dump + checkout), approved migration, build, restart."
     exit 4
   fi
 }
@@ -101,11 +100,15 @@ dump() {
   fi
 }
 
-build() {
+checkout() {
   say "fetch and check out origin/master"
   git_as_growth "fetch --all --prune"
   local before after
   before="$(as_growth "git -C $APP rev-parse --short HEAD")"
+  if [ "${1:-}" = "schema-only" ] && ! as_growth "git -C $APP diff --quiet HEAD origin/master -- package.json package-lock.json"; then
+    echo "REFUSING: prepare requires unchanged dependencies; review a separate dependency deployment."
+    exit 7
+  fi
   git_as_growth "reset --hard origin/master"
   after="$(as_growth "git -C $APP rev-parse --short HEAD")"
   printf 'was: %s\nnow: %s\n' "$before" "$after"
@@ -116,6 +119,22 @@ build() {
     echo "REFUSING: the checkout is dirty after a hard reset; something on the server is not in git."
     exit 1
   fi
+  CHECKOUT_BEFORE="$before"
+  CHECKOUT_AFTER="$after"
+}
+
+# Make the committed migration available without rewriting .next or restarting the process.
+# The documented env-loaded db:migrate runner and ledger/schema checks come before build.
+prepare() {
+  dump
+  checkout schema-only
+  printf 'PREPARED commit=%s (existing .next and process unchanged)\n' "$CHECKOUT_AFTER"
+}
+
+build() {
+  checkout
+  require_migrations_applied
+  local before="$CHECKOUT_BEFORE" after="$CHECKOUT_AFTER"
 
   # Only reinstall when the lockfile actually moved: npm ci is minutes, and it must be npm 10.
   if as_growth "git -C $APP diff --name-only $before $after -- package-lock.json" | grep -q .; then
@@ -175,6 +194,7 @@ restart() {
 
 case "$step" in
   dump) dump ;;
+  prepare) prepare ;;
   build) build ;;
   restart) restart ;;
   all) dump; build; require_migrations_applied; restart ;;
