@@ -86,7 +86,7 @@ describe("mailbox inspector pure matching and privacy", () => {
   it("uses unique exact references and simulates chronology without claiming a live fix", () => {
     const result = analyze(withThread());
     const lead = result.needsReply.find(r => r.leadName === "OnwardBTC")!;
-    expect(lead).toMatchObject({ missingExactOutbound: 1, laterMissingExactOutbound: 1, simulatedAfterExactFullImport: "Waiting_chronology_only", liveFixed: false });
+    expect(lead).toMatchObject({ missingExactOutbound: 1, laterMissingExactOutbound: 1, simulatedAfterExactFullImport: "In_conversation_chronology_only", liveFixed: false });
     expect(result.onwardChecks[0]).toMatchObject({ mailboxMatches: 1, portalMissing: 1, exactThreadMatches: 1 });
     const output = JSON.stringify(result);
     for (const privateValue of ["synthetic.invalid", "<Parent", "Synthetic", "excerpt", "full body"]) expect(output).not.toContain(privateValue);

@@ -142,7 +142,7 @@ export function analyze(f: Facts) {
     }
     const simulatedInbound = Math.max(inbound, ...unique.filter(m => m.direction === "inbound" && m.bounceKind === "none" && !m.autoReply && m.match.id === p.id && m.match.confidence === "exact_thread").map(m => m.when));
     const simulatedOutbound = Math.max(outbound, ...exact.map(m => m.when));
-    const simulated = simulatedInbound ? simulatedOutbound > simulatedInbound ? "Waiting_chronology_only" : "Needs_reply_chronology_only" : "unknown";
+    const simulated = simulatedInbound ? simulatedOutbound > simulatedInbound ? "In_conversation_chronology_only" : "Needs_reply_chronology_only" : "unknown";
     return { leadName, complete: true, currentNeedsReplyByChronology: inbound > outbound, portalInbound: db.filter(m => m.direction === "inbound").length, portalOutbound: db.filter(m => m.direction === "outbound").length,
       portalImapOutbound: db.filter(m => m.direction === "outbound" && m.source === "imap").length,
       mailboxExactOutbound: exact.length, laterExactOutbound: exact.filter(m => m.when > inbound).length, missingExactOutbound: missing.length, laterMissingExactOutbound: missing.filter(m => m.when > inbound).length,

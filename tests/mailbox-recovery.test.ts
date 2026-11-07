@@ -122,8 +122,8 @@ describe("explicit import-only mailbox recovery", () => {
     const onward = await db.query<{ status: string; last_outbound_at: string }>(`SELECT status,last_outbound_at FROM conversations WHERE id=$1`, [conversationId]);
     expect(onward.rows[0].status).toBe("waiting");
     expect(new Date(onward.rows[0].last_outbound_at).toISOString()).toBe("2026-10-24T09:47:00.000Z");
-    // ...and once both webmail replies are imported, the folder inbox moves the lead to Waiting.
-    expect((await getFolderInbox({ focus: prospectId })).focused?.folder).toBe("waiting");
+    // Morning founder rule: a lead who ever replied belongs In conversation after our answer.
+    expect((await getFolderInbox({ focus: prospectId })).focused?.folder).toBe("in_conversation");
     fake.failUid = 105;
     const failed = await syncEmailAccount(accountId, { mode: "backfill", founderUserId: userId });
     expect(failed.historyIncomplete).toBe(true);

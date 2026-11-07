@@ -127,11 +127,7 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
           ORDER BY pe.is_primary DESC LIMIT 1) AS contact_email,
         ${suppressionProjectionSQL} AS suppression_reason,
         d.id AS draft_id, d.kind AS draft_kind, d.sequence AS draft_sequence, d.status AS draft_status, d.updated_at AS draft_updated_at,
-        c.id AS conversation_id, c.subject, c.unread_count, history.last_inbound_at, history.last_outbound_at,
-        (SELECT m.source = 'imap' AND coalesce(m.sent_at, m.created_at) = history.last_outbound_at
-          FROM messages m LEFT JOIN conversations mc ON mc.id = m.conversation_id
-          WHERE coalesce(m.prospect_id, mc.prospect_id) = p.id AND m.direction = 'outbound' AND ${realMailSQL('m')}
-          ORDER BY coalesce(m.sent_at, m.created_at) DESC, m.id DESC LIMIT 1) AS external_reply
+        c.id AS conversation_id, c.subject, c.unread_count, history.last_inbound_at, history.last_outbound_at
        FROM prospects p
        LEFT JOIN LATERAL (${mailHistorySQL}) history ON true
        LEFT JOIN LATERAL (
@@ -160,7 +156,6 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
       lastInboundAt,
       lastOutboundAt,
       hasReplied: Boolean(lastInboundAt),
-      latestOutboundIsExternalReply: row.external_reply === true,
       hasOutbound: Boolean(lastOutboundAt),
     });
     counts[folder] += 1;

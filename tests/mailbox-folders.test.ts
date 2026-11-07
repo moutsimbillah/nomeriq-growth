@@ -49,10 +49,10 @@ async function projections(id: string) {
   return {row:inbox.focused!, card};
 }
 describe('recovered mailbox folder and pipeline facts', () => {
-  it('Onward-style older inbound plus recovered external answer is Waiting, still Engaged and never follow-up due', async () => {
+  it('answered real replies are In conversation regardless of webmail origin, still Engaged and never follow-up due', async () => {
     const l = await lead(); await message(l,'inbound',17); await message(l,'outbound',24);
     const {row,card} = await projections(l.id);
-    expect(row.folder).toBe('waiting'); expect(row.lastInboundAt).toBe(at(17)); expect(row.lastOutboundAt).toBe(at(24));
+    expect(row.folder).toBe('in_conversation'); expect(row.lastInboundAt).toBe(at(17)); expect(row.lastOutboundAt).toBe(at(24));
     expect(card.column).toBe('engaged'); expect(card.replyWaitingSince).toBeNull(); expect(card.followUpDue).toBe(false);
     expect(card.followUpLine).toBe('Stopped: they replied');
   });
@@ -61,22 +61,26 @@ describe('recovered mailbox folder and pipeline facts', () => {
     const {row,card} = await projections(l.id);
     expect(row.folder).toBe('needs_reply'); expect(card.replyWaitingSince).toBe(at(25));
   });
-  it.each(['deliveryReport','autoReply'])('later %s does not change Waiting or the snippet', async flag => {
+  it.each(['deliveryReport','autoReply'])('later %s does not change In conversation or the snippet', async flag => {
     const l = await lead(); await message(l,'inbound',17); await message(l,'outbound',24); await message(l,'inbound',28,{flag});
     const {row,card} = await projections(l.id);
-    expect(row.folder).toBe('waiting'); expect(row.snippet).toBe('outbound-24'); expect(row.lastActivityAt).toBe(at(24));
+    expect(row.folder).toBe('in_conversation'); expect(row.snippet).toBe('outbound-24'); expect(row.lastActivityAt).toBe(at(24));
     expect(card.replyWaitingSince).toBeNull(); expect(card.followUpDue).toBe(false);
   });
   it.each(['failed','bounced','uncertain'])('%s outbound cannot fake an answer', async delivery => {
     const l = await lead(); await message(l,'inbound',17); await message(l,'outbound',24,{delivery});
     expect((await projections(l.id)).row.folder).toBe('needs_reply');
   });
-  it('uses the actual newest outbound source, not an older IMAP message', async () => {
-    const l = await lead(); await message(l,'inbound',17); await message(l,'outbound',24); await message(l,'outbound',25,{source:'smtp'});
+  it.each(['smtp','imap'])('the same answered-reply rule applies to %s', async source => {
+    const l = await lead(); await message(l,'inbound',17); await message(l,'outbound',24,{source});
     expect((await projections(l.id)).row.folder).toBe('in_conversation');
   });
+  it.each(['smtp','imap'])('a lead who never replied stays Waiting after a %s send', async source => {
+    const l = await lead(); await message(l,'outbound',24,{source});
+    expect((await projections(l.id)).row.folder).toBe('waiting');
+  });
   it('preserves explicit stages and founder holds', () => {
-    const facts = {lastInboundAt:at(17),lastOutboundAt:at(24),hasReplied:true,latestOutboundIsExternalReply:true};
+    const facts = {lastInboundAt:at(17),lastOutboundAt:at(24),hasReplied:true};
     for (const [status,folder] of [['interested','in_conversation'],['demo','meeting'],['proposal','meeting'],['won','won'],['lost','closed_lost']]) {
       expect(folderFor({...facts,status})).toBe(folder);
     }

@@ -123,8 +123,6 @@ export interface FolderInput {
   lastInboundAt?: string | Date | null;
   lastOutboundAt?: string | Date | null;
   hasReplied?: boolean;
-  /** The actual latest valid outbound was recovered from the external mailbox. */
-  latestOutboundIsExternalReply?: boolean;
   /** A recorded send, even if an import left the sales status as new. */
   hasOutbound?: boolean;
 }
@@ -200,7 +198,6 @@ export function folderFor(input: FolderInput): FolderKey | "archived" {
   if (inboundIsLatest(input)) return "needs_reply";
   if (input.hasDraftWaiting) return "to_approve";
   if (status === "interested") return "in_conversation";
-  if (input.latestOutboundIsExternalReply && input.hasReplied && time(input.lastOutboundAt) > time(input.lastInboundAt)) return "waiting";
   if (input.hasReplied && time(input.lastOutboundAt) > time(input.lastInboundAt)) {
     return "in_conversation";
   }
