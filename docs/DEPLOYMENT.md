@@ -322,27 +322,35 @@ cd / && sudo -n bash /home/growth/deploy/deploy.sh all
 
 Steps are separately callable: `dump`, `build`, `restart`.
 
-Reviewed `scripts/deploy.sh` sha256:
+Reviewed `scripts/deploy.sh` sha256 (superseded 2026-11-07 by the revision below; kept here as a
+record of what the server ran before that date):
 
 ```text
 bb86e975a211864901579eee24a31a3aeab395a25c715aac3f1bac101358f8b6  scripts/deploy.sh
 ```
 
-### Pending Part 1 deployment-safety revision — NOT authorized until founder approval
+### Part 1 deployment-safety revision — founder-approved and live since 2026-11-07
 
-The previously reviewed hash above remains the authorized server copy until the founder explicitly
-approves this revision and independent review passes. Candidate `scripts/deploy.sh` SHA-256:
+The founder approved this revision on 2026-11-07 and reconfirmed it explicitly on 2026-11-08, in
+his own words: "Haan, maine a8cc605 wala deploy script approve kiya tha" ("Yes, I approved the
+a8cc605 deploy script"). It has been the installed, checksum-verified server copy at
+`/home/growth/deploy/deploy.sh` since 2026-11-07. It is the **current authorized hash**. The
+`bb86e975...` hash above is superseded, not current. Current `scripts/deploy.sh` SHA-256:
 
 ```text
 a8cc605ca1dfe323f1b3b7ce1d123e1ae3f8197268fc9339399b2d37b593f8c6  scripts/deploy.sh
 ```
+
+Any future deploy verifies the **running server's own copy** against this hash
+(`sha256sum /home/growth/deploy/deploy.sh`) before using it, rather than assuming this file is
+current; a changed script means a new hash recorded here and a fresh review before its first run.
 
 This revision adds `prepare`: it takes and verifies a fresh database dump, fetches the committed
 source and checks it out, but does **not** rebuild `.next`, install dependencies or restart the
 running service. It refuses dependency changes before checkout. Its `build` also checks the migration
 ledger **before** touching `.next`, not merely before restart.
 
-For the approved Part 1 migration, the order with this revision is:
+For a deploy that includes a migration, the order with this revision is:
 
 1. Verify the exact approved script bytes and sibling `SHA256SUMS` outside the checkout.
 2. Run `deploy.sh prepare`; verify the dump and expected checkout, and verify the existing `.next`
