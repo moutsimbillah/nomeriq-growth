@@ -22,7 +22,18 @@ export async function recordOfferRejection(db: DbClient, prospectId: string, mes
     [crypto.randomUUID(),prospectId,messageId,OFFER_REJECTION_REASON,stripQuotedReply(row.body_text),`offer-rejection:${messageId}`]);
   // This is a recommendation, not a status/DNC/suppression/founder-exclusion decision.
   // The persisted recommendation is independently consulted by both draft and final send gates.
+  // Record the exact prior status of every draft about to be cancelled, so a code-only revert is
+  // not the only way back: the undo can replay these rows without restoring a backup.
+  const cancelling = (await db.query<{ id: string; status: string }>(
+    "SELECT id,status FROM drafts WHERE prospect_id=$1 AND kind='follow_up' AND status IN ('draft','approved')",
+    [prospectId],
+  )).rows;
   await db.query("UPDATE drafts SET status='cancelled',updated_at=now() WHERE prospect_id=$1 AND kind='follow_up' AND status IN ('draft','approved')",[prospectId]);
+  for (const draft of cancelling) {
+    await db.query(`INSERT INTO audit_log (id,actor_type,actor_id,action,entity_type,entity_id,metadata)
+      VALUES ($1,'system',NULL,'draft.rejection_cancelled','draft',$2,$3::jsonb)`,
+      [crypto.randomUUID(), draft.id, JSON.stringify({ previousStatus: draft.status, prospectId, messageId })]);
+  }
   return true;
 }
 export async function hasOfferRejection(prospectId: string, db?: DbClient): Promise<boolean> {

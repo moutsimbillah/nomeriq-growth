@@ -259,7 +259,25 @@ export async function applyInboundEffect(
     );
 
     if (classification.classification === "not_interested") {
-      await tx.query(`UPDATE prospects SET next_action = 'Review rejection and confirm Closed/Lost; automatic follow-ups stopped', updated_at=now() WHERE id=$1`, [prospectId]);
+      // Founder decision (7 Nov 2026): an ordinary offer rejection stays a hard send block, same as
+      // an opt-out — do_not_contact, not merely an automatic-follow-up pause — until the founder
+      // clears it from the lead page. It is not relabelled a formal unsubscribe/opt-out: no
+      // suppression row, no automatic Lost, so it is never shown in the "opted out" folder and the
+      // founder still confirms Lost explicitly. Record the prior values first so this is undoable
+      // without a backup restore.
+      const prior = (await tx.query<{ do_not_contact: boolean; next_action: string | null }>(
+        `SELECT do_not_contact, next_action FROM prospects WHERE id = $1`, [prospectId],
+      )).rows[0];
+      await tx.query(`UPDATE prospects SET do_not_contact = true,
+          next_action = 'Review rejection and confirm Closed/Lost; no further contact until you clear the hold',
+          updated_at=now() WHERE id=$1`, [prospectId]);
+      if (prior) {
+        await tx.query(`INSERT INTO audit_log (id,actor_type,actor_id,action,entity_type,entity_id,metadata)
+          VALUES ($1,'system',NULL,'lead.rejection_hold_set','prospect',$2,$3::jsonb)`,
+          [crypto.randomUUID(), prospectId, JSON.stringify({
+            previousDoNotContact: prior.do_not_contact, previousNextAction: prior.next_action, messageId: messageDbId ?? null,
+          })]);
+      }
     }
     if (classification.classification === "unsubscribe") {
       const emailResult = await tx.query<{ email: string }>(
