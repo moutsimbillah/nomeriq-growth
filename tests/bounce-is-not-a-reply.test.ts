@@ -270,13 +270,11 @@ describe("the scheduled sync route", () => {
     expect(response.status).toBe(401);
   });
 
-  it("runs, sends nothing, and says so", async () => {
+  it("keeps automated mailbox writes unavailable until per-run backup safeguards exist", async () => {
     const response = await cronSync(call(`Bearer ${process.env.CRON_SECRET}`));
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(503);
     const body = await response.json();
-    expect(body.ok).toBe(true);
-    expect(body.data.note).toMatch(/No email was sent/i);
-    // Every account reports individually: one mailbox failing never hides the others.
-    expect(Array.isArray(body.data.accounts)).toBe(true);
+    expect(body).toMatchObject({ok:false,code:"scheduled_sync_unavailable"});
+    expect(body.error).toContain("No mailbox operation was started");
   });
 });
