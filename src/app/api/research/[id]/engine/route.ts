@@ -6,10 +6,7 @@ import { getResearchJob, updateResearchJobStatus } from "@/lib/services/research
 import { runResearchTick } from "@/lib/services/research-engine";
 import { getJobBudget } from "@/lib/services/research-runs";
 import { getResearchUsage } from "@/lib/services/research-usage";
-import {
-  getDeepSeekPublicSettings,
-  resolveDeepSeekConfig,
-} from "@/lib/deepseek/provider";
+import { resolveLeadResearch } from "@/lib/services/research-routing";
 import { AppError } from "@/lib/utils";
 import { fail, readJson } from "@/lib/api";
 
@@ -64,13 +61,17 @@ export async function POST(
     }
 
     if (input.action === "start" || input.action === "resume") {
-      const resolved = await resolveDeepSeekConfig();
-      if (!resolved.config) {
+      // The same resolution the Research engine card shows: the Lead research assignment, the
+      // provider list and its fallbacks. The legacy environment/credential check is deliberately not
+      // used here — a provider configured in Settings is a configured provider, and refusing the job
+      // while the card above it says "Configured" was the contradiction this replaces.
+      const resolved = await resolveLeadResearch();
+      if (!resolved.provider) {
         throw new AppError(
-          resolved.error ||
-            "DeepSeek is not configured. Add an API key before starting research.",
+          resolved.error ??
+            "Lead research is not configured. Check Settings → AI providers.",
           409,
-          "deepseek_not_configured",
+          "research_not_configured",
         );
       }
       const budget = await getJobBudget(id);
@@ -104,7 +105,6 @@ export async function POST(
         budget,
         usage,
         tick,
-        deepseek: await getDeepSeekPublicSettings(),
       },
     });
   } catch (error) {

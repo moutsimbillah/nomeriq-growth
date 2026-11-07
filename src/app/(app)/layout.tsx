@@ -1,5 +1,5 @@
 import { requirePageUser } from "@/lib/auth/session";
-import { getDefaultEmailAccount } from "@/lib/email/accounts";
+import { getMailboxSidebarState } from "@/lib/email/accounts";
 import { getProductTruth, getWorkspaceSettings } from "@/lib/services/settings";
 import { AppChrome } from "@/components/app-chrome";
 import { WorkspaceTimezoneProvider } from "@/components/workspace-timezone";
@@ -12,9 +12,9 @@ export default async function GrowthLayout({
   children: React.ReactNode;
 }) {
   const user = await requirePageUser();
-  const [settings, account, truth] = await Promise.all([
+  const [settings, mailbox, truth] = await Promise.all([
     getWorkspaceSettings(),
-    getDefaultEmailAccount().catch(() => null),
+    getMailboxSidebarState().catch(() => ({ kind: "none" as const, label: null })),
     getProductTruth(),
   ]);
   const sendMode =
@@ -27,11 +27,7 @@ export default async function GrowthLayout({
       <AppChrome
         user={{ name: user.name, email: user.email, role: user.role }}
         sendMode={sendMode}
-        mailboxLabel={
-          account
-            ? `${account.emailAddress}${account.provider === "sandbox" ? " · sandbox" : ""}`
-            : null
-        }
+        mailboxLabel={mailbox.label}
         productTruthReady={truth.status === "approved"}
       >
         {children}

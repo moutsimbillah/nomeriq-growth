@@ -131,6 +131,71 @@ function neverDefaultMessage(account: { emailAddress: string }): string {
   return `${account.emailAddress} belongs to the imported leads and may only be used by the leads the import pinned to it, so it can never be the workspace default. Pin it to a lead instead.`;
 }
 
+export interface MailboxSidebarState {
+  kind: "default" | "import_only" | "no_default" | "none";
+  label: string | null;
+}
+
+export interface MailboxSidebarAccount {
+  emailAddress: string;
+  provider: string;
+  isDefault: boolean;
+  neverDefault: boolean;
+}
+
+/**
+ * The sidebar's mailbox line, decided from the accounts alone so it can be tested without a database.
+ *
+ * The workspace default is the sending mailbox. The import's own mailbox is not one: it exists so the
+ * messages the import brought in have a mailbox to belong to, and it may only be used by the leads the
+ * import pinned to it. Reporting "No mailbox connected" while that mailbox holds every imported thread
+ * was simply untrue, so each state is named for what it actually is.
+ */
+export function describeMailbox(accounts: MailboxSidebarAccount[]): MailboxSidebarState {
+  const sending = accounts.find((account) => account.isDefault && !account.neverDefault);
+  if (sending) {
+    return {
+      kind: "default",
+      label: `${sending.emailAddress}${sending.provider === "sandbox" ? " · sandbox" : ""}`,
+    };
+  }
+  const importOnly = accounts.find((account) => account.neverDefault);
+  if (importOnly) {
+    return {
+      kind: "import_only",
+      label: `${importOnly.emailAddress} — import only · no sending mailbox`,
+    };
+  }
+  const other = accounts[0];
+  if (other) {
+    return { kind: "no_default", label: `${other.emailAddress} — not the sending mailbox yet` };
+  }
+  return { kind: "none", label: null };
+}
+
+/** Reads the non-disabled mailboxes and lets `describeMailbox` name the state. */
+export async function getMailboxSidebarState(): Promise<MailboxSidebarState> {
+  const db = await getDb();
+  const result = await db.query<{
+    email_address: string;
+    provider: string;
+    is_default: boolean;
+    never_default: boolean;
+  }>(
+    `SELECT email_address, provider, is_default, never_default FROM email_accounts
+      WHERE status <> 'disabled'
+      ORDER BY is_default DESC, never_default DESC, created_at ASC`,
+  );
+  return describeMailbox(
+    result.rows.map((row) => ({
+      emailAddress: row.email_address,
+      provider: row.provider,
+      isDefault: Boolean(row.is_default),
+      neverDefault: Boolean(row.never_default),
+    })),
+  );
+}
+
 export async function listEmailAccounts(): Promise<PublicEmailAccount[]> {
   const db = await getDb();
   const result = await db.query<any>(
