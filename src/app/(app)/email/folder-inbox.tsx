@@ -23,6 +23,7 @@ import { draftProvenance } from "@/lib/ai/provenance";
 import { translationOffered } from "@/lib/ai/language-detect";
 import { AgentPill, Card, SenderPill } from "@/components/ui";
 import { ConversationMessage } from "@/components/conversation-message";
+import { LeadReplyRecipient } from "@/components/lead-reply-recipient";
 import { MarkConversationRead, ReplyComposer } from "@/components/conversation-actions";
 import { SyncMailboxButton } from "@/components/sync-mailbox-button";
 import { ApproveSelectionList, InboxFilters, StageButtons } from "@/components/folder-inbox-client";
@@ -104,7 +105,7 @@ export async function FolderInbox({ params }: { params: FolderInboxParams }) {
   const waitingDraft = drafts.find((draft) => draft.status === "draft" || draft.status === "approved") ?? null;
   // Messages arrive newest first, the same order the conversation page shows.
   const messages = conversation?.messages ?? [];
-  const lastInbound = messages.find((message) => message.direction === "inbound");
+  const lastInbound = messages.find((message) => message.direction === "inbound" && message.isProspectReply !== false);
   const defaultSubject = lastInbound?.subject?.toLowerCase().startsWith("re:")
     ? lastInbound.subject
     : `Re: ${lastInbound?.subject || conversation?.subject || ""}`;
@@ -301,6 +302,7 @@ export async function FolderInbox({ params }: { params: FolderInboxParams }) {
               </Card>
 
               <div data-reply-area>
+                <div className="mb-3"><LeadReplyRecipient key={selected.prospectId} prospectId={selected.prospectId} /></div>
                 {waitingDraft && (
                   <Card className="mb-3 p-3.5">
                     <div className="flex flex-wrap items-center gap-2 text-12 font-bold text-ink">
@@ -344,6 +346,9 @@ export async function FolderInbox({ params }: { params: FolderInboxParams }) {
                       <ConversationMessage
                         key={message.id}
                         messageId={message.id}
+                        currentProspectId={selected.prospectId}
+                        addressLinkStatus={message.addressLinkStatus}
+                        isProspectReply={message.isProspectReply}
                         inbound={inbound}
                         fromName={message.fromName}
                         fromEmail={message.fromEmail}

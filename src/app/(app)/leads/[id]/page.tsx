@@ -31,6 +31,8 @@ import { draftProvenance } from "@/lib/ai/provenance";
 import { getConversationForProspect, previewMessages } from "@/lib/services/conversations";
 import { SendingProfileControl } from "@/components/sending-profile-control";
 import { FollowUpExclusionControl } from "@/components/follow-up-exclusion-control";
+import { LeadReplyRecipient } from "@/components/lead-reply-recipient";
+import { getAddressDeliveryStatuses } from "@/lib/email/bounce-handling";
 import {
   getDefaultEmailAccount,
   getEmailAccountRecord,
@@ -66,12 +68,13 @@ export default async function LeadDetailPage({
   const prospect = await getProspect(id);
   if (!prospect) notFound();
 
-  const [draft, conversation, drafts, account, settings] = await Promise.all([
+  const [draft, conversation, drafts, account, settings, addressStatuses] = await Promise.all([
     getFirstContactDraft(id),
     getConversationForProspect(id),
     listDraftsForProspect(id),
     getDefaultEmailAccount().catch(() => null),
     getWorkspaceSettings(),
+    getAddressDeliveryStatuses(prospect.id),
   ]);
   const profileAccounts = await listEmailAccounts();
   const profileLabelById = senderLabels(profileAccounts);
@@ -304,6 +307,20 @@ export default async function LeadDetailPage({
 
             <div className="mt-4">
               <dl>
+                <DataRow label="Address delivery status">
+                  <ul className="min-w-0 space-y-2 break-anywhere">
+                    {addressStatuses.map((address) => <li key={address.normalizedEmail}>
+                      <span className="font-semibold text-ink">{address.email}</span>{" — "}
+                      {address.status === "permanent_bounced" ? "bounced, permanent" :
+                        address.status === "transient_suppressed" ? "temporary, suppressed (retry limit reached)" :
+                        address.status === "transient_retrying" ? "temporary, retrying" :
+                        address.status === "complaint" ? "complaint, suppressed" : "No delivery failure recorded"}
+                      {address.occurredAt && `, on ${formatDate(address.occurredAt, undefined, settings.timezone)}`}
+                      {address.suppressed && " · Suppressed; sending blocked"}
+                    </li>)}
+                    {addressStatuses.length === 0 && <li>No stored addresses.</li>}
+                  </ul>
+                </DataRow>
                 <DataRow label="Evidence">
                   {prospect.evidenceSummary || (
                     <span className="text-faint">Unknown</span>
@@ -516,6 +533,7 @@ export default async function LeadDetailPage({
         </div>
 
         <div className="space-y-4">
+          <LeadReplyRecipient prospectId={prospect.id} />
           <DraftEditor
             prospectId={prospect.id}
             businessName={prospect.businessName}

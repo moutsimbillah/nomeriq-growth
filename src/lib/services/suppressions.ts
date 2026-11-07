@@ -89,7 +89,10 @@ export async function addSuppression(input: {
       (id, normalized_email, email, reason, source, prospect_id, note)
      VALUES ($1, $2, $3, $4, 'founder', $5, $6)
      ON CONFLICT (normalized_email) DO UPDATE SET
-       active = true, reason = excluded.reason, note = excluded.note, updated_at = now()`,
+       active = true,
+       reason = CASE WHEN excluded.reason = 'bounce' THEN suppressions.reason ELSE excluded.reason END,
+       note = CASE WHEN excluded.reason = 'bounce' THEN suppressions.note ELSE excluded.note END,
+       updated_at = CASE WHEN excluded.reason = 'bounce' THEN suppressions.updated_at ELSE now() END`,
     [
       crypto.randomUUID(),
       normalized,
@@ -99,7 +102,7 @@ export async function addSuppression(input: {
       input.note?.trim() || null,
     ],
   );
-  if (prospect.rows[0]?.id) {
+  if (prospect.rows[0]?.id && input.reason !== "bounce") {
     await db.query(
       `UPDATE prospects SET do_not_contact = true, status = 'lost', updated_at = now() WHERE id = $1`,
       [prospect.rows[0].id],

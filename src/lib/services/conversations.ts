@@ -23,6 +23,7 @@ import { suggestReply, type ReplySuggestion } from "@/lib/ai/reply";
 import { saveSentCopyForMessage } from "@/lib/email/sent-copy";
 import { getProspect } from "./prospects";
 import { newestMessageFirst } from "./message-order";
+import { getRecipientPolicy, isRealProspectMessage } from "./recipient-policy";
 import { getMessageTranslation } from "./message-translations";
 import { getProductTruth, getWorkspaceSettings } from "./settings";
 import {
@@ -207,6 +208,8 @@ export async function getConversationCounts(
   };
 }
 
+export type ConversationMessage = Message & { addressLinkStatus?: boolean; isProspectReply?: boolean };
+
 export interface ConversationDetail {
   id: string;
   prospect: ProspectDetail;
@@ -217,7 +220,9 @@ export interface ConversationDetail {
   classificationConfidence: number | null;
   lastInboundAt: string | null;
   lastOutboundAt: string | null;
-  messages: Message[];
+  messages: ConversationMessage[];
+  firstContact: string | null;
+  currentWritingFrom: string | null;
   replyTo: string | null;
   suppressed: boolean;
   sendable: boolean;
@@ -243,22 +248,15 @@ export async function getConversation(
     `SELECT * FROM messages WHERE conversation_id = $1 ORDER BY ${newestMessageFirst()}`,
     [id],
   );
-  const lastInbound = messages.rows.find(
-    (message) => message.direction === "inbound",
-  );
-  const addresses = [prospect.contactEmail, lastInbound?.from_email]
-    .filter((value): value is string => Boolean(value))
-    .map(normalizeEmail);
-  const suppression = addresses.length
-    ? await db.query(
-        `SELECT 1 FROM suppressions WHERE normalized_email = ANY($1::text[]) AND active = true`,
-        [addresses],
-      )
-    : { rows: [] };
-  const suppressed = prospect.doNotContact || suppression.rows.length > 0;
+  const policy = await getRecipientPolicy(prospect.id, db);
+  const ownAddresses = (await db.query<{ email_address: string }>(`SELECT email_address FROM email_accounts`)).rows.map(a => normalizeEmail(a.email_address));
+  const lastInbound = messages.rows.find(message => isRealProspectMessage(message, ownAddresses));
+  const suppressed = policy.blocked;
   const resultMessages = await Promise.all(
     messages.rows.map(async (row) => ({
       ...mapMessage(row),
+      addressLinkStatus: row.direction === 'inbound' && policy.emails.some(e => e.linked && normalizeEmail(e.email) === normalizeEmail(row.from_email)),
+      isProspectReply: isRealProspectMessage(row, ownAddresses),
       translation:
         row.direction === "inbound"
           ? await getMessageTranslation(row.id)
@@ -278,14 +276,12 @@ export async function getConversation(
     lastInboundAt: iso(row.last_inbound_at),
     lastOutboundAt: iso(row.last_outbound_at),
     messages: resultMessages,
-    replyTo: lastInbound?.from_email ?? prospect.contactEmail,
+    replyTo: policy.recipient,
+    firstContact: policy.firstContact,
+    currentWritingFrom: policy.currentWritingFrom,
     suppressed,
     sendable: Boolean(lastInbound) && !suppressed,
-    blockedReason: suppressed
-      ? "This contact is on the suppression list. Promotional email cannot be sent."
-      : lastInbound
-        ? null
-        : "There is no inbound reply to respond to.",
+    blockedReason: policy.reason ?? (lastInbound ? null : "There is no inbound reply to respond to."),
   };
 }
 
@@ -372,14 +368,14 @@ export async function suggestConversationReply(
 ): Promise<ReplySuggestion & { recipient: string | null }> {
   const conversation = await getConversation(id);
   if (!conversation) throw new AppError("Conversation not found.", 404);
-  if (conversation.suppressed) {
+  if (!conversation.sendable) {
     return {
       subject: conversation.subject,
       body: "",
       needsFounderInput: false,
       usedAi: false,
       model: null,
-      note: "This contact has opted out or is marked do not contact. No promotional reply is suggested.",
+      note: conversation.blockedReason ?? "No eligible linked recipient. No reply is suggested.",
       recipient: null,
     };
   }
@@ -435,9 +431,9 @@ export async function sendReply(input: SendReplyInput) {
   }
   const conversation = await getConversation(input.conversationId);
   if (!conversation) throw new AppError("Conversation not found.", 404);
-  if (conversation.suppressed) {
+  if (!conversation.sendable) {
     throw new AppError(
-      "This contact has opted out or is marked do not contact. No email can be sent.",
+      conversation.blockedReason ?? "No eligible linked recipient. No email can be sent.",
       409,
       "suppressed",
     );
@@ -524,7 +520,7 @@ export async function sendReply(input: SendReplyInput) {
   await assertAccountCanSend(account.id);
 
   const lastInbound = conversation.messages.find(
-    (message) => message.direction === "inbound",
+    (message) => message.isProspectReply,
   );
   if (!lastInbound) throw new AppError("No inbound message to reply to.", 409);
   const previousMessage = await db.query<{ message_id: string | null; references_json: unknown }>(
@@ -592,6 +588,11 @@ export async function sendReply(input: SendReplyInput) {
 
   let delivery: DeliveryResult;
   let uncertainty: string | null = null;
+  const currentPolicy = await getRecipientPolicy(conversation.prospect.id, db);
+  if (currentPolicy.blocked || currentPolicy.recipient !== conversation.replyTo) {
+    await db.query(`UPDATE outbound_sends SET status = 'failed', error = 'Recipient policy changed before sending', completed_at = now() WHERE id = $1 AND status = 'sending'`, [sendRowId]);
+    throw new AppError(currentPolicy.reason ?? 'Reply recipient changed. Reload before sending.', 409, 'recipient_changed');
+  }
   try {
     delivery = await deliverEmail(account, {
       to: conversation.replyTo,

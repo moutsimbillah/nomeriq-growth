@@ -7,6 +7,21 @@ import { AppError, isEmail, iso, truncate } from "@/lib/utils";
 import type { AgentTag, ChannelTag } from "@/lib/types";
 import { mapDraft, mapProductTruth } from "./mappers";
 import type { FollowUpCandidate } from "./followups";
+import { getRecipientPolicy } from "./recipient-policy";
+
+/** SQL counterpart of stored real-reply facts; never let a DSN/OOO restart or stop a sequence. */
+export function realFollowUpInboundSql(alias = "m"): string {
+  return `${alias}.direction='inbound'
+    AND COALESCE(${alias}.raw_headers->>'deliveryReport','false') <> 'true'
+    AND COALESCE(${alias}.raw_headers->>'autoReply','false') <> 'true'
+    AND NOT EXISTS (SELECT 1 FROM email_bounces b WHERE b.message_id=${alias}.id)
+    AND lower(${alias}.from_email) !~ '^(mailer-daemon|postmaster|no-?reply)@'
+    AND NOT EXISTS (SELECT 1 FROM email_accounts a WHERE lower(a.email_address)=lower(${alias}.from_email))
+    AND COALESCE(${alias}.subject,'') !~* '(out of (the )?office|automatic reply|auto.?reply|vacation|delivery status notification|undeliverable|delivery failure)'
+    AND NOT EXISTS (SELECT 1 FROM jsonb_each_text(COALESCE(${alias}.raw_headers,'{}'::jsonb)) h
+      WHERE (lower(h.key)='auto-submitted' AND h.value ~* '(auto-replied|auto-generated)')
+        OR (lower(h.key)='content-type' AND h.value ~* 'report-type[[:space:]]*=[[:space:]]*"?(delivery-status|feedback-report)'))`;
+}
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const FOLLOW_UP_BATCH_MAX = 50;
@@ -43,7 +58,12 @@ const FOLLOW_UP_CANDIDATE_SQL = `
     JOIN LATERAL (SELECT co.* FROM conversations co WHERE co.prospect_id=p.id
       ORDER BY COALESCE((SELECT max(COALESCE(m.sent_at,m.received_at)) FROM messages m
         WHERE m.conversation_id=co.id AND m.direction='outbound'),co.last_outbound_at) DESC NULLS LAST, co.id LIMIT 1) c ON true
-    JOIN LATERAL (SELECT email FROM prospect_emails WHERE prospect_id=p.id ORDER BY is_primary DESC,id LIMIT 1) pe ON true
+    JOIN LATERAL (SELECT e.email FROM prospect_emails e WHERE e.prospect_id=p.id
+      AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.active AND s.normalized_email=e.normalized_email)
+      AND COALESCE((SELECT a.action FROM audit_log a WHERE a.actor_type='founder' AND a.entity_id=p.id::text
+        AND a.action IN ('lead.email_linked','lead.email_unlinked') AND a.metadata->>'emailRowId'=e.id::text
+        ORDER BY a.created_at DESC,a.id DESC LIMIT 1),'lead.email_linked') <> 'lead.email_unlinked'
+      ORDER BY e.is_primary DESC,e.created_at,e.id LIMIT 1) pe ON true
     JOIN LATERAL (
       SELECT
         COALESCE(GREATEST((SELECT max(COALESCE(m.sent_at,m.received_at)) FROM messages m
@@ -51,16 +71,22 @@ const FOLLOW_UP_CANDIDATE_SQL = `
           (SELECT max(sent_at) FROM drafts WHERE prospect_id=p.id AND status='sent')),
           (SELECT max(last_outbound_at) FROM conversations WHERE prospect_id=p.id)) AS last_outbound_at,
         COALESCE((SELECT max(COALESCE(m.received_at,m.sent_at)) FROM messages m
-          WHERE m.direction='inbound' AND (m.prospect_id=p.id OR m.conversation_id IN (SELECT id FROM conversations WHERE prospect_id=p.id))),
-          (SELECT max(last_inbound_at) FROM conversations WHERE prospect_id=p.id)) AS last_inbound_at
+          WHERE ${realFollowUpInboundSql()} AND (m.prospect_id=p.id OR m.conversation_id IN (SELECT id FROM conversations WHERE prospect_id=p.id))),
+          CASE WHEN NOT EXISTS (SELECT 1 FROM messages m WHERE m.direction='inbound'
+            AND (m.prospect_id=p.id OR m.conversation_id IN (SELECT id FROM conversations WHERE prospect_id=p.id)))
+          THEN (SELECT max(last_inbound_at) FROM conversations WHERE prospect_id=p.id) END) AS last_inbound_at
     ) activity ON true
     WHERE ($1::uuid IS NULL OR p.id=$1) AND p.archived_at IS NULL
       AND NOT p.do_not_contact AND NOT p.follow_up_excluded
       AND p.status NOT IN ('replied','interested','demo','proposal','won','lost')
       AND NOT EXISTS (SELECT 1 FROM conversations co WHERE co.prospect_id=p.id AND co.classification IN ('unsubscribe','not_interested'))
-      AND NOT EXISTS (SELECT 1 FROM prospect_emails e JOIN suppressions s
-        ON (s.normalized_email=lower(trim(e.email)) OR s.normalized_email=e.normalized_email)
-          AND s.active=true WHERE e.prospect_id=p.id)
+      AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.active=true AND s.reason <> 'bounce'
+        AND (s.prospect_id=p.id OR s.normalized_email IN
+          (SELECT normalized_email FROM prospect_emails WHERE prospect_id=p.id)))
+      -- Once a human has replied, this is a conversation, never another cold follow-up,
+      -- even when the founder subsequently answered in external webmail.
+      AND NOT EXISTS (SELECT 1 FROM messages m WHERE ${realFollowUpInboundSql()}
+        AND (m.prospect_id=p.id OR m.conversation_id IN (SELECT id FROM conversations WHERE prospect_id=p.id)))
       -- An undated inbound is not proof that the thread is unanswered. Fail closed rather than
       -- treating its import/created time as the message date or silently ignoring a possible reply.
       AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.direction='inbound'
@@ -73,16 +99,20 @@ const FOLLOW_UP_CANDIDATE_SQL = `
 /** One row per lead. Actual mail chronology wins over cached/imported conversation timestamps. */
 export async function readFollowUpCandidates(db: DbClient, settings: FollowUpSettings, prospectId?: string): Promise<FollowUpCandidate[]> {
   const { rows } = await db.query<any>(FOLLOW_UP_CANDIDATE_SQL, [prospectId ?? null]);
-  return rows.flatMap((row) => {
+  const candidates: FollowUpCandidate[] = [];
+  for (const row of rows) {
     const nextSequence = Math.max(Number(row.sent_follow_ups), Number(row.last_sequence ?? 0)) + 1;
-    if (nextSequence > settings.followUpMax || !isEmail(row.contact_email)) return [];
+    if (nextSequence > settings.followUpMax) continue;
+    const policy = await getRecipientPolicy(row.prospect_id, db);
+    if (policy.blocked || !policy.recipient || !isEmail(policy.recipient)) continue;
     const delayDays = nextSequence === 1 ? settings.followUpDelay1Days : settings.followUpDelay2Days;
     const days = calendarDaysBetween(new Date(row.last_outbound_at), new Date(), settings.timezone);
-    return [{ conversationId: row.conversation_id, prospectId: row.prospect_id, businessName: row.business_name,
-      contactEmail: row.contact_email, lastOutboundAt: iso(row.last_outbound_at), daysSinceLastOutbound: Math.floor(days),
+    candidates.push({ conversationId: row.conversation_id, prospectId: row.prospect_id, businessName: row.business_name,
+      contactEmail: policy.recipient, lastOutboundAt: iso(row.last_outbound_at), daysSinceLastOutbound: Math.floor(days),
       sentFollowUps: Number(row.sent_follow_ups), nextSequence, delayDays, due: days >= delayDays,
-      activeDraftId: row.active_draft_id, status: row.status, classification: row.classification }];
-  });
+      activeDraftId: row.active_draft_id, status: row.status, classification: row.classification });
+  }
+  return candidates;
 }
 
 export async function followUpRoom(db: DbClient, settings: FollowUpSettings): Promise<number> {
@@ -126,11 +156,14 @@ export async function persistPreparedFollowUp(input: PreparedFollowUp): Promise<
   return db.transaction(async (tx) => {
     // A common workspace row serializes every preparer; count and INSERT are in this same tx.
     const settings = await readFollowUpSettings(tx, true);
-    await tx.query(`SELECT id FROM prospects WHERE id=$1 FOR UPDATE`, [input.prospectId]);
+    const locked = await tx.query(`SELECT id FROM prospects WHERE id=$1 FOR UPDATE`, [input.prospectId]);
     const existing = await tx.query<{ id: string }>(`SELECT id FROM drafts WHERE prospect_id=$1 AND kind='follow_up' AND sequence=$2`, [input.prospectId,input.expectedSequence]);
     if (existing.rows[0]) return { prospectId: input.prospectId, status: "preserved", draftId: existing.rows[0].id };
     const refuse = (code: string, reason: string): AgentFollowUpSaveResult => ({ prospectId: input.prospectId, status: "refused", code, reason });
     if (input.scheduler && !settings.followUpAutoEnabled) return refuse("automatic_disabled", "Automatic follow-ups are disabled.");
+    if (!locked.rows[0]) return refuse("not_eligible", "This lead is no longer eligible for a follow-up.");
+    const policy = await getRecipientPolicy(input.prospectId, tx);
+    if (policy.blocked) return refuse("recipient_blocked", policy.reason ?? "No eligible linked recipient.");
     const candidate = (await readFollowUpCandidates(tx,settings,input.prospectId))[0];
     if (!candidate) return refuse("not_eligible", "This lead is no longer eligible for a follow-up.");
     if (candidate.nextSequence !== input.expectedSequence) return refuse("stale_sequence", "The expected follow-up sequence is stale.");
@@ -154,7 +187,12 @@ export async function persistPreparedFollowUp(input: PreparedFollowUp): Promise<
       created_by_type,created_by_user_id,source_client,source_agent,source_channel)
       SELECT $1,p.id,p.research_job_id,'follow_up',$3,'draft',$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16
       FROM prospects p JOIN eligible e ON e.prospect_id=p.id WHERE p.id=$2
-        AND e.contact_email=$6 AND date_trunc('milliseconds',e.last_outbound_at)=$17::timestamptz
+        AND EXISTS (SELECT 1 FROM prospect_emails selected WHERE selected.prospect_id=p.id AND selected.email=$6
+          AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.active AND s.normalized_email=selected.normalized_email)
+          AND COALESCE((SELECT a.action FROM audit_log a WHERE a.actor_type='founder' AND a.entity_id=p.id::text
+            AND a.action IN ('lead.email_linked','lead.email_unlinked') AND a.metadata->>'emailRowId'=selected.id::text
+            ORDER BY a.created_at DESC,a.id DESC LIMIT 1),'lead.email_linked') <> 'lead.email_unlinked')
+        AND date_trunc('milliseconds',e.last_outbound_at)=$17::timestamptz
         AND GREATEST(e.sent_follow_ups,COALESCE(e.last_sequence,0))+1=$3::int AND e.active_draft_id IS NULL
       ON CONFLICT DO NOTHING RETURNING *`,
       [id,input.prospectId,candidate.nextSequence,input.subject,input.body,candidate.contactEmail,input.aiGenerated ?? true,

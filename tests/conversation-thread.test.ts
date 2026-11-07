@@ -102,7 +102,9 @@ beforeAll(async () => {
   await db.query(
     `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type)
      VALUES (gen_random_uuid(), $1, 'contact@northwind.example', 'contact@northwind.example',
-             'https://northwind.example', 'official_website')`,
+             'https://northwind.example', 'official_website'),
+            (gen_random_uuid(), $1, 'latest@northwind.example', 'latest@northwind.example',
+             'https://northwind.example/contact', 'official_website')`,
     [prospectId],
   );
 

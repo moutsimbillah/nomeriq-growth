@@ -29,6 +29,7 @@ import {
   SimulateReplyButton,
 } from "@/components/conversation-actions";
 import { ConversationMessage } from "@/components/conversation-message";
+import { LeadReplyRecipient } from "@/components/lead-reply-recipient";
 import { translationOffered } from "@/lib/ai/language-detect";
 import { formatDateTime, relativeTime } from "@/lib/utils";
 import { CLASSIFICATION_LABELS } from "@/lib/types";
@@ -60,10 +61,10 @@ export default async function ConversationPage({
     (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() !== "live";
   const sandbox = envSandbox || account?.provider === "sandbox";
   const hasInbound = conversation.messages.some(
-    (message) => message.direction === "inbound",
+    (message) => message.direction === "inbound" && message.isProspectReply !== false,
   );
   const lastInbound = conversation.messages.find(
-    (message) => message.direction === "inbound",
+    (message) => message.direction === "inbound" && message.isProspectReply !== false,
   );
   const defaultSubject = lastInbound?.subject?.toLowerCase().startsWith("re:")
     ? lastInbound.subject
@@ -131,6 +132,9 @@ export default async function ConversationPage({
               <ConversationMessage
                 key={message.id}
                 messageId={message.id}
+                currentProspectId={conversation.prospect.id}
+                addressLinkStatus={message.addressLinkStatus}
+                isProspectReply={message.isProspectReply}
                 inbound={inbound}
                 fromName={message.fromName}
                 fromEmail={message.fromEmail}
@@ -158,6 +162,7 @@ export default async function ConversationPage({
         </div>
 
         <div className="min-w-0 space-y-4">
+          <LeadReplyRecipient prospectId={conversation.prospect.id} />
           {hasInbound ? (
             <ReplyComposer
               conversationId={conversation.id}

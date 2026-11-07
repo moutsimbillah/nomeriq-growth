@@ -123,9 +123,49 @@ export interface FolderInput {
   lastInboundAt?: string | Date | null;
   lastOutboundAt?: string | Date | null;
   hasReplied?: boolean;
+  /** The actual latest valid outbound was recovered from the external mailbox. */
+  latestOutboundIsExternalReply?: boolean;
   /** A recorded send, even if an import left the sales status as new. */
   hasOutbound?: boolean;
 }
+
+/** Shared read-only projections for inbox and pipeline; never mutate suppression or recipient state. */
+export const realMailSQL = (alias: string): string => `
+  ${alias}.delivery_status NOT IN ('failed', 'bounced', 'uncertain')
+  AND coalesce(${alias}.raw_headers->>'deliveryReport', 'false') <> 'true'
+  AND coalesce(${alias}.raw_headers->>'autoReply', 'false') <> 'true'
+  AND NOT EXISTS (SELECT 1 FROM email_bounces eb WHERE eb.message_id = ${alias}.id)`;
+
+export const suppressionProjectionSQL = `(SELECT s.reason FROM suppressions s
+  WHERE s.active = true AND (s.prospect_id = p.id OR EXISTS (
+    SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id AND pe.normalized_email = s.normalized_email))
+  AND (s.reason <> 'bounce' OR NOT EXISTS (
+    SELECT 1 FROM prospect_emails usable WHERE usable.prospect_id = p.id
+    AND coalesce((SELECT a.action FROM audit_log a WHERE a.actor_type = 'founder'
+      AND a.entity_type = 'prospect' AND a.entity_id = p.id::text
+      AND a.action IN ('lead.email_linked', 'lead.email_unlinked')
+      AND a.metadata->>'emailRowId' = usable.id::text
+      ORDER BY a.created_at DESC, a.id DESC LIMIT 1), '') <> 'lead.email_unlinked'
+    AND NOT EXISTS (SELECT 1 FROM suppressions blocked
+      WHERE blocked.active = true AND blocked.normalized_email = usable.normalized_email)))
+  ORDER BY CASE s.reason WHEN 'unsubscribe' THEN 0 WHEN 'opt_out' THEN 1 WHEN 'complaint' THEN 2
+    WHEN 'manual' THEN 3 ELSE 4 END LIMIT 1)`;
+
+/** Cached conversation clocks are legacy fallback only when that thread has no stored messages.
+ * A stored DSN/OOO or failed send must not re-enter activity through a stale cache. */
+export const mailHistorySQL = `SELECT max(inbound_at) AS last_inbound_at, max(outbound_at) AS last_outbound_at FROM (
+  SELECT c2.last_inbound_at AS inbound_at, c2.last_outbound_at AS outbound_at
+    FROM conversations c2 WHERE c2.prospect_id = p.id
+      AND NOT EXISTS (SELECT 1 FROM messages cm WHERE cm.conversation_id = c2.id)
+  UNION ALL
+  SELECT CASE WHEN m.direction = 'inbound' THEN coalesce(m.received_at, m.created_at) END,
+         CASE WHEN m.direction = 'outbound' THEN coalesce(m.sent_at, m.created_at) END
+    FROM messages m LEFT JOIN conversations mc ON mc.id = m.conversation_id
+    WHERE coalesce(m.prospect_id, mc.prospect_id) = p.id AND ${realMailSQL('m')}
+  UNION ALL
+  SELECT NULL::timestamptz, sd.sent_at FROM drafts sd WHERE sd.prospect_id = p.id AND sd.status = 'sent'
+    AND NOT EXISTS (SELECT 1 FROM messages dm WHERE dm.draft_id = sd.id AND dm.delivery_status IN ('failed','bounced','uncertain'))
+) activity`;
 
 function time(value: string | Date | null | undefined): number {
   if (!value) return 0;
@@ -160,6 +200,7 @@ export function folderFor(input: FolderInput): FolderKey | "archived" {
   if (inboundIsLatest(input)) return "needs_reply";
   if (input.hasDraftWaiting) return "to_approve";
   if (status === "interested") return "in_conversation";
+  if (input.latestOutboundIsExternalReply && input.hasReplied && time(input.lastOutboundAt) > time(input.lastInboundAt)) return "waiting";
   if (input.hasReplied && time(input.lastOutboundAt) > time(input.lastInboundAt)) {
     return "in_conversation";
   }

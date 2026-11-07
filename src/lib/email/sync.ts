@@ -16,8 +16,20 @@ import {
 } from "./accounts";
 import { classifyReply, stripQuotedReply } from "./classify";
 import { translateOnArrival } from "@/lib/services/message-translations";
-import { pauseProfileIfBouncing, recordBounceIfAny } from "./bounce-handling";
+import { recordBounceIfAny } from "./bounce-handling";
+import { mayAssociateMessage } from "@/lib/services/message-linking";
 import { listUncopiedSentMessages, saveSentCopyForMessage } from "./sent-copy";
+import { recomputeConversationChronology } from "./conversation-chronology";
+import { getParsedBounceInput, isAutoReply, parseBounceReports } from "./bounces";
+
+export interface SyncOptions {
+  mode?: "incremental" | "backfill";
+  founderUserId?: string;
+  linkCertainAddresses?: boolean;
+  processHistoricalBounces?: boolean;
+}
+
+const RECOVERY_PAGE_SIZE = 100;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -27,6 +39,9 @@ const INITIAL_DAYS = 30;
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 export interface SyncResult {
+  mode?: "incremental" | "backfill";
+  filled?: number;
+  progress?: { folder: string; uidValidity: number; lastUid: number; remaining: number; complete: boolean }[];
   /** The inbound rows this run was able to attach to a lead, and how each was found. */
   rematched?: { scanned: number; matched: number; byAddress: number; byDomain: number } | null;
   /** The Sent-folder copies this run wrote, or confirmed. */
@@ -55,12 +70,15 @@ async function findThreadConversation(
   if (!ids.length) return null;
   const db = await getDb();
   const result = await db.query<any>(
-    `SELECT conversation_id, prospect_id FROM messages
-     WHERE message_id = ANY($1::text[]) AND conversation_id IS NOT NULL
-     ORDER BY created_at DESC LIMIT 1`,
+    `SELECT DISTINCT c.id AS conversation_id, c.prospect_id FROM messages m
+     JOIN conversations c ON c.id = m.conversation_id
+     WHERE m.message_id = ANY($1::text[])
+       AND (m.prospect_id IS NULL OR m.prospect_id = c.prospect_id)
+     LIMIT 2`,
     [ids],
   );
-  return result.rows[0]
+  if (result.rows.length > 1) return { conversationId: "", prospectId: "" };
+  return result.rows.length === 1 && result.rows[0].prospect_id
     ? {
         conversationId: result.rows[0].conversation_id,
         prospectId: result.rows[0].prospect_id,
@@ -123,6 +141,7 @@ async function resolveMessageOwner(input: {
   references: string[];
   subject: string;
   when: string;
+  recovery?: boolean;
 }): Promise<{
   prospectId: string | null;
   conversationId: string | null;
@@ -135,6 +154,7 @@ async function resolveMessageOwner(input: {
   if (threadMessageIds.length) {
     const thread = await findThreadConversation(threadMessageIds);
     if (thread) {
+      if (!thread.prospectId) return { prospectId: null, conversationId: null, matchedBy: "ambiguous_thread_headers" };
       return {
         prospectId: thread.prospectId,
         conversationId: thread.conversationId,
@@ -147,9 +167,25 @@ async function resolveMessageOwner(input: {
     input.direction === "inbound"
       ? [input.fromEmail]
       : input.toEmails.filter((email) => isEmail(email));
-  for (const email of candidateEmails) {
-    const prospectId = await findProspectByEmail(email);
-    if (prospectId) {
+  const db = await getDb();
+  const exact = await db.query<{ id: string }>(`SELECT DISTINCT p.id FROM prospects p
+    JOIN prospect_emails pe ON pe.prospect_id = p.id
+    WHERE pe.normalized_email = ANY($1::text[]) AND p.archived_at IS NULL LIMIT 2`,
+    [candidateEmails.map(normalizeEmail)]);
+  const candidates = new Set(exact.rows.map(row => row.id));
+  if (candidates.size === 1) {
+    const prospectId = [...candidates][0];
+    if (input.recovery) {
+      const db = await getDb();
+      const prior = await db.query<{ id: string; subject: string }>(
+        `SELECT id, subject FROM conversations WHERE prospect_id = $1`, [prospectId]);
+      const normalizeSubject = (value: string) => value.replace(/^(\s*(re|fw|fwd)\s*:\s*)+/gi, "").trim().toLowerCase();
+      if (prior.rows.length !== 1 || !normalizeSubject(input.subject) || normalizeSubject(input.subject) === '(no subject)' ||
+          normalizeSubject(prior.rows[0].subject) !== normalizeSubject(input.subject)) {
+        return { prospectId: null, conversationId: null, matchedBy: "unmatched" };
+      }
+      return { prospectId, conversationId: prior.rows[0].id, matchedBy: "unique_address_subject" };
+    } else {
       const conversationId = await conversationForProspect(
         prospectId,
         input.subject,
@@ -159,21 +195,6 @@ async function resolveMessageOwner(input: {
     }
   }
 
-  const domain =
-    input.direction === "inbound"
-      ? emailDomain(input.fromEmail)
-      : emailDomain(candidateEmails[0] ?? "");
-  if (domain && !/gmail|outlook|yahoo|hotmail|icloud|proton/i.test(domain)) {
-    const prospectId = await findProspectByDomain(domain);
-    if (prospectId) {
-      const conversationId = await conversationForProspect(
-        prospectId,
-        input.subject,
-        input.when,
-      );
-      return { prospectId, conversationId, matchedBy: "sender_domain" };
-    }
-  }
 
   return { prospectId: null, conversationId: null, matchedBy: "unmatched" };
 }
@@ -218,6 +239,12 @@ export async function applyInboundEffect(
   const db = await getDb();
   const classification = classifyReply(body);
   await db.transaction(async (tx) => {
+    const clock = await tx.query<{ last_message_at: string | null }>(
+      `SELECT last_message_at FROM conversations WHERE id = $1 FOR UPDATE`, [conversationId]);
+    if (clock.rows[0]?.last_message_at && new Date(clock.rows[0].last_message_at).getTime() > new Date(receivedAt).getTime()) {
+      await recomputeConversationChronology(tx, prospectId);
+      return;
+    }
     await tx.query(
       `UPDATE conversations SET
         status = 'replied',
@@ -294,6 +321,12 @@ async function applyOutboundEffect(
 ): Promise<void> {
   const db = await getDb();
   await db.transaction(async (tx) => {
+    const clock = await tx.query<{ last_message_at: string | null }>(
+      `SELECT last_message_at FROM conversations WHERE id = $1 FOR UPDATE`, [conversationId]);
+    if (clock.rows[0]?.last_message_at && new Date(clock.rows[0].last_message_at).getTime() > new Date(when).getTime()) {
+      await recomputeConversationChronology(tx, prospectId);
+      return;
+    }
     await tx.query(
       `UPDATE conversations SET
         last_message_at = $1, last_outbound_at = $1, status = 'waiting',
@@ -306,8 +339,8 @@ async function applyOutboundEffect(
         status = CASE WHEN status IN ('new', 'verified', 'draft_prepared') THEN 'contacted' ELSE status END,
         next_action = CASE WHEN status IN ('new', 'verified', 'draft_prepared') THEN 'Wait for a reply' ELSE next_action END,
         updated_at = now()
-       WHERE id = $3`,
-      [when, when, prospectId],
+       WHERE id = $2`,
+      [when, prospectId],
     );
     await tx.query(
       `UPDATE drafts SET status = 'cancelled', updated_at = now()
@@ -331,7 +364,7 @@ export async function storeParsedMessage(input: {
   uidValidity: number;
   isSeen: boolean;
   internalDate: Date | null;
-}): Promise<{
+}, options: SyncOptions = {}): Promise<{
   inserted: boolean;
   /** True when an existing row was given the body it was missing. */
   filled: boolean;
@@ -371,21 +404,29 @@ export async function storeParsedMessage(input: {
     : null;
   const date = parsedDate || input.internalDate || new Date();
 
+  const bounceInput = getParsedBounceInput(parsed);
+  const deliveryReport = input.direction === "inbound" && (
+    parseBounceReports(bounceInput).length > 0 ||
+    /multipart\/report|message\/delivery-status|feedback-report/i.test(bounceInput.contentType ?? ""));
+  const autoReply = input.direction === "inbound" && isAutoReply(bounceInput);
   const rawMessageHeaders = JSON.stringify({
+    deliveryReport,
+    autoReply,
+    ...(deliveryReport ? { bounceInput, historicalBouncePending: options.mode === "backfill" } : {}),
     returnPath: parsed.headers.get("return-path") || null,
     replyTo: parsed.headers.get("reply-to") || null,
     folderLabel: input.folderLabel,
   });
 
   const text = bodyText(parsed);
-  const html = parsed.html ? String(parsed.html).slice(0, 500_000) : null;
+  const html = parsed.html ? String(parsed.html) : null;
   const snippet = truncate(stripQuotedReply(text), 220);
 
-  const duplicate = await db.query<{ id: string; body_text: string | null }>(
-    `SELECT id, body_text FROM messages
+  const duplicate = await db.query<{ id: string; body_text: string | null; error: string | null; conversation_id: string | null; prospect_id: string | null }>(
+    `SELECT id, body_text, error, conversation_id, prospect_id FROM messages
      WHERE (account_id = $1 AND folder = $2 AND uidvalidity = $3 AND uid = $4)
         OR (account_id = $1 AND message_id = $5)
-     LIMIT 1`,
+     LIMIT 2`,
     [
       input.account.id,
       input.folderPath,
@@ -394,28 +435,48 @@ export async function storeParsedMessage(input: {
       messageId,
     ],
   );
+  if (duplicate.rows.length > 1) throw new AppError("Message-ID and UID identify different stored messages.", 409, "message_identity_conflict");
   const existing = duplicate.rows[0];
   if (existing) {
-    // A row that arrived with no body is filled in rather than skipped: an imported message, or a sync
-    // that ran before the body could be read, would otherwise stay blank for ever. Only a BLANK body is
-    // filled — a body already stored is never replaced by a second copy of the same message, so the
-    // first sync that read it keeps what it saw. The update is guarded on blankness too, so two syncs
-    // racing on the same message cannot both claim to have filled it.
-    if (existing.body_text && existing.body_text.trim()) {
-      return { inserted: false, filled: false, conversationId: null, prospectId: null };
+    if (options.mode === "backfill" && !existing.prospect_id && !existing.conversation_id && !deliveryReport && !autoReply) {
+      const owner = await resolveMessageOwner({ direction: input.direction, fromEmail, toEmails,
+        inReplyTo, references, subject, when: date.toISOString(), recovery: true });
+      if (owner.prospectId && owner.conversationId && await mayAssociateMessage(db, existing.id, owner.prospectId)) {
+        const linked = await db.query(`UPDATE messages SET prospect_id = $2, conversation_id = $3, matched_by = $4
+          WHERE id = $1 AND prospect_id IS NULL AND conversation_id IS NULL`,
+          [existing.id, owner.prospectId, owner.conversationId, owner.matchedBy]);
+        if (linked.rowCount) { existing.prospect_id = owner.prospectId; existing.conversation_id = owner.conversationId; }
+      }
+    }
+    // Only blank bodies or the exact known legacy excerpt marker are replaceable.
+    // Unmarked nonblank bodies (including short ones) are authoritative and preserved.
+    if (deliveryReport || autoReply) {
+      await db.query(`UPDATE messages SET raw_headers = coalesce(raw_headers, '{}'::jsonb) || $2::jsonb WHERE id = $1`,
+        [existing.id, rawMessageHeaders]);
+    }
+    if (deliveryReport && options.mode === "backfill" && options.processHistoricalBounces === true) {
+      await recordBounceIfAny({ accountId: input.account.id, messageDbId: existing.id, ...bounceInput });
+      await db.query(`UPDATE messages SET raw_headers = raw_headers || '{"historicalBouncePending":false}'::jsonb WHERE id=$1`, [existing.id]);
+    }
+    if (options.mode === "backfill" && existing.prospect_id) {
+      await db.transaction(tx => recomputeConversationChronology(tx, existing.prospect_id!));
+    }
+    if (!text.trim() || (existing.body_text?.trim() && existing.error !== "excerpt only, full body pending mailbox sync")) {
+      return { inserted: false, filled: false, conversationId: existing.conversation_id, prospectId: existing.prospect_id };
     }
     const filled = await db.query<{ conversation_id: string | null; prospect_id: string | null }>(
       `UPDATE messages SET
          body_text = $2,
-         body_html = coalesce(body_html, $3),
-         snippet = coalesce(snippet, $4),
+         body_html = $3,
+         snippet = $4,
+         error = CASE WHEN error = 'excerpt only, full body pending mailbox sync' THEN NULL ELSE error END,
          subject = CASE WHEN subject IS NULL OR subject = '' OR subject = '(no subject)'
                         THEN $5 ELSE subject END,
          cc_emails = CASE WHEN cc_emails IS NULL OR cc_emails = '[]'::jsonb
                           THEN $6::jsonb ELSE cc_emails END,
          from_name = coalesce(nullif(from_name, ''), $7),
-         raw_headers = coalesce(raw_headers, $8::jsonb)
-       WHERE id = $1 AND (body_text IS NULL OR btrim(body_text) = '')
+         raw_headers = coalesce(raw_headers, '{}'::jsonb) || $8::jsonb
+       WHERE id = $1 AND (body_text IS NULL OR btrim(body_text) = '' OR error = 'excerpt only, full body pending mailbox sync')
        RETURNING conversation_id, prospect_id`,
       [
         existing.id,
@@ -429,6 +490,7 @@ export async function storeParsedMessage(input: {
       ],
     );
     const row = filled.rows[0];
+    if (row?.prospect_id) await db.transaction(tx => recomputeConversationChronology(tx, row.prospect_id!));
     return {
       inserted: false,
       filled: Boolean(row),
@@ -445,6 +507,7 @@ export async function storeParsedMessage(input: {
     references,
     subject,
     when: date.toISOString(),
+    recovery: options.mode === "backfill",
   });
 
   const messageDbId = crypto.randomUUID();
@@ -484,7 +547,7 @@ export async function storeParsedMessage(input: {
       JSON.stringify(ccEmails),
       subject,
       text,
-      parsed.html ? String(parsed.html).slice(0, 500_000) : null,
+      html,
       truncate(stripQuotedReply(text), 220),
       input.direction === "outbound" ? date.toISOString() : null,
       input.direction === "inbound" ? date.toISOString() : null,
@@ -530,22 +593,18 @@ export async function storeParsedMessage(input: {
   // follow-up as though the prospect had written back. `recordBounceIfAny` answers `isBounce: false`
   // for ordinary mail, which then takes the reply path unchanged.
   const bounce =
-    input.direction === "inbound"
+    input.direction === "inbound" && (options.mode !== "backfill" || options.processHistoricalBounces === true)
       ? await recordBounceIfAny({
           accountId: input.account.id,
           messageDbId,
-          fromEmail,
-          subject,
-          bodyText: text,
-          contentType: parsed.headers.get("content-type")?.toString() ?? null,
-          headers: {
-            "x-failed-recipients": parsed.headers.get("x-failed-recipients")?.toString() ?? null,
-            status: parsed.headers.get("status")?.toString() ?? null,
-          },
-        }).catch(() => null)
+          ...bounceInput,
+        }).catch((error) => { if (options.mode === "backfill") throw error; return null; })
       : null;
 
-  if (bounce?.isBounce) {
+  if (deliveryReport && bounce?.isBounce) await db.query(
+    `UPDATE messages SET raw_headers = raw_headers || '{"historicalBouncePending":false}'::jsonb WHERE id=$1`, [messageDbId]);
+
+  if (deliveryReport || autoReply || bounce?.isBounce) {
     // Recorded against the report itself, not the thread: the row keeps its owner when the headers
     // found one, and stays unmatched (and therefore out of every reply count) when they did not.
     return {
@@ -557,6 +616,10 @@ export async function storeParsedMessage(input: {
   }
 
   if (owner.conversationId && owner.prospectId) {
+    if (options.mode === "backfill") {
+      await db.transaction(tx => recomputeConversationChronology(tx, owner.prospectId!));
+      return { inserted: true, filled: false, conversationId: owner.conversationId, prospectId: owner.prospectId };
+    }
     if (input.direction === "inbound") {
       await applyInboundEffect(
         owner.conversationId,
@@ -625,7 +688,93 @@ async function saveSyncState(input: {
   );
 }
 
-export async function syncEmailAccount(accountId: string): Promise<SyncResult> {
+/** One bounded page per physical folder. Its independent checkpoint never advances the live cursor. */
+async function recoverMailbox(
+  client: ImapFlow, account: EmailAccountRecord,
+  mailboxes: { path: string; specialUse?: string }[], options: SyncOptions, result: SyncResult,
+): Promise<SyncResult> {
+  const db = await getDb();
+  const sent = mailboxes.filter(box => /\\Sent/i.test(box.specialUse ?? "") || /sent/i.test(box.path));
+  const folders = [{ label: "INBOX" as const, path: "INBOX" },
+    ...sent.map(box => ({ label: "Sent" as const, path: box.path }))]
+    .filter((box, index, all) => all.findIndex(other => other.path === box.path) === index);
+  if (!sent.length) {
+    result.errors.push("No Sent folder found; recovery is incomplete.");
+    result.historyIncomplete = true;
+  }
+  for (const folder of folders) {
+    const key = `backfill:${folder.path}`;
+    let lastUid = 0;
+    let uidValidity = 0;
+    let scanned = 0;
+    let imported = 0;
+    let remaining = 0;
+    let complete = false;
+    let error: string | null = null;
+    try {
+      const mailbox = await client.mailboxOpen(folder.path, { readOnly: true });
+      uidValidity = Number(mailbox.uidValidity);
+      if (!Number.isSafeInteger(uidValidity) || uidValidity <= 0) throw new Error("Invalid UIDVALIDITY");
+      const saved = await db.query<{ uidvalidity: string; last_uid: string }>(
+        `SELECT uidvalidity, last_uid FROM mailbox_sync_state WHERE account_id = $1 AND folder = $2`, [account.id, key]);
+      if (Number(saved.rows[0]?.uidvalidity) === uidValidity) lastUid = Number(saved.rows[0]?.last_uid) || 0;
+      // No SINCE or newest-N policy. UID results are numerically filtered because IMAP n:* may return n-1.
+      const found = await client.search({ uid: `${lastUid + 1}:*` }, { uid: true });
+      if (!Array.isArray(found)) throw new Error("Mailbox search did not return UIDs");
+      const retained = [...new Set(found)].filter(uid => uid > lastUid).sort((a, b) => a - b);
+      remaining = retained.length;
+      for (const uid of retained.slice(0, RECOVERY_PAGE_SIZE)) {
+        let fetched = false;
+        for await (const message of client.fetch(String(uid), { source: true, flags: true, internalDate: true }, { uid: true })) {
+          if (message.uid !== uid || !message.source) throw new Error(`UID ${uid} source unavailable`);
+          if (message.source.length > 32 * 1024 * 1024) throw new Error(`UID ${uid} exceeds the recovery message-size limit; checkpoint held`);
+          const stored = await storeParsedMessage({
+            parsed: await simpleParser(message.source), account,
+            direction: folder.label === "INBOX" ? "inbound" : "outbound",
+            folderPath: folder.path, folderLabel: folder.label, uid, uidValidity,
+            isSeen: message.flags?.has("\\Seen") ?? false,
+            internalDate: message.internalDate ? new Date(message.internalDate) : null,
+          }, options);
+          if (stored.inserted) { imported++; result.imported++; }
+          else { result.skipped++; }
+          if (stored.filled) result.filled = (result.filled ?? 0) + 1;
+          fetched = true;
+        }
+        if (!fetched) throw new Error(`UID ${uid} not fetched; checkpoint held for retry`);
+        lastUid = uid;
+        scanned++;
+        remaining--;
+      }
+      complete = remaining === 0;
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : "Recovery folder failed";
+      result.errors.push(`${folder.path}: ${error}`);
+    }
+    if (uidValidity > 0) await db.query(`INSERT INTO mailbox_sync_state
+      (id, account_id, folder, uidvalidity, last_uid, last_synced_at, history_complete, error)
+      VALUES ($1,$2,$3,$4,$5,now(),$6,$7)
+      ON CONFLICT (account_id, folder) DO UPDATE SET uidvalidity = excluded.uidvalidity,
+      last_uid = excluded.last_uid, last_synced_at = now(), history_complete = excluded.history_complete,
+      error = excluded.error, updated_at = now()`,
+      [crypto.randomUUID(), account.id, key, uidValidity, lastUid, complete, error]);
+    if (!complete) result.historyIncomplete = true;
+    result.folders.push({ folder: folder.path, imported, scanned });
+    result.progress!.push({ folder: folder.path, uidValidity, lastUid, remaining, complete });
+  }
+  return result;
+}
+
+export async function syncEmailAccount(accountId: string, options: SyncOptions = {}): Promise<SyncResult> {
+  if (options.linkCertainAddresses) throw new AppError(
+    "Address-book linking is a separate explicitly approved operation.", 400, "address_linking_separate_operation");
+  if (options.mode === "backfill") {
+    if (!options.founderUserId) throw new AppError("Backfill requires explicit founder approval.", 403, "founder_required");
+    const db = await getDb();
+    const founder = await db.query(`SELECT id FROM users WHERE id = $1 AND role = 'founder' AND is_active = true`, [options.founderUserId]);
+    if (!founder.rows.length) throw new AppError("Backfill requires an active founder.", 403, "founder_required");
+  } else if (options.linkCertainAddresses || options.processHistoricalBounces) {
+    throw new AppError("Recovery flags require explicit backfill mode.", 400, "backfill_required");
+  }
   if (syncing.has(accountId)) {
     throw new AppError("This mailbox is already syncing.", 409, "sync_in_progress");
   }
@@ -650,6 +799,9 @@ export async function syncEmailAccount(accountId: string): Promise<SyncResult> {
     }
 
     const result: SyncResult = {
+      mode: options.mode ?? "incremental",
+      filled: 0,
+      progress: [],
       accountId,
       imported: 0,
       skipped: 0,
@@ -677,7 +829,7 @@ export async function syncEmailAccount(accountId: string): Promise<SyncResult> {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "IMAP connection failed.";
-      await saveSyncState({
+      if (options.mode !== "backfill") await saveSyncState({
         accountId,
         folder: "INBOX",
         uidValidity: 0,
@@ -694,6 +846,9 @@ export async function syncEmailAccount(accountId: string): Promise<SyncResult> {
 
     try {
       const mailboxes = await client.list();
+      if (options.mode === "backfill") {
+        return await recoverMailbox(client, account, mailboxes, options, result);
+      }
       const sentBox =
         mailboxes.find((mailbox) => /\\Sent/i.test(mailbox.specialUse ?? "")) ||
         mailboxes.find((mailbox) => /^sent( items)?$/i.test(mailbox.path)) ||
@@ -790,6 +945,7 @@ export async function syncEmailAccount(accountId: string): Promise<SyncResult> {
                 } else {
                   result.skipped += 1;
                 }
+                if (stored.filled) result.filled = (result.filled ?? 0) + 1;
                 lastUid = Math.max(lastUid, uid);
               }
             } catch (error) {
@@ -846,9 +1002,11 @@ export async function syncEmailAccount(accountId: string): Promise<SyncResult> {
     }
     // Everything below is local. A sync that read the mailbox has done its job even if these fail,
     // so they are attempted and reported rather than allowed to fail the run.
-    result.rematched = await rematchUnmatchedInbound().catch(() => null);
+    // Recovery/linking is never enabled by deploying code or running the ordinary scheduler.
+    result.rematched = null;
     result.sentCopies = await backfillSentCopies(account.id).catch(() => null);
-    result.pausedByBounceRate = await pauseProfileIfBouncing(accountId).catch(() => false);
+    // New, attributable reports perform their own rate check. A no-op/replay sync must not pause.
+    result.pausedByBounceRate = false;
 
     return result;
   } catch (error) {
@@ -914,7 +1072,7 @@ export async function rematchUnmatchedInbound(
     const generic = Boolean(domain && /gmail|outlook|yahoo|hotmail|icloud|proton/i.test(domain));
     const prospectId =
       (await findProspectByEmail(email)) ?? (generic ? null : await findProspectByDomain(domain));
-    if (!prospectId) continue;
+    if (!prospectId || !await mayAssociateMessage(db, row.id, prospectId)) continue;
 
     const foundByAddress = Boolean(await findProspectByEmail(email));
     const when = row.received_at ?? row.created_at ?? new Date().toISOString();

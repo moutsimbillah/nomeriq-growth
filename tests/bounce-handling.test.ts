@@ -47,14 +47,26 @@ async function seedRecipient(email: string): Promise<void> {
   await db.query(`DELETE FROM email_bounces WHERE normalized_email = $1`, [email]);
 }
 
+/** Each report is a stored, dated message: replay safety and rate windows need its identity. */
+async function reportMessage(accountId: string | null, receivedAt = new Date()): Promise<string> {
+  const id = crypto.randomUUID();
+  messageIds.push(id);
+  await db.query(
+    `INSERT INTO messages (id, account_id, direction, source, from_email, received_at)
+     VALUES ($1, $2, 'inbound', 'imap', $3, $4)`,
+    [id, accountId, `mailer-daemon-${RUN}@mx.example.test`, receivedAt.toISOString()],
+  );
+  return id;
+}
+
 beforeAll(async () => {
   // AUTO_MIGRATE is on in tests, so opening the database applies 024 before anything looks at it.
   db = await getDb();
 });
 
 afterAll(async () => {
+  await db.query(`DELETE FROM email_bounces WHERE normalized_email LIKE $1 OR message_id = ANY($2::uuid[])`, [`%-${RUN}@%`, messageIds]);
   for (const id of messageIds) await db.query(`DELETE FROM messages WHERE id = $1`, [id]);
-  await db.query(`DELETE FROM email_bounces WHERE normalized_email LIKE $1`, [`%-${RUN}@%`]);
   await db.query(`DELETE FROM suppressions WHERE normalized_email LIKE $1`, [`%-${RUN}@%`]);
   await db.query(`DELETE FROM outbound_sends WHERE account_id = ANY($1::uuid[])`, [accountIds]);
   for (const id of prospectIds) await db.query(`DELETE FROM prospects WHERE id = $1`, [id]);
@@ -72,7 +84,7 @@ describe("a permanent bounce becomes a suppression", () => {
 
     const result = await recordBounceIfAny({
       accountId,
-      messageDbId: null,
+      messageDbId: await reportMessage(accountId),
       fromEmail: `MAILER-DAEMON-${RUN}@mx.example.test`,
       subject: "Undelivered Mail Returned to Sender",
       bodyText: `Final-Recipient: rfc822; ${email}\nAction: failed\nStatus: 5.1.1\nDiagnostic-Code: smtp; 550 user unknown`,
@@ -104,7 +116,7 @@ describe("a permanent bounce becomes a suppression", () => {
     await seedRecipient(email);
     const result = await recordBounceIfAny({
       accountId: null,
-      messageDbId: null,
+      messageDbId: await reportMessage(null),
       fromEmail: `staff-${RUN}@abuse.example.test`,
       subject: "Abuse report",
       bodyText: `Original-Recipient: rfc822; ${email}`,
@@ -123,27 +135,28 @@ describe("a soft bounce is retried, then suppressed", () => {
   it("waits for three transient reports before it stops contact", async () => {
     const email = `soft-${RUN}@example.test`;
     await seedRecipient(email);
-    const report = (status: string) => ({
+    // Three distinct reports. A replay of the same report would not count again.
+    const report = async (status: string) => ({
       accountId: null,
-      messageDbId: null,
+      messageDbId: await reportMessage(null),
       fromEmail: `postmaster-${RUN}@mx.example.test`,
       subject: "Delivery Status Notification (Delay)",
       bodyText: `Final-Recipient: rfc822; ${email}\nAction: delayed\nStatus: ${status}`,
     });
 
-    const first = await recordBounceIfAny(report("4.2.2"));
+    const first = await recordBounceIfAny(await report("4.2.2"));
     expect(first.action).toBe("retried");
     expect(await countPriorSoftBounces(email)).toBe(1);
     const afterOne = await db.query(`SELECT 1 FROM suppressions WHERE normalized_email = $1`, [email]);
     expect(afterOne.rows).toHaveLength(0);
 
-    const second = await recordBounceIfAny(report("4.2.2"));
+    const second = await recordBounceIfAny(await report("4.2.2"));
     expect(second.action).toBe("retried");
     const afterTwo = await db.query(`SELECT 1 FROM suppressions WHERE normalized_email = $1`, [email]);
     expect(afterTwo.rows).toHaveLength(0);
 
     // The third is the one that ends it, and it keeps the soft-bounce history that explains why.
-    const third = await recordBounceIfAny(report("4.2.2"));
+    const third = await recordBounceIfAny(await report("4.2.2"));
     expect(third.action).toBe("suppressed");
     const afterThree = await db.query<{ reason: string }>(
       `SELECT reason FROM suppressions WHERE normalized_email = $1`,
@@ -208,9 +221,9 @@ describe("a profile pauses itself when its bounce rate is too high", () => {
       if (index < bounced) {
         await seedRecipient(recipient);
         await db.query(
-          `INSERT INTO email_bounces (id, account_id, normalized_email, kind, action)
-           VALUES (gen_random_uuid(), $1, $2, 'permanent', 'suppressed')`,
-          [accountId, recipient],
+          `INSERT INTO email_bounces (id, account_id, message_id, normalized_email, kind, action)
+           VALUES (gen_random_uuid(), $1, $3, $2, 'permanent', 'suppressed')`,
+          [accountId, recipient, await reportMessage(accountId)],
         );
       }
     }

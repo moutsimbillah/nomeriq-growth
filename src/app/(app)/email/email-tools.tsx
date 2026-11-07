@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { MessageLinkActions } from "@/components/message-link-actions";
 import {
   ArrowRight,
   CircleAlert,
@@ -378,8 +379,8 @@ export async function EmailToolsPage({
                     key={message.id}
                     className="rounded-xl border border-line bg-paper/40 px-3 py-2.5"
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-12 font-semibold text-ink">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <span className="min-w-0 break-anywhere text-12 font-semibold text-ink">
                         {message.fromEmail}
                       </span>
                       <span className="text-12 text-faint">
@@ -392,6 +393,7 @@ export async function EmailToolsPage({
                     <div className="mt-1 line-clamp-2 text-12 leading-4 text-faint">
                       {truncate(message.bodyText, 200)}
                     </div>
+                    <div className="mt-2"><MessageLinkActions messageId={message.id} /></div>
                   </div>
                 ))}
               </div>

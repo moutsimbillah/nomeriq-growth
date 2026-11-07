@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Languages, Mail, Paperclip, Reply, Undo2 } from "lucide-react";
 import { apiRequest } from "@/components/client-ui";
 import { TextWithLinks } from "@/components/message-links";
+import { MessageLinkActions } from "@/components/message-link-actions";
 import { translationViewState } from "@/lib/email/translation-view";
 import type { CachedTranslation } from "@/lib/services/message-translations";
 
@@ -12,6 +13,9 @@ export type MessageBodyKind = "body" | "excerpt" | "pending";
 
 export interface ConversationMessageProps {
   messageId: string;
+  currentProspectId?: string | null;
+  addressLinkStatus?: boolean;
+  isProspectReply?: boolean;
   inbound: boolean;
   fromName: string | null;
   fromEmail: string;
@@ -101,7 +105,7 @@ export function ConversationMessage(props: ConversationMessageProps) {
       }`}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <span
             className={`grid h-7 w-7 place-items-center rounded-full ${
               inbound ? "bg-amber/15 text-amber" : "bg-forest text-lime"
@@ -109,7 +113,7 @@ export function ConversationMessage(props: ConversationMessageProps) {
           >
             {inbound ? <Reply size={12} /> : <Mail size={12} />}
           </span>
-          <div>
+          <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2 text-12 font-bold uppercase tracking-[0.1em] text-faint">
               {inbound ? "Received" : "Sent"}
               {isSandbox && (
@@ -123,7 +127,7 @@ export function ConversationMessage(props: ConversationMessageProps) {
                 </span>
               )}
             </div>
-            <div className="mt-0.5 text-12 text-ink">
+            <div className="mt-0.5 break-anywhere text-12 text-ink">
               {fromName ? `${fromName} · ` : ""}
               {fromEmail}
             </div>
@@ -164,6 +168,14 @@ export function ConversationMessage(props: ConversationMessageProps) {
           </div>
         </div>
       </div>
+
+      {inbound && props.isProspectReply !== false && (
+        <div className="mt-3 min-w-0 space-y-2 break-anywhere text-12 text-muted" data-address-association>
+          {props.addressLinkStatus === true && <p>Replied from a new address: {fromEmail} — linked</p>}
+          {props.addressLinkStatus === false && <p>Thread matched; address not linked</p>}
+          <MessageLinkActions messageId={messageId} currentProspectId={props.currentProspectId} />
+        </div>
+      )}
 
       <div className="mt-4 border-t border-line/60 pt-3">
         <div className="mb-2 text-12 font-semibold text-ink">{subject}</div>

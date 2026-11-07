@@ -4,6 +4,7 @@ import { formatDate, iso } from "@/lib/utils";
 import { CATEGORIES, type AgentTag, type Category, type ChannelTag } from "@/lib/types";
 import { getWorkspaceSettings } from "./settings";
 import type { FounderStage } from "./stage";
+import { mailHistorySQL, realMailSQL, suppressionProjectionSQL } from "./folders";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -64,7 +65,7 @@ export function columnFor(facts: PipelineFacts): PipelineColumnKey {
   if (status === "won") return "won";
   if (status === "proposal") return "commercial";
   if (status === "demo") return "demo";
-  if (facts.hasReplied || status === "replied" || status === "interested") return "engaged";
+  if (facts.hasReplied || (facts.hasReplied === undefined && status === "replied") || status === "interested") return "engaged";
   if ((facts.sentFollowUps ?? 0) > 0 || facts.followUpDue) return "follow_up";
   if (facts.hasOutbound || status === "contacted") return "outreach";
   return "research";
@@ -174,11 +175,7 @@ export async function getPipelineCards(filters: Omit<PipelineFilters, "limits"> 
     `SELECT p.id, p.business_name, p.status, p.country, p.categories, p.follower_count, p.subscriber_count,
         p.do_not_contact, p.follow_up_excluded, p.sending_profile_id, p.source_agent, p.source_channel,
         p.source_client, p.updated_at, p.last_contacted_at, p.next_action,
-        (SELECT s.reason FROM suppressions s
-          JOIN prospect_emails pe ON pe.normalized_email = s.normalized_email
-          WHERE pe.prospect_id = p.id AND s.active = true
-          ORDER BY CASE s.reason WHEN 'unsubscribe' THEN 0 WHEN 'opt_out' THEN 1 WHEN 'complaint' THEN 2
-            WHEN 'bounce' THEN 3 ELSE 4 END LIMIT 1) AS suppression_reason,
+        ${suppressionProjectionSQL} AS suppression_reason,
         c.id AS conversation_id, c.classification,
         history.last_inbound_at, history.last_outbound_at,
         (SELECT count(*) FROM drafts d WHERE d.prospect_id = p.id AND d.kind = 'follow_up' AND d.status = 'sent') AS sent_follow_ups,
@@ -186,21 +183,10 @@ export async function getPipelineCards(filters: Omit<PipelineFilters, "limits"> 
         (SELECT min(d.sent_at) FROM drafts d WHERE d.prospect_id = p.id AND d.kind = 'first_contact' AND d.status = 'sent') AS first_sent_at,
         w.kind AS draft_kind, w.sequence AS draft_sequence, w.status AS draft_status, w.updated_at AS draft_updated_at,
         EXISTS (SELECT 1 FROM messages m JOIN prospect_emails pe ON pe.normalized_email = lower(m.from_email)
-          WHERE pe.prospect_id = p.id AND m.direction = 'inbound' AND m.prospect_id IS NULL) AS held_unmatched
+          WHERE pe.prospect_id = p.id AND m.direction = 'inbound' AND m.prospect_id IS NULL AND ${realMailSQL('m')}) AS held_unmatched
        FROM prospects p
        LEFT JOIN LATERAL (
-         SELECT max(inbound_at) AS last_inbound_at, max(outbound_at) AS last_outbound_at FROM (
-           SELECT c2.last_inbound_at AS inbound_at, c2.last_outbound_at AS outbound_at
-             FROM conversations c2 WHERE c2.prospect_id = p.id
-           UNION ALL
-           SELECT CASE WHEN m.direction = 'inbound' THEN coalesce(m.received_at, m.created_at) END,
-                  CASE WHEN m.direction = 'outbound' THEN coalesce(m.sent_at, m.created_at) END
-             FROM messages m LEFT JOIN conversations mc ON mc.id = m.conversation_id
-            WHERE coalesce(m.prospect_id, mc.prospect_id) = p.id AND m.delivery_status <> 'failed'
-              AND NOT EXISTS (SELECT 1 FROM email_bounces eb WHERE eb.message_id = m.id)
-           UNION ALL
-           SELECT NULL::timestamptz, sd.sent_at FROM drafts sd WHERE sd.prospect_id = p.id AND sd.status = 'sent'
-         ) activity
+         ${mailHistorySQL}
        ) history ON true
        LEFT JOIN LATERAL (
          SELECT id, classification, last_inbound_at, last_outbound_at FROM conversations
@@ -222,7 +208,7 @@ export async function getPipelineCards(filters: Omit<PipelineFilters, "limits"> 
     const hasOutbound = Boolean(lastOutboundAt || row.first_sent_at);
     const theirsLatest = Boolean(lastInboundAt && (!lastOutboundAt || Date.parse(lastInboundAt) >= Date.parse(lastOutboundAt)));
     const hasReplied = Boolean(lastInboundAt);
-    const held = row.do_not_contact === true && !reason;
+    const held = (row.do_not_contact === true && !reason) || reason === "manual";
 
     // Follow-up timing, by the same rule the follow-up job uses.
     const nextSequence = sentFollowUps + 1;

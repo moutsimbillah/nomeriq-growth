@@ -31,6 +31,8 @@ import { getDraft } from "./drafts";
 import { messageRealTime, newestMessageFirst } from "./message-order";
 import { recordFounderEnteredEmail } from "./prospects";
 import { getWorkspaceSettings } from "./settings";
+import { getRecipientPolicy } from "./recipient-policy";
+import { realFollowUpInboundSql } from "./agent-followups";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -224,10 +226,18 @@ async function checkRecipientSafety(
       "do_not_contact",
     );
   }
+  // Check the whole lead BEFORE recording a newly typed address. Bounce-only suppression is
+  // address-specific; every other suppression and an unsubscribe classification stop all aliases.
+  const policy = await getRecipientPolicy(prospectId, db);
   const suppressed = await db.query(
-    `SELECT 1 FROM suppressions WHERE normalized_email = $1 AND active = true`,
-    [normalizeEmail(email)],
+    `SELECT 1 FROM suppressions s WHERE s.active = true AND
+      (s.normalized_email = $2 OR (s.reason <> 'bounce' AND
+        (s.prospect_id = $1 OR s.normalized_email IN
+          (SELECT normalized_email FROM prospect_emails WHERE prospect_id = $1))))
+     UNION ALL SELECT 1 FROM conversations WHERE prospect_id = $1 AND classification = 'unsubscribe'`,
+    [prospectId, normalizeEmail(email)],
   );
+  const selected = policy.emails.find(e => normalizeEmail(e.email) === normalizeEmail(email));
   if (suppressed.rows.length) {
     throw new AppError(
       "This address is on the opt-out/suppression list. It cannot receive promotional email.",
@@ -235,11 +245,10 @@ async function checkRecipientSafety(
       "suppressed",
     );
   }
-  const verified = await db.query(
-    `SELECT 1 FROM prospect_emails WHERE prospect_id = $1 AND normalized_email = $2`,
-    [prospectId, normalizeEmail(email)],
-  );
-  if (!verified.rows.length) {
+  if (selected && (!selected.linked || selected.blocked)) {
+    throw new AppError(selected.reason ?? "This recipient is unavailable.", 422, "unverified_recipient");
+  }
+  if (!selected) {
     if (!options.allowFounderEntered) {
       throw new AppError(
         "The recipient is not the prospect's source-confirmed contact email.",
@@ -250,14 +259,21 @@ async function checkRecipientSafety(
     // The founder typed this address. Record it as a founder-entered contact so the lead shows where
     // it came from and the next send does not have to ask again.
     await recordFounderEnteredEmail(prospectId, email);
+    await checkRecipientSafety(prospectId, email);
   }
 }
 
 async function priorContactExists(prospectId: string): Promise<boolean> {
   const db = await getDb();
   const result = await db.query(
-    `SELECT 1 FROM messages
-     WHERE prospect_id = $1 AND direction = 'outbound' AND delivery_status <> 'failed'
+    `SELECT 1 FROM messages m LEFT JOIN conversations c ON c.id=m.conversation_id
+     WHERE m.direction = 'outbound' AND m.delivery_status IS DISTINCT FROM 'failed'
+       AND (m.prospect_id=$1 OR c.prospect_id=$1 OR EXISTS (
+         SELECT 1 FROM prospect_emails e, jsonb_array_elements_text(CASE WHEN jsonb_typeof(m.to_emails)='array' THEN m.to_emails ELSE '[]'::jsonb END) recipient
+         WHERE e.prospect_id=$1 AND e.normalized_email=lower(trim(recipient))))
+     UNION ALL SELECT 1 FROM outbound_sends s JOIN drafts d ON d.id=s.draft_id
+       WHERE s.status IN ('accepted','sandbox','uncertain') AND (s.prospect_id=$1 OR EXISTS (
+         SELECT 1 FROM prospect_emails e WHERE e.prospect_id=$1 AND e.normalized_email=lower(trim(d.recipient_email))))
      LIMIT 1`,
     [prospectId],
   );
@@ -295,9 +311,9 @@ export async function hasReplySinceLastOutbound(
 ): Promise<boolean> {
   const db = await getDb();
   const result = await db.query(
-    `SELECT 1 FROM messages
-     WHERE conversation_id = $1 AND direction = 'inbound'
-       AND ${messageRealTime()} > COALESCE((
+    `SELECT 1 FROM messages m
+     WHERE m.conversation_id = $1 AND ${realFollowUpInboundSql()}
+       AND ${messageRealTime('m')} > COALESCE((
          SELECT max(${messageRealTime()}) FROM messages
          WHERE conversation_id = $1 AND direction = 'outbound'
        ), '-infinity'::timestamptz)
@@ -305,6 +321,14 @@ export async function hasReplySinceLastOutbound(
     [conversationId],
   );
   return result.rows.length > 0;
+}
+
+async function hasFollowUpStoppingReply(prospectId: string): Promise<boolean> {
+  const db = await getDb();
+  const { rows } = await db.query(`SELECT 1 FROM messages m LEFT JOIN conversations c ON c.id=m.conversation_id
+    WHERE (m.prospect_id=$1 OR c.prospect_id=$1) AND m.direction='inbound'
+      AND (${realFollowUpInboundSql()} OR COALESCE(m.received_at,m.sent_at) IS NULL) LIMIT 1`, [prospectId]);
+  return rows.length > 0;
 }
 
 export interface SendDraftOptions {
@@ -503,7 +527,7 @@ export async function sendDraft(
       );
       throw new AppError("A follow-up needs an existing conversation.", 409);
     }
-    if (await hasReplySinceLastOutbound(conversation.rows[0].id)) {
+    if (await hasFollowUpStoppingReply(draft.prospectId)) {
       await db.query(
         `UPDATE outbound_sends SET status = 'blocked',
           error = 'Prospect replied; follow-up cancelled', completed_at = now()
@@ -593,6 +617,20 @@ export async function sendDraft(
   const text = `${signedBody}\n${footer.text}`;
   const html = `${textToHtmlParagraphs(signedBody)}<hr style="border:none;border-top:1px solid #ddd;margin:24px 0" /><div style="font-size:12px;color:#666">${textToHtmlParagraphs(footer.text.replace(/^\n+/, ""))}</div>`;
 
+  // Last read before transport: composing the footer/profile may have yielded to a new opt-out.
+  try {
+    await checkRecipientSafety(draft.prospectId, draft.recipientEmail);
+    if (draft.kind === "first_contact" && await priorContactExists(draft.prospectId)) {
+      throw new AppError("This prospect has already been contacted.", 409, "already_contacted");
+    }
+    if (draft.kind === "follow_up" && outboundConversation && await hasFollowUpStoppingReply(draft.prospectId)) {
+      throw new AppError("The prospect has replied. This follow-up was blocked.", 409, "prospect_replied");
+    }
+  } catch (error) {
+    await db.query(`UPDATE outbound_sends SET status='blocked', error=$2, completed_at=now() WHERE draft_id=$1`,
+      [draft.id, error instanceof Error ? error.message : "Recipient safety check failed"]);
+    throw error;
+  }
   let delivery: DeliveryResult;
   // Set when the transport could not confirm delivery: the send counts as sent with this note.
   let uncertainty: string | null = null;

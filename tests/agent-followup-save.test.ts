@@ -220,9 +220,12 @@ describe("shared final eligibility and actual message chronology",()=>{
     const result=await save(lead.id);expect(result.saved).toBe(1);
     expect((await db.query(`SELECT recipient_email FROM drafts WHERE id=$1`,[result.results[0]!.draftId])).rows[0]!.recipient_email).toBe(email);
   });
-  it.each([false,true])("uses old inbound actual timestamp, not fresh import time (fallback timestamp=%s)",async(fallback)=>{
+  // Founder rule (7 Nov 2026): no follow-up for a lead whose real reply was already answered — however
+  // old the reply, and whether its import time or its message date is the one stored.
+  it.each([false,true])("an old, freshly imported real reply that was answered stops follow-ups (fallback timestamp=%s)",async(fallback)=>{
     const lead=await seed();await message(null,lead.conversationId,'inbound',daysAgo(30),daysAgo(0),fallback);
-    expect((await save(lead.id)).saved).toBe(1);
+    expect((await save(lead.id)).results[0]).toMatchObject({status:'refused',code:'not_eligible'});
+    expect((await db.query(`SELECT id FROM drafts WHERE kind='follow_up' AND prospect_id=$1`,[lead.id])).rows).toHaveLength(0);
   });
   it.each([false,true])("uses latest outbound actual timestamp, including own rows without conversation (fallback timestamp=%s)",async(fallback)=>{
     const lead=await seed();await message(lead.id,null,'outbound',daysAgo(0),daysAgo(100),fallback);

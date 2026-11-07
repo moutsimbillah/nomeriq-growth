@@ -1,7 +1,7 @@
 import { getDb } from "@/lib/db/client";
 import { iso } from "@/lib/utils";
 import type { AgentTag, ChannelTag } from "@/lib/types";
-import { FOLDERS, folderFor, type FolderKey } from "./folders";
+import { FOLDERS, folderFor, mailHistorySQL, realMailSQL, suppressionProjectionSQL, type FolderKey } from "./folders";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -125,22 +125,15 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
         p.sending_profile_id, p.source_agent, p.source_channel, p.source_client, p.updated_at,
         (SELECT pe.email FROM prospect_emails pe WHERE pe.prospect_id = p.id
           ORDER BY pe.is_primary DESC LIMIT 1) AS contact_email,
-        (SELECT s.reason FROM suppressions s
-          JOIN prospect_emails pe ON pe.normalized_email = s.normalized_email
-          WHERE pe.prospect_id = p.id AND s.active = true
-          ORDER BY CASE s.reason WHEN 'unsubscribe' THEN 0 WHEN 'opt_out' THEN 1 WHEN 'complaint' THEN 2
-            WHEN 'bounce' THEN 3 ELSE 4 END LIMIT 1) AS suppression_reason,
+        ${suppressionProjectionSQL} AS suppression_reason,
         d.id AS draft_id, d.kind AS draft_kind, d.sequence AS draft_sequence, d.status AS draft_status, d.updated_at AS draft_updated_at,
-        c.id AS conversation_id, c.subject, c.unread_count, c.last_inbound_at, c.last_outbound_at,
-        (SELECT max(coalesce(m.received_at, m.created_at)) FROM messages m
-          LEFT JOIN conversations mc ON mc.id = m.conversation_id
-          WHERE coalesce(m.prospect_id, mc.prospect_id) = p.id AND m.direction = 'inbound') AS message_inbound_at,
-        (SELECT max(coalesce(m.sent_at, m.created_at)) FROM messages m
-          LEFT JOIN conversations mc ON mc.id = m.conversation_id
-          WHERE coalesce(m.prospect_id, mc.prospect_id) = p.id AND m.direction = 'outbound') AS message_outbound_at,
-        (SELECT max(sd.sent_at) FROM drafts sd WHERE sd.prospect_id = p.id AND sd.status = 'sent') AS draft_sent_at,
-        EXISTS (SELECT 1 FROM conversations c2 WHERE c2.prospect_id = p.id AND c2.last_inbound_at IS NOT NULL) AS has_replied
+        c.id AS conversation_id, c.subject, c.unread_count, history.last_inbound_at, history.last_outbound_at,
+        (SELECT m.source = 'imap' AND coalesce(m.sent_at, m.created_at) = history.last_outbound_at
+          FROM messages m LEFT JOIN conversations mc ON mc.id = m.conversation_id
+          WHERE coalesce(m.prospect_id, mc.prospect_id) = p.id AND m.direction = 'outbound' AND ${realMailSQL('m')}
+          ORDER BY coalesce(m.sent_at, m.created_at) DESC, m.id DESC LIMIT 1) AS external_reply
        FROM prospects p
+       LEFT JOIN LATERAL (${mailHistorySQL}) history ON true
        LEFT JOIN LATERAL (
          SELECT id, kind, sequence, status, updated_at FROM drafts
           WHERE prospect_id = p.id AND status IN ('draft', 'approved')
@@ -156,8 +149,8 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
   const counts = emptyCounts();
   const all: InboxRow[] = result.rows.map((row) => {
     const reason = row.suppression_reason ?? null;
-    const lastInboundAt = latest(iso(row.last_inbound_at), iso(row.message_inbound_at));
-    const lastOutboundAt = latest(iso(row.last_outbound_at), iso(row.message_outbound_at), iso(row.draft_sent_at));
+    const lastInboundAt = iso(row.last_inbound_at);
+    const lastOutboundAt = iso(row.last_outbound_at);
     const folder = folderFor({
       status: row.status,
       archivedAt: row.archived_at,
@@ -166,7 +159,8 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
       hasDraftWaiting: Boolean(row.draft_status),
       lastInboundAt,
       lastOutboundAt,
-      hasReplied: row.has_replied === true || Boolean(lastInboundAt),
+      hasReplied: Boolean(lastInboundAt),
+      latestOutboundIsExternalReply: row.external_reply === true,
       hasOutbound: Boolean(lastOutboundAt),
     });
     counts[folder] += 1;
@@ -212,7 +206,7 @@ export async function getFolderInbox(filters: InboxFilters = {}): Promise<Folder
   if (conversationIds.length) {
     const snippets = await db.query<any>(
       `SELECT DISTINCT ON (m.conversation_id) m.conversation_id, m.snippet, m.direction
-         FROM messages m WHERE m.conversation_id = ANY($1::uuid[])
+         FROM messages m WHERE m.conversation_id = ANY($1::uuid[]) AND ${realMailSQL('m')}
         ORDER BY m.conversation_id, coalesce(m.received_at, m.sent_at, m.created_at) DESC`,
       [conversationIds],
     );
