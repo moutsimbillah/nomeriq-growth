@@ -48,8 +48,15 @@ const truth = {
 /** No generated writer output may carry a sign-off or the saved signature: Growth adds identity at send. */
 function expectBodyOnly(body: string) {
   expect(body).not.toContain(signature);
-  expect(body).not.toMatch(/(?:Best|Kind regards|Warm regards|Regards|Sincerely|Cheers)[,.!]?\s*$/m);
+  expect(body).not.toMatch(/(?:Best(?: regards| wishes)?|Kind regards|Warm regards|Regards|Sincerely|Thanks|Thank you|Cheers)[,.!]?\s*$/im);
   expect(body.trim().length).toBeGreaterThan(0);
+}
+
+/** No writer path may reach the network without an assigned provider: a call here is a real failure. */
+function refuseNetwork() {
+  vi.stubGlobal("fetch", vi.fn(async () => {
+    throw new Error("No writer path may call the network without an assigned provider.");
+  }));
 }
 
 describe("writer outputs stay body-only", () => {
@@ -67,12 +74,14 @@ describe("writer outputs stay body-only", () => {
   });
 
   it("generateFollowUp falls back to body-only text without a provider", async () => {
+    refuseNetwork();
     const generated = await generateFollowUp({ prospect, originalSubject: "Hello", previousBody: "x", sequence: 2, settings });
     expect(generated.usedAi).toBe(false);
     expectBodyOnly(generated.body);
   });
 
   it("generateFirstContact returns body-only text without a provider", async () => {
+    refuseNetwork();
     const generated = await generateFirstContact(prospect, truth, settings);
     expect(generated.usedAi).toBe(false);
     expectBodyOnly(generated.body);
@@ -82,7 +91,7 @@ describe("writer outputs stay body-only", () => {
     const db = await getDb();
     const providerId = await createResearchProvider({
       name: "Body-only gateway", provider: "custom", kinds: "chat", model: "body-only-model",
-      apiKey: "sk-body-only-fixture", baseUrl: "https://body-only.example.test/v1",
+      apiKey: randomUUID(), baseUrl: "https://body-only.example.test/v1",
     });
     await db.query(`UPDATE research_providers SET last_test_ok = true WHERE id = $1`, [providerId]);
     await saveTaskSetting("first_email", { providerId });

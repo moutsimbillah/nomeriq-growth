@@ -115,6 +115,49 @@ it("labels an unavailable provider honestly", async () => {
   expect(suggestion.body).toBe("");
 });
 
+// A model that returns nothing but a sign-off/signature leaves no message body. Stripping it empties
+// the reply, which must surface as an honest failure rather than an unhandled error or a signed blank.
+// reply.ts raises invalid_reply_response; suggestionFailure normalizes it to the founder-facing
+// invalid_response, so the UI shows a retryable "unreadable reply", never a crash.
+it.each([
+  ["a bare sign-off", "Best regards,"],
+  ["a signature only", "Best,\nFounder\nNomeriq"],
+])("refuses a reply whose whole body is %s", async (_label, body) => {
+  const id = await makeId("custom");
+  await saveTaskSetting("suggest_reply", { providerId: id });
+  const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      choices: [{ message: { content: JSON.stringify({ subject: "Reply", body, needsFounderInput: false }) } }],
+    })));
+    const suggestion = await suggestReply(replyInput);
+    expect(suggestion.usedAi).toBe(false);
+    expect(suggestion.failure).toMatchObject({ code: "invalid_response", retryable: true });
+    expect(suggestion.body).toBe("");
+  } finally {
+    log.mockRestore();
+  }
+});
+
+// The English rendering goes through the same guard, so a signature-only englishBody cannot slip past.
+it("refuses a reply whose english rendering is only a signature", async () => {
+  const id = await makeId("custom");
+  await saveTaskSetting("suggest_reply", { providerId: id });
+  const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  try {
+    vi.stubGlobal("fetch", vi.fn(async () => json({
+      choices: [{ message: { content: JSON.stringify({
+        subject: "Reply", body: "Una respuesta sintética con contenido real.", englishBody: "Regards,", language: "es", needsFounderInput: false,
+      }) } }],
+    })));
+    const suggestion = await suggestReply(replyInput);
+    expect(suggestion.usedAi).toBe(false);
+    expect(suggestion.failure).toMatchObject({ code: "invalid_response", retryable: true });
+  } finally {
+    log.mockRestore();
+  }
+});
+
 it("labels a failed provider honestly, with no echoed content in logs", async () => {
   const id = await makeId("custom");
   await saveTaskSetting("suggest_reply", { providerId: id });
