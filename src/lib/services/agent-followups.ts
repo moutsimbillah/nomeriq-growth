@@ -1,3 +1,4 @@
+import { generatedBodyOnly } from "@/lib/email/message-content";
 import { z } from "zod";
 import { getDb, type DbClient } from "@/lib/db/client";
 import { validateDraft } from "@/lib/ai/claims";
@@ -28,7 +29,7 @@ export const FOLLOW_UP_BATCH_MAX = 50;
 
 type FollowUpSettings = {
   followUpMax: number; followUpDailyLimit: number; followUpDelay1Days: number;
-  followUpDelay2Days: number; followUpAutoEnabled: boolean; timezone: string;
+  followUpDelay2Days: number; followUpAutoEnabled: boolean; timezone: string; senderSignature?: string;
 };
 
 /** Read through the caller's transaction: never call a root-client service inside a PGlite tx. */
@@ -40,6 +41,7 @@ export async function readFollowUpSettings(db: DbClient, lock = false): Promise<
     followUpMax: Number(row.follow_up_max), followUpDailyLimit: Number(row.follow_up_daily_limit),
     followUpDelay1Days: Number(row.follow_up_delay_1_days), followUpDelay2Days: Number(row.follow_up_delay_2_days),
     followUpAutoEnabled: row.follow_up_auto_enabled === true,
+    senderSignature: row.sender_signature ?? "",
     timezone: isValidTimezone(row.timezone) ? row.timezone : DEFAULT_TIMEZONE,
   };
 }
@@ -177,6 +179,13 @@ export async function persistPreparedFollowUp(input: PreparedFollowUp): Promise<
     if (await followUpRoom(tx,settings) === 0) return refuse("daily_limit", "The daily follow-up preparation limit is used.");
     const truthRow = (await tx.query<any>(`SELECT * FROM product_truth ORDER BY version DESC LIMIT 1`)).rows[0];
     if (!truthRow) return refuse("product_truth_missing", "Product Truth is not initialized.");
+    const profileSignatures = await tx.query<{ signature: string }>(`SELECT signature FROM email_accounts WHERE id IN (
+      SELECT sending_profile_id FROM prospects WHERE id=$1
+      UNION SELECT sending_profile_id FROM conversations WHERE id=$2
+    )`, [input.prospectId, candidate.conversationId]);
+    const body = generatedBodyOnly(input.body, [settings.senderSignature ?? "", ...profileSignatures.rows.map(row => row.signature ?? "")]);
+    if (body.length < 20) return refuse("body_too_short", "Supply message body only, without a signature or footer.");
+    input = { ...input, body };
     const truth = mapProductTruth(truthRow);
     const warnings = validateDraft({ subject: input.subject, body: input.body, recipientEmail: candidate.contactEmail,
       truth, aiGenerated: input.aiGenerated ?? true });

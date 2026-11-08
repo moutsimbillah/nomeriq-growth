@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { draftProvenance } from "@/lib/ai/provenance";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AGENT_LABELS } from "@/lib/agent/agentTag";
 import { agentPillLabel } from "@/lib/agent/agentPill";
 import {
@@ -35,6 +35,7 @@ import {
 } from "@/lib/types";
 import { cn } from "@/lib/cn";
 import { apiRequest, CopyButton, InlineError, Modal, SubmitBar } from "./client-ui";
+import { EmailIdentityPreview, useEmailPresentation } from "./email-identity-preview";
 import { Notice } from "./ui";
 
 const inputClass = "input";
@@ -626,6 +627,7 @@ export function DraftEditor({
   const router = useRouter();
   const [draft, setDraft] = useState(initialDraft);
   const [subject, setSubject] = useState(initialDraft?.subject || "");
+  const bodyEdited = useRef(false);
   const [body, setBody] = useState(initialDraft?.body || "");
   const [recipient, setRecipient] = useState(
     initialDraft?.recipientEmail || verifiedEmails[0] || "",
@@ -639,6 +641,7 @@ export function DraftEditor({
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
+    bodyEdited.current = false;
     setDraft(initialDraft);
     setSubject(initialDraft?.subject || "");
     setBody(initialDraft?.body || "");
@@ -646,13 +649,15 @@ export function DraftEditor({
     setWarnings(initialDraft?.warnings || []);
   }, [initialDraft?.id, initialDraft?.updatedAt, initialDraft?.status, initialDraft?.subject, initialDraft?.body, initialDraft?.recipientEmail, verifiedEmails]);
 
-  const words = body.trim() ? body.trim().split(/\s+/).length : 0;
+  const sent = draft?.status === "sent";
+  const presentation = useEmailPresentation({ prospectId }, !sent);
+  const bodyOnly = sent ? body : presentation.editorBody(body, bodyEdited.current);
+  const words = bodyOnly.trim() ? bodyOnly.trim().split(/\s+/).length : 0;
   const dirty =
     !!draft &&
     (subject !== draft.subject ||
-      body !== draft.body ||
+      bodyOnly !== presentation.cleanBody(draft.body) ||
       recipient !== draft.recipientEmail);
-  const sent = draft?.status === "sent";
 
   async function generate() {
     setPending("generate");
@@ -675,7 +680,7 @@ export function DraftEditor({
     if (!dirty) return draft;
     const saved = await apiRequest(`/api/drafts/${draft.id}`, {
       method: "PATCH",
-      body: { subject, body, recipientEmail: recipient },
+      body: { subject, body: bodyOnly, recipientEmail: recipient },
     });
     setDraft(saved);
     setWarnings(saved.warnings || []);
@@ -749,9 +754,13 @@ export function DraftEditor({
   }
 
   async function copy() {
-    await navigator.clipboard.writeText(`To: ${recipient}\nSubject: ${subject}\n\n${body}`);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
+    try {
+      const content = sent ? body : presentation.content(body);
+      if (content === null) throw new Error(presentation.error || "Wait for the current signature/address preview before copying.");
+      await navigator.clipboard.writeText(`To: ${recipient}\nSubject: ${subject}\n\n${content}`);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not copy the draft."); }
   }
 
   if (!draft) {
@@ -855,18 +864,19 @@ export function DraftEditor({
           <label className="label">Message</label>
           <textarea
             className="textarea min-h-[370px] bg-[#fffefb] font-[450]"
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
+            value={bodyOnly}
+            onChange={(event) => { bodyEdited.current = true; setBody(event.target.value); }}
             disabled={sent}
           />
           <div className="mt-1 flex items-center justify-between text-12 text-faint">
-            <span>Signature and lawful unsubscribe footer are added at send.</span>
+            <span>{sent ? "Previously sent draft; current Settings do not rewrite its history." : "Body only. Current signature/address preview appears below."}</span>
             <span className={words < 40 || words > 100 ? "text-amber" : "text-faint"}>
               {words} words
             </span>
           </div>
         </div>
 
+        {!sent && <EmailIdentityPreview content={presentation.content(body)} error={presentation.error} />}
         {warnings.length > 0 && (
           <div className="space-y-1.5">
             {warnings.map((warning) => (
@@ -936,7 +946,7 @@ export function DraftEditor({
               <button
                 type="button"
                 onClick={send}
-                disabled={!!pending || !canSend}
+                disabled={!!pending || !canSend || !presentation.presentation}
                 className="btn-primary btn-sm"
               >
                 {pending === "send" ? (

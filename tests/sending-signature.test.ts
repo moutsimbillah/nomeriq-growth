@@ -6,14 +6,14 @@ import { hashPassword } from "@/lib/auth/password";
 import { deterministicReply } from "@/lib/ai/reply";
 import { createEmailAccount, getEmailAccountRecord, updateEmailAccount } from "@/lib/email/accounts";
 import { sendDraft } from "@/lib/services/email-sending";
-import { ensureWorkspaceDefaults } from "@/lib/services/settings";
+import { ensureWorkspaceDefaults, getWorkspaceSettings, updateWorkspaceSettings } from "@/lib/services/settings";
 import type { ProspectDetail } from "@/lib/types";
 
 /**
  * The signature the founder actually sees on a sent email: a profile's own, added at send, once.
  *
- * A draft body ends at "Best," by rule, so the send is where the sign-off is attached — which is also
- * why this cannot be tested by looking at the draft.
+ * Drafts contain body text only; the current enabled identity is attached at preview and send.
+ * Legacy Best, endings are removed rather than doubled with the saved signature.
  */
 
 const created = { accounts: [] as string[], prospects: [] as string[] };
@@ -78,7 +78,7 @@ beforeAll(async () => {
       "signature@test.nomeriq.com",
       "signature@test.nomeriq.com",
       "Signature Founder",
-      hashPassword("TestPassw0rd!123"),
+      hashPassword(crypto.randomUUID()),
     ],
   );
 });
@@ -86,6 +86,7 @@ afterAll(async () => {
   const db = await getDb();
   for (const id of created.prospects) await db.query(`DELETE FROM prospects WHERE id = $1`, [id]);
   for (const id of created.accounts) await db.query(`DELETE FROM email_accounts WHERE id = $1`, [id]);
+  await db.query(`DELETE FROM users WHERE id = $1`, [userId]);
   await closeDb();
   const dir = process.env.PGLITE_DIR;
   if (dir && dir.startsWith(".data/test-vitest-")) await fs.rm(dir, { recursive: true, force: true });
@@ -104,7 +105,8 @@ describe("the sending profile's signature", () => {
       `SELECT body_text FROM messages WHERE draft_id = $1`,
       [draftId],
     );
-    expect(message.rows[0].body_text).toContain("Best,\n\nRegards,\nProfile One");
+    expect(message.rows[0].body_text).toContain("Hello, I noticed you sell paid signals.\n\nRegards,\nProfile One");
+    expect(message.rows[0].body_text).not.toContain("\nBest,");
     // the workspace default never crept in
     expect(message.rows[0].body_text).not.toContain("Founder\nNomeriq");
   });
@@ -139,27 +141,40 @@ describe("the sending profile's signature", () => {
     expect(updated?.warmupStartedAt).not.toBeNull();
   });
 
-  it("signs a reply suggestion the same way", () => {
+  it("disabling identity affects an existing unsent draft but never rewrites a sent message", async () => {
+    const settings = await getWorkspaceSettings();
+    const signature = "Regards,\nProfile Off";
+    const accountId = await newAccount(signature);
+    const legacy = `Hello, I noticed you sell paid signals.\n\nBest,\n\n${signature}`;
+    const { draftId } = await newProspectWithDraft(legacy);
+    const db = await getDb();
+    try {
+      await updateWorkspaceSettings({ senderSignatureEnabled: false, postalAddressEnabled: false, postalAddress: "1 Fixture Road" }, userId);
+      const outcome = await sendDraft({ draftId, accountId, actorUserId: userId });
+      expect("queued" in outcome).toBe(false);
+      const sent = (await db.query<{body_text:string;body_html:string}>("SELECT body_text,body_html FROM messages WHERE draft_id=$1", [draftId])).rows[0];
+      expect(sent.body_text).toContain("Hello, I noticed you sell paid signals.");
+      expect(sent.body_text).not.toMatch(/Profile Off|Best,|1 Fixture Road/);
+      expect(sent.body_html).not.toMatch(/Profile Off|Best,|1 Fixture Road/);
+      expect(sent.body_text).toContain("Unsubscribe:");
+      expect((await db.query<{body:string}>("SELECT body FROM drafts WHERE id=$1", [draftId])).rows[0].body).toBe(legacy);
+      await updateWorkspaceSettings({ senderSignatureEnabled: true, postalAddressEnabled: true }, userId);
+      expect((await db.query("SELECT body_text,body_html FROM messages WHERE draft_id=$1", [draftId])).rows[0]).toEqual(sent);
+    } finally { await updateWorkspaceSettings(settings, userId); }
+  });
+
+  it("returns body-only reply suggestions regardless of the chosen identity", () => {
     const prospect = { id: "p1", contactEmail: "hello@example.test" } as unknown as ProspectDetail;
     const settings = { senderSignature: "Founder\nNomeriq" } as never;
-    const signed = deterministicReply({
-      prospect,
-      classification: "pricing",
-      lastInbound: null,
-      settings,
+    const profileReply = deterministicReply({
+      prospect, classification: "pricing", lastInbound: null, settings,
       signature: "Regards,\nProfile Three",
     });
-    expect(signed.body).toContain("Best,\nRegards,\nProfile Three");
-    expect(signed.body).not.toContain("Founder\nNomeriq");
-
-    // and with no profile signature, the workspace value is what it always was
-    const workspaceOnly = deterministicReply({
-      prospect,
-      classification: "pricing",
-      lastInbound: null,
-      settings,
-      signature: "  ",
+    const workspaceReply = deterministicReply({
+      prospect, classification: "pricing", lastInbound: null, settings, signature: "  ",
     });
-    expect(workspaceOnly.body).toContain("Founder\nNomeriq");
+    expect(profileReply.body).toBe(workspaceReply.body);
+    expect(profileReply.body).toContain("Thanks for asking about pricing.");
+    expect(profileReply.body).not.toMatch(/Best,|Regards,|Profile Three|Founder\nNomeriq/);
   });
 });

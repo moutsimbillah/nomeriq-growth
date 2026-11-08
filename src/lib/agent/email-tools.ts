@@ -27,7 +27,7 @@ const draftItemSchema = z.object({
   prospectId: z.string().uuid(),
   expectedSequence: z.number().int().min(1).max(2),
   subject: z.string().trim().min(2).max(200),
-  body: z.string().trim().min(20).max(20_000),
+  body: z.string().trim().min(20).max(20_000).describe("Message body only. Do not add a sign-off, sender name/signature, registered postal address or unsubscribe footer; Growth inherits enabled fields from Settings."),
 }).strict();
 const draftsSchema = z.object({
   drafts: z.array(draftItemSchema).min(1).max(FOLLOW_UP_BATCH_MAX)

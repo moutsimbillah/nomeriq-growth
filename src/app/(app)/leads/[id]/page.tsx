@@ -114,7 +114,7 @@ export default async function LeadDetailPage({
       sendingProfile.lastError ||
         "The mailbox that would send for this lead is not healthy.",
     );
-  if (!sandboxMode && !settings.postalAddress.trim())
+  if (!sandboxMode && (!settings.postalAddressEnabled || !settings.postalAddress.trim()))
     blockedReasons.push(
       "Add the registered business postal address in Settings before live sending.",
     );

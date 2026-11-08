@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { LoaderCircle, Save } from "lucide-react";
 import { listTimezones } from "@/lib/dates/timezone";
 import type { WorkspaceSettings } from "@/lib/services/settings";
+import { previewEmailContent } from "@/lib/email/message-content";
+import { notifyEmailIdentityChanged } from "@/components/email-identity-preview";
 import { apiRequest, InlineError } from "../client-ui";
 import { Notice } from "../ui";
 
@@ -20,7 +22,9 @@ export function WorkspaceSettingsForm({
     settings.legalBusinessName,
   );
   const [postalAddress, setPostalAddress] = useState(settings.postalAddress);
+  const [postalAddressEnabled, setPostalAddressEnabled] = useState(settings.postalAddressEnabled);
   const [senderSignature, setSenderSignature] = useState(settings.senderSignature);
+  const [senderSignatureEnabled, setSenderSignatureEnabled] = useState(settings.senderSignatureEnabled);
   const [footerNote, setFooterNote] = useState(settings.footerNote);
   const [followUpMax, setFollowUpMax] = useState(settings.followUpMax);
   const [followUpAutoEnabled, setFollowUpAutoEnabled] = useState(
@@ -69,7 +73,9 @@ export function WorkspaceSettingsForm({
         body: {
           legalBusinessName,
           postalAddress,
+          postalAddressEnabled,
           senderSignature,
+          senderSignatureEnabled,
           footerNote,
           followUpMax,
           followUpAutoEnabled,
@@ -80,7 +86,8 @@ export function WorkspaceSettingsForm({
           timezone,
         },
       });
-      setNotice("Sending identity and follow-up rules saved.");
+      notifyEmailIdentityChanged();
+      setNotice("Sending identity and follow-up rules saved. Unsent previews inherit these preferences.");
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not save settings.");
@@ -91,12 +98,13 @@ export function WorkspaceSettingsForm({
 
   return (
     <form onSubmit={save} className="space-y-5">
-      {!postalAddress.trim() && (
+      {(!postalAddressEnabled || !postalAddress.trim()) && (
         <Notice tone="warning" title="Live sending will be blocked.">
-          A truthful business postal address is required in every commercial
-          email footer. Sandbox sends can still be tested without it.
+          Enable and supply a truthful registered postal address before commercial sending.
+          Sandbox sends can still be tested without it.
         </Notice>
       )}
+      <p className="field-hint">Signature/address preferences apply automatically to every unsent draft preview and send. Saved message text and sent emails are not rewritten.</p>
       <div>
         <label className="label" htmlFor="workspace-timezone">
           Workspace timezone
@@ -129,24 +137,35 @@ export function WorkspaceSettingsForm({
           />
         </div>
         <div>
-          <label className="label">Registered postal address</label>
-          <input
+          <label className="label" htmlFor="registered-postal-address">Registered postal address</label>
+          <input id="registered-postal-address"
             className="input"
             value={postalAddress}
             onChange={(event) => setPostalAddress(event.target.value)}
             placeholder="Required for live commercial email"
           />
+          <label className="mt-2 flex items-center gap-2 text-12" htmlFor="postal-address-enabled">
+            <input id="postal-address-enabled" type="checkbox" checked={postalAddressEnabled}
+              onChange={(event) => setPostalAddressEnabled(event.target.checked)} />
+            Include registered postal address
+          </label>
+          <p className="field-hint">Off hides it without deleting the saved address. Live commercial sending requires it enabled.</p>
         </div>
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
         <div>
-          <label className="label">Founder signature</label>
-          <textarea
+          <label className="label" htmlFor="founder-signature">Founder signature</label>
+          <textarea id="founder-signature"
             className="textarea min-h-[90px]"
             value={senderSignature}
             onChange={(event) => setSenderSignature(event.target.value)}
           />
-          <p className="field-hint">Added below AI and founder-written drafts.</p>
+          <label className="mt-2 flex items-center gap-2 text-12" htmlFor="sender-signature-enabled">
+            <input id="sender-signature-enabled" type="checkbox" checked={senderSignatureEnabled}
+              onChange={(event) => setSenderSignatureEnabled(event.target.checked)} />
+            Include email signature
+          </label>
+          <p className="field-hint">Growth adds it once, never the AI writer. Off keeps the saved text. A mailbox signature overrides the workspace text when configured; this switch controls both.</p>
         </div>
         <div>
           <label className="label">Footer note</label>
@@ -263,7 +282,9 @@ export function WorkspaceSettingsForm({
           Footer preview
         </div>
         <div className="mt-2 whitespace-pre-wrap text-12 leading-5 text-muted">
-          {`--\n${legalBusinessName} · ${postalAddress || "[postal address missing]"}\n${footerNote}\nUnsubscribe: ${appUrl}/unsubscribe/…`}
+          {previewEmailContent("", { legalBusinessName, postalAddress, postalAddressEnabled, senderSignature, senderSignatureEnabled, footerNote })}
+          {`\nUnsubscribe: ${appUrl}/unsubscribe/…`}
+          <p className="field-hint">Example link only. Real sends create the recipient-specific unsubscribe URL.</p>
         </div>
       </div>
 

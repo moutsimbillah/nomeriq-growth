@@ -83,7 +83,7 @@ it("translation and suggestion use the shared streaming transport and the config
   const suggested = await suggestReply(replyInput);
   expect(suggested.usedAi).toBe(true);
   expect(suggested.body).toContain("A synthetic AI-written answer.");
-  expect(suggested.body).toContain("Moutsim\nNomeriq");
+  expect(suggested.body).not.toMatch(/Moutsim\nNomeriq|Best,|Regards,/); // Settings, not AI, own the signature.
   expect(suggested.body).not.toContain("Founder");
 });
 

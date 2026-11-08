@@ -1,3 +1,4 @@
+import { withEmailIdentity, draftBodyOnly } from "@/lib/email/message-content";
 import { createHash } from "node:crypto";
 import { getDb } from "@/lib/db/client";
 import { AppError, isEmail, iso, json, normalizeEmail, textToHtmlParagraphs, truncate } from "@/lib/utils";
@@ -537,14 +538,19 @@ export async function sendReply(input: SendReplyInput) {
     previousMessage.rows[0]?.message_id,
   ].filter((value): value is string => Boolean(value));
 
+  const settings = await getWorkspaceSettings();
+  const cleanBody = draftBodyOnly(body, [settings.senderSignature, account.signature]);
+  if (!cleanBody) throw new AppError("Write a reply before sending.", 400, "empty_draft_body");
+  const signedBody = withEmailIdentity(cleanBody, settings, account.signature);
   const footer = await buildComplianceFooter({
     accountProvider: account.provider,
     prospectId: conversation.prospect.id,
     email: conversation.replyTo,
+    settings,
   });
   const messageId = `<${crypto.randomUUID()}@${account.emailAddress.split("@")[1] || "nomeriq.local"}>`;
-  const text = `${body}\n${footer.text}`;
-  const html = `${textToHtmlParagraphs(body)}<hr style="border:none;border-top:1px solid #ddd;margin:24px 0" /><div style="font-size:12px;color:#666">${textToHtmlParagraphs(footer.text.replace(/^\n+/, ""))}</div>`;
+  const text = `${signedBody}\n${footer.text}`;
+  const html = `${textToHtmlParagraphs(signedBody)}<hr style="border:none;border-top:1px solid #ddd;margin:24px 0" /><div style="font-size:12px;color:#666">${textToHtmlParagraphs(footer.text.replace(/^\n+/, ""))}</div>`;
   const sendRowId = reusableSendRowId ?? crypto.randomUUID();
 
   if (!reusableSendRowId) {

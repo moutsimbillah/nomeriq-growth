@@ -12,7 +12,9 @@ export const dynamic = "force-dynamic";
 const schema = z.object({
   legalBusinessName: z.string().min(1).max(200).optional(),
   postalAddress: z.string().max(500).optional(),
+  postalAddressEnabled: z.boolean().optional(),
   senderSignature: z.string().max(1000).optional(),
+  senderSignatureEnabled: z.boolean().optional(),
   footerNote: z.string().max(2000).optional(),
   followUpMax: z.number().int().min(0).max(3).optional(),
   // Automatic follow-ups: off unless switched on, and a day's quota, bounded to match the CHECK.

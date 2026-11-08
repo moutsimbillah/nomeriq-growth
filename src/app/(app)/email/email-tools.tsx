@@ -816,7 +816,7 @@ export async function EmailToolsPage({
                 description="Once a contacted thread passes the configured waiting period without a reply, its personalized follow-up can be prepared here."
               />
             ) : (
-              <FollowUpDraftList drafts={followDrafts} sandbox={sandbox} />
+              <FollowUpDraftList drafts={followDrafts} sandbox={sandbox} managedSignatures={[settings.senderSignature, ...accounts.map(account => account.signature)]} />
             )}
             {followDraftPage.hasMore && (
               <div className="mt-4 flex flex-wrap items-center justify-center gap-3 text-12">

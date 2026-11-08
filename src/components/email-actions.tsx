@@ -13,6 +13,7 @@ import {
   Square,
   WandSparkles,
 } from "lucide-react";
+import { EmailIdentityPreview, useEmailPresentation } from "./email-identity-preview";
 import { apiRequest, InlineError, Modal, SubmitBar } from "./client-ui";
 import { Notice } from "./ui";
 import { useWorkspaceTimezone } from "./workspace-timezone";
@@ -28,20 +29,23 @@ export function FollowUpReview({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [subject, setSubject] = useState(draft.subject);
+  const bodyEdited = useRef(false);
   const [body, setBody] = useState(draft.body);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const editable = ["draft", "approved"].includes(draft.status);
+  const presentation = useEmailPresentation({ prospectId: draft.prospectId }, open && editable);
+  const bodyOnly = editable ? presentation.editorBody(body, bodyEdited.current) : body;
 
   async function save(): Promise<boolean> {
     if (!editable) return true;
-    if (subject === draft.subject && body === draft.body) return true;
+    if (subject === draft.subject && bodyOnly === presentation.cleanBody(draft.body)) return true;
     await apiRequest(`/api/drafts/${draft.id}`, {
       method: "PATCH",
       body: {
         subject,
-        body,
+        body: bodyOnly,
         recipientEmail: draft.recipientEmail,
       },
     });
@@ -121,11 +125,12 @@ export function FollowUpReview({
             <label className="label">Message</label>
             <textarea
               className="textarea min-h-[300px] bg-[#fffefb]"
-              value={body}
-              onChange={(event) => setBody(event.target.value)}
+              value={bodyOnly}
+              onChange={(event) => { bodyEdited.current = true; setBody(event.target.value); }}
               disabled={!editable}
             />
           </div>
+          {editable && <EmailIdentityPreview content={presentation.content(body)} error={presentation.error} />}
           {draft.warnings.length > 0 && (
             <div className="space-y-1">
               {draft.warnings.map((warning) => (
@@ -185,7 +190,7 @@ export function FollowUpReview({
                   type="button"
                   className="btn-primary"
                   onClick={send}
-                  disabled={!!pending}
+                  disabled={!!pending || !presentation.presentation}
                 >
                   {pending === "send" ? (
                     <LoaderCircle size={12} className="spin" />

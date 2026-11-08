@@ -107,7 +107,7 @@ beforeAll(async () => {
     `INSERT INTO users (id, email, normalized_email, name, password_hash, role)
      VALUES (gen_random_uuid(), 'send-friction@local.test', 'send-friction@local.test', 'Send Test', $1, 'founder')
      RETURNING id`,
-    [hashPassword("not-a-real-password")],
+    [hashPassword(crypto.randomUUID())],
   );
   state.userId = user.rows[0].id;
   await updateWorkspaceSettings(
@@ -160,8 +160,11 @@ describe("1. sending is one action", () => {
     expect(ui).not.toContain("Record this as a sandbox send?");
     expect(ui).not.toContain("setConfirmOpen");
     // and the send button calls the send function directly
-    const button = ui.slice(ui.indexOf('disabled={!!pending || !canSend}') - 400, ui.indexOf('disabled={!!pending || !canSend}'));
+    const button = ui.match(/<button\b[^>]*onClick=\{send\}[^>]*>/)?.[0];
+    expect(button).toBeDefined();
     expect(button).toContain("onClick={send}");
+    expect(button).toContain("!canSend");
+    expect(button).toContain("!presentation.presentation");
   });
 
   it("shows a note, not a wall, for a held-back or unconfirmed send", () => {

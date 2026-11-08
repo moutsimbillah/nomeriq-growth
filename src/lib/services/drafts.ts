@@ -1,3 +1,5 @@
+import { generatedBodyOnly, previewEmailContent } from "@/lib/email/message-content";
+import { getEmailPresentation } from "./email-presentation";
 import { getDb } from "@/lib/db/client";
 import { isUniqueViolation } from "@/lib/db/errors";
 import { tagsFromActorType } from "@/lib/agent/agentTag";
@@ -444,7 +446,8 @@ export async function savePreparedFirstContactDraft(input: {
     return { draft, preserved: false };
   }
   const subject = input.subject.trim();
-  const body = input.body.trim();
+  const presentation = await getEmailPresentation({ prospectId: prospect.id });
+  const body = generatedBodyOnly(input.body, [presentation.settings.senderSignature, presentation.profileSignature]);
   if (!subject || body.length < 20) {
     throw new AppError("A complete subject and email body are required.");
   }
@@ -555,7 +558,8 @@ export async function saveDraft(input: {
     );
   }
   const subject = input.subject.trim();
-  const body = input.body.trim();
+  const presentation = input.actorType === "founder" ? null : await getEmailPresentation({ prospectId: draft.prospectId });
+  const body = presentation ? generatedBodyOnly(input.body, [presentation.settings.senderSignature, presentation.profileSignature]) : input.body.trim();
   const recipientEmail = normalizeEmail(input.recipientEmail);
   if (subject.length < 2) throw new AppError("Add a subject line.");
   if (body.length < 20) throw new AppError("The email body is too short.");
@@ -685,11 +689,13 @@ export async function discardDraft(id: string): Promise<void> {
 }
 
 export async function draftPlainText(draft: Draft): Promise<string> {
+  if (draft.status === "sent") return [`To: ${draft.recipientEmail}`, `Subject: ${draft.subject}`, "", draft.body].join("\n");
+  const presentation = await getEmailPresentation({ prospectId: draft.prospectId });
   return [
     `To: ${draft.recipientEmail}`,
     `Subject: ${draft.subject}`,
     "",
-    draft.body,
+    previewEmailContent(draft.body, presentation.settings, presentation.profileSignature),
   ].join("\n");
 }
 

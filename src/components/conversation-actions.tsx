@@ -1,5 +1,6 @@
 "use client";
 
+import { EmailIdentityPreview, useEmailPresentation } from "./email-identity-preview";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { languageName } from "@/lib/email/translation-view";
@@ -187,6 +188,7 @@ export function ReplyComposer({
 }) {
   const router = useRouter();
   const keyRef = useRef<string | null>(null);
+  const presentation = useEmailPresentation({ conversationId }, !suppressed && !!recipient);
   const [subject, setSubject] = useState(defaultSubject);
   const [body, setBody] = useState("");
   const [attachments, setAttachments] = useState<
@@ -319,9 +321,13 @@ export function ReplyComposer({
   }
 
   async function copy() {
-    await navigator.clipboard.writeText(`To: ${recipient}\nSubject: ${subject}\n\n${body}`);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
+    try {
+      const content = presentation.content(body);
+      if (content === null) throw new Error(presentation.error || "Wait for the current signature/address preview before copying.");
+      await navigator.clipboard.writeText(`To: ${recipient}\nSubject: ${subject}\n\n${content}`);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not copy the reply."); }
   }
 
   if (suppressed || !recipient) {
@@ -449,6 +455,7 @@ export function ReplyComposer({
           </div>
         )}
 
+        <EmailIdentityPreview content={presentation.content(body)} error={presentation.error} />
         {attachments.length > 0 && (
           <div className="space-y-1.5">
             {attachments.map((attachment, index) => (
@@ -511,7 +518,7 @@ export function ReplyComposer({
             type="button"
             className="btn-primary btn-sm ml-auto"
             onClick={send}
-            disabled={!!pending || !body.trim() || !subject.trim()}
+            disabled={!!pending || !body.trim() || !subject.trim() || !presentation.presentation}
           >
             {pending === "send" ? (
               <LoaderCircle size={12} className="spin" />

@@ -4,6 +4,7 @@ import type {
   ProspectDetail,
 } from "@/lib/types";
 import type { WorkspaceSettings } from "@/lib/services/settings";
+import { generatedBodyOnly, EMAIL_BODY_ONLY_RULE } from "@/lib/email/message-content";
 import { runChatTask } from "@/lib/ai/registry";
 import { truncate } from "@/lib/utils";
 import { resolveSendingProfile } from "@/lib/email/profiles";
@@ -86,11 +87,9 @@ export function deterministicReply(input: {
   /** The lead's own signature, when its profile has one. */
   signature?: string;
 }): ReplySuggestion {
-  const { classification, lastInbound, settings } = input;
+  const { classification, lastInbound } = input;
   const greetingLine = replyGreeting(replyContactName(lastInbound ? [lastInbound] : []), input.prospect.businessName,
     lastInbound?.translation?.sourceLanguage);
-  const signature =
-    input.signature?.trim() || settings.senderSignature || "Founder\nNomeriq";
   let core =
     "Thanks for getting back to me. Could you point me to the part you would like me to address first? I would rather answer specifically than send a generic overview.";
   let needsFounderInput = false;
@@ -118,7 +117,7 @@ export function deterministicReply(input: {
         ? lastInbound.subject
         : `Re: ${lastInbound.subject}`
       : "Re: your note",
-    body: [greetingLine, "", core, "", "Best,", signature].join("\n"),
+    body: [greetingLine, "", core].join("\n"),
     needsFounderInput,
     usedAi: false,
     model: null,
@@ -143,7 +142,8 @@ export function replySystemPrompt(): string {
     "Keep it concise, human, founder-to-founder, 45–140 words. One clear next step or question.",
     "When you ask a question, prefer one from Product Truth's \"Questions to ask prospects\" that fits this lead, in your own words.",
     "Never infer a name from an email address or its local part. Use only a contact name explicitly recorded in the messages or lead; otherwise address the business team in the reply language. The system supplies the greeting.",
-    "Do not mention that you are an AI. Do not include a greeting or signature; the system adds them.",
+    EMAIL_BODY_ONLY_RULE,
+    "Do not include a greeting; the system adds it.",
     "Return strict JSON: {\"subject\":\"...\",\"body\":\"...\",\"language\":\"<BCP 47 code of body>\",\"englishBody\":\"...\"|null,\"confirmSentences\":[\"...\"],\"needsFounderInput\":true|false}.",
   ].join("\n");
 }
@@ -263,8 +263,11 @@ export async function suggestReply(input: {
   });
 
   let addressee = replyContactName(input.turns);
-  const signBody = (body: string, language?: string | null) =>
-    [withReplyGreeting(body, replyGreeting(addressee, input.prospect.businessName, language)), "", "Best,", signature].join("\n");
+  const signBody = (body: string, language?: string | null) => {
+    const clean = generatedBodyOnly(body, [signature, input.settings.senderSignature]);
+    if (!clean) throw new Error("AI reply has no message body.");
+    return withReplyGreeting(clean, replyGreeting(addressee, input.prospect.businessName, language));
+  };
   const failed = (code: string, provider?: string | null): ReplySuggestion => {
     const failure = suggestionFailure(code, provider);
     return { ...fallback, body: "", note: failure.message, failure };
@@ -303,7 +306,7 @@ export async function suggestReply(input: {
         provider: viaSettings.providerName ?? viaSettings.provider,
         fallbackUsed: viaSettings.fallbackUsed ?? null,
         language: parsed.language,
-        englishBody: parsed.englishBody ? withReplyGreeting(parsed.englishBody, replyGreeting(addressee, input.prospect.businessName, "en")) : null,
+        englishBody: parsed.englishBody ? signBody(parsed.englishBody, "en") : null,
         confirmSentences: parsed.confirmSentences,
         // The exact sentences are shown highlighted; a general note is only for a flag with none.
         note: parsed.needsFounderInput && !parsed.confirmSentences.length
@@ -333,7 +336,7 @@ export async function suggestReply(input: {
       subject: parsed.subject, body: signBody(parsed.body, parsed.language),
       needsFounderInput: parsed.needsFounderInput, usedAi: true, model: result.model, provider,
       language: parsed.language,
-      englishBody: parsed.englishBody ? withReplyGreeting(parsed.englishBody, replyGreeting(addressee, input.prospect.businessName, "en")) : null,
+      englishBody: parsed.englishBody ? signBody(parsed.englishBody, "en") : null,
       confirmSentences: parsed.confirmSentences,
       note: parsed.needsFounderInput ? "The AI flagged that part of this answer needs founder confirmation." : null,
       context: `SYSTEM\n${system}\n\nREQUEST\n${user}`,

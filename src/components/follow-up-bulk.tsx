@@ -7,6 +7,7 @@ import { ArrowRight, CheckCheck, LoaderCircle, Sparkles } from "lucide-react";
 import { apiRequest } from "./client-ui";
 import { FollowUpReview } from "./email-actions";
 import { draftProvenance } from "@/lib/ai/provenance";
+import { draftBodyOnly } from "@/lib/email/message-content";
 import { truncate } from "@/lib/utils";
 import type { Draft } from "@/lib/types";
 
@@ -172,7 +173,7 @@ export function FollowUpEligibleList({
  * ready. Approving never sends; approved drafts go out only through a campaign the founder starts,
  * within each sending profile's daily limit.
  */
-export function FollowUpDraftList({ drafts, sandbox }: { drafts: Draft[]; sandbox: boolean }) {
+export function FollowUpDraftList({ drafts, sandbox, managedSignatures = [] }: { drafts: Draft[]; sandbox: boolean; managedSignatures?: string[] }) {
   const router = useRouter();
   const ready = drafts.filter((draft) => draft.status === "draft");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -263,7 +264,7 @@ export function FollowUpDraftList({ drafts, sandbox }: { drafts: Draft[]; sandbo
               <span className="badge capitalize">{draft.status}</span>
             </div>
             <div className="mt-0.5 truncate text-12 text-muted">
-              {draft.subject} · {truncate(draft.body.replace(/\n+/g, " "), 130)}
+              {draft.subject} · {truncate((["draft", "approved"].includes(draft.status) ? draftBodyOnly(draft.body, managedSignatures) : draft.body).replace(/\n+/g, " "), 130)}
             </div>
             <div className="mt-0.5 text-12 text-faint" data-draft-provenance>
               {draftProvenance(draft)}

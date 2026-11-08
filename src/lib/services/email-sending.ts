@@ -8,7 +8,6 @@ import {
 } from "@/lib/email/accounts";
 import {
   pinSendingProfile,
-  profileSignature,
   resolvePinnedProfile,
   warmupDailyLimit,
 } from "@/lib/email/profiles";
@@ -27,10 +26,11 @@ import {
   textToHtmlParagraphs,
   truncate,
 } from "@/lib/utils";
+import { draftBodyOnly, complianceLines, withEmailIdentity } from "@/lib/email/message-content";
 import { getDraft } from "./drafts";
 import { messageRealTime, newestMessageFirst } from "./message-order";
 import { recordFounderEnteredEmail } from "./prospects";
-import { getWorkspaceSettings } from "./settings";
+import { getWorkspaceSettings, type WorkspaceSettings } from "./settings";
 import { getRecipientPolicy } from "./recipient-policy";
 import { assertLeadOutreachAllowed } from "./lead-outreach-guard";
 import { rejectionHeldAddresses } from "./lead-rejections";
@@ -104,27 +104,24 @@ export async function buildComplianceFooter(input: {
   accountProvider: string;
   prospectId: string;
   email: string;
+  settings?: WorkspaceSettings;
 }): Promise<{ text: string; headers: Record<string, string> }> {
-  const settings = await getWorkspaceSettings();
-  const unsubscribe = await unsubscribeUrl(input.prospectId, input.email);
+  const settings = input.settings ?? await getWorkspaceSettings();
   const isSandbox = input.accountProvider === "sandbox";
-  if (!settings.postalAddress.trim() && !isSandbox) {
+  if ((!settings.postalAddressEnabled || !settings.postalAddress.trim()) && !isSandbox) {
     throw new AppError(
-      "Add your registered business postal address in Settings before sending commercial email.",
+      "Enable and supply your registered business postal address in Settings before sending commercial email.",
       409,
       "postal_address_missing",
     );
   }
-  const addressLine = settings.postalAddress.trim()
-    ? settings.postalAddress.trim()
-    : "Sandbox test message — no message was delivered.";
-  const text = [
-    "",
-    "--",
-    `${settings.legalBusinessName} · ${addressLine}`,
-    settings.footerNote,
-    `Unsubscribe: ${unsubscribe}`,
-  ].join("\n");
+  // Validate before creating a token: a refused send must not create an opt-out record.
+  const unsubscribe = await unsubscribeUrl(input.prospectId, input.email);
+  const lines = complianceLines(settings);
+  if (isSandbox && !settings.postalAddress.trim() && settings.postalAddressEnabled) {
+    lines.push("Sandbox test message — no message was delivered.");
+  }
+  const text = ["", "--", ...lines, `Unsubscribe: ${unsubscribe}`].join("\n");
   return {
     text,
     headers: {
@@ -577,10 +574,12 @@ export async function sendDraft(
     };
   }
 
+  const settings = await getWorkspaceSettings();
   const footer = await buildComplianceFooter({
     accountProvider: account.provider,
     prospectId: draft.prospectId,
     email: draft.recipientEmail,
+    settings,
   });
   const messageId = `<${crypto.randomUUID()}@${account.emailAddress.split("@")[1] || "nomeriq.local"}>`;
   const outboundConversation = conversation.rows[0];
@@ -613,14 +612,9 @@ export async function sendDraft(
         ? draft.subject
         : `Re: ${previous?.subject || draft.subject}`
       : draft.subject;
-  // The profile's own sign-off, added here at send (a draft body ends at "Best,"). Never added twice:
-  // if the founder has already written these exact lines into the draft, they stay as written.
-  const signature = profileSignature(
-    account.signature,
-    (await getWorkspaceSettings()).senderSignature,
-  );
-  const body = draft.body.trim();
-  const signedBody = signature && !body.endsWith(signature) ? `${body}\n\n${signature}` : body;
+  const body = draftBodyOnly(draft.body, [settings.senderSignature, account.signature]);
+  if (!body) throw new AppError("Write a message body before sending.", 400, "empty_draft_body");
+  const signedBody = withEmailIdentity(body, settings, account.signature);
   const text = `${signedBody}\n${footer.text}`;
   const html = `${textToHtmlParagraphs(signedBody)}<hr style="border:none;border-top:1px solid #ddd;margin:24px 0" /><div style="font-size:12px;color:#666">${textToHtmlParagraphs(footer.text.replace(/^\n+/, ""))}</div>`;
 
@@ -762,7 +756,7 @@ export async function sendDraft(
           subject,
           text,
           html,
-          truncate(draft.body, 220),
+          truncate(body, 220),
           sentAt,
           delivery.mode === "sandbox",
           deliveryStatus,

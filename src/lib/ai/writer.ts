@@ -2,6 +2,7 @@ import type { ProductTruth, ProspectDetail } from "@/lib/types";
 import { productTruthBlock } from "@/lib/ai/product-truth";
 import { truncate, wordCount } from "@/lib/utils";
 import type { WorkspaceSettings } from "@/lib/services/settings";
+import { generatedBodyOnly, EMAIL_BODY_ONLY_RULE } from "@/lib/email/message-content";
 import { runChatTask } from "@/lib/ai/registry";
 import { buildLeadContext } from "@/lib/ai/lead-context";
 import { firstContactNeed, type FirstContactNeed } from "@/lib/ai/first-contact-need";
@@ -139,9 +140,6 @@ export function deterministicFirstContact(
     intro,
     "",
     question(prospect),
-    "",
-    "Best,",
-    settings.senderSignature || "Founder\nNomeriq",
   ]
     .filter((line) => line !== null)
     .join("\n");
@@ -191,7 +189,8 @@ function aiSystemPrompt(model: LeadModel | null): string {
     // assessment, not left to the model's impression of the research block.
     "WHAT YOU MAY CLAIM ABOUT THEIR SETUP: " + firstContactNeed(model ?? emptyLeadModel()).directive,
     "If pricing is not explicitly approved, do not mention price, cost, discounts, or commercial terms.",
-    "Return strict JSON only: {\"subject\":\"...\",\"body\":\"...\"}. The body must not include a signature; the system appends one.",
+    EMAIL_BODY_ONLY_RULE,
+    "Return strict JSON only: {\"subject\":\"...\",\"body\":\"...\"}.",
   ].join("\n");
 }
 
@@ -368,12 +367,7 @@ export async function generateFirstContact(
     const viaSettings = await runChatTask("first_email", { system, user: settingsUser, maxTokens: 700, json: true });
     if (viaSettings.ok) {
       const parsed = parseDraftJson(viaSettings.text);
-      const body = [
-        parsed.body.trim(),
-        "",
-        "Best,",
-        settings.senderSignature || "Founder\nNomeriq",
-      ].join("\n");
+      const body = generatedBodyOnly(parsed.body, [settings.senderSignature]);
       if (wordCount(body) >= 20) {
         return {
           subject: parsed.subject.trim().slice(0, 160),
@@ -415,12 +409,7 @@ export async function generateFirstContact(
       ) {
         throw new Error("DeepSeek draft response did not contain subject and body.");
       }
-      const body = [
-        ai.data.body.trim(),
-        "",
-        "Best,",
-        settings.senderSignature || "Founder\nNomeriq",
-      ].join("\n");
+      const body = generatedBodyOnly(ai.data.body, [settings.senderSignature]);
       if (wordCount(body) < 20) {
         return { ...fallback, usage: ai.usage };
       }
@@ -439,12 +428,7 @@ export async function generateFirstContact(
           ? await callAnthropic(system, user)
           : fallback;
     if (!("subject" in result)) return fallback;
-    const body = [
-      result.body.trim(),
-      "",
-      "Best,",
-      settings.senderSignature || "Founder\nNomeriq",
-    ].join("\n");
+    const body = generatedBodyOnly(result.body, [settings.senderSignature]);
     if (wordCount(body) < 20) return fallback;
     return {
       subject: result.subject,
@@ -476,26 +460,17 @@ export function buildFollowUp(input: {
           `I wanted to put one question back on your radar from my note about ${prospect.businessName}'s ${categoryList(prospect)} signals: how does your team keep subscribers updated after a signal is posted, and how do you track the outcome?`,
           "",
           "If it is easier to answer over a short call, I am happy to work around your schedule. Either way, no pressure.",
-          "",
-          "Best,",
-          settings.senderSignature || "Founder\nNomeriq",
         ].join("\n")
       : sequence === 2
         ? [
             greetingLine,
             "",
             `I will keep this brief: I am closing the loop on my note about ${prospect.businessName}'s signal service. If improving how subscribers receive updates and outcomes is not a priority right now, that is completely fine.`,
-            "",
-            "Best,",
-            settings.senderSignature || "Founder\nNomeriq",
           ].join("\n")
         : [
             greetingLine,
             "",
             `This is my last note on this. I do not want to keep filling your inbox, so I will leave it here unless you would like to compare notes on how ${prospect.businessName} handles signal updates.`,
-            "",
-            "Best,",
-            settings.senderSignature || "Founder\nNomeriq",
           ].join("\n");
   return {
     subject: originalSubject.toLowerCase().startsWith("re:")
@@ -518,7 +493,8 @@ export function followUpSystemPrompt(sequence: number): string {
       ? "This is the last follow-up: say plainly you will not write again unless they want to talk."
       : "End with one easy question.",
     "Use only Product Truth for any claim about Nomeriq; never invent a feature, number, customer, integration, price or guarantee.",
-    "Return strict JSON only: {\"subject\":\"...\",\"body\":\"...\"}. The body must not include a signature; the system appends one.",
+    EMAIL_BODY_ONLY_RULE,
+    "Return strict JSON only: {\"subject\":\"...\",\"body\":\"...\"}.",
   ].join("\n");
 }
 
@@ -546,7 +522,7 @@ export async function generateFollowUp(input: {
     });
     if (!outcome.ok) return fallback;
     const parsed = parseDraftJson(outcome.text);
-    const body = [parsed.body.trim(), "", "Best,", input.settings.senderSignature || "Founder\nNomeriq"].join("\n");
+    const body = generatedBodyOnly(parsed.body, [input.settings.senderSignature]);
     if (wordCount(body) < 12) return fallback;
     return {
       // A follow-up stays in the original thread, whatever subject the model suggests.

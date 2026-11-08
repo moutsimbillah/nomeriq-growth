@@ -7,7 +7,9 @@ import { mapProductTruth } from "./mappers";
 export interface WorkspaceSettings {
   legalBusinessName: string;
   postalAddress: string;
+  postalAddressEnabled: boolean;
   senderSignature: string;
+  senderSignatureEnabled: boolean;
   footerNote: string;
   followUpMax: number;
   followUpAutoEnabled: boolean;
@@ -72,7 +74,9 @@ export async function getWorkspaceSettings(): Promise<WorkspaceSettings> {
   return {
     legalBusinessName: row.legal_business_name,
     postalAddress: row.postal_address,
+    postalAddressEnabled: row.postal_address_enabled !== false,
     senderSignature: row.sender_signature,
+    senderSignatureEnabled: row.sender_signature_enabled !== false,
     footerNote: row.footer_note,
     followUpMax: number(row.follow_up_max, 2),
     followUpAutoEnabled: row.follow_up_auto_enabled === true,
@@ -159,6 +163,8 @@ export async function updateWorkspaceSettings(
        research_default_concurrency = $11,
        deepseek_search_qps = $12,
        deepseek_fetch_qps = $13,
+       sender_signature_enabled = $17,
+       postal_address_enabled = $18,
        updated_by = $14,
        updated_at = now()
      WHERE id = 'default'`,
@@ -179,6 +185,8 @@ export async function updateWorkspaceSettings(
       userId,
       next.followUpAutoEnabled,
       next.followUpDailyLimit,
+      next.senderSignatureEnabled,
+      next.postalAddressEnabled,
     ],
   );
   return getWorkspaceSettings();
