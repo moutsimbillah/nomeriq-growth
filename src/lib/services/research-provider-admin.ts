@@ -272,6 +272,10 @@ export async function createResearchProvider(
     );
   }
 
+  if (provider === "zai" && kinds !== "chat") {
+    throw new AppError("Z.ai GLM supports chat only here. Research remains on the official DeepSeek adapter.", 400, "invalid_provider_kind");
+  }
+
   // A search-only row has no model by design (Brave is the case); a chat-capable row must name one.
   const model = kinds === "search" ? "" : (input.model ?? "").trim() || defaults.model;
   if (kinds !== "search" && !model) {
@@ -324,7 +328,7 @@ export async function createResearchProvider(
       input.searchPath ?? null,
       input.fetchPath ?? null,
       Number.isFinite(input.priority) ? Number(input.priority) : 100,
-      input.isEnabled ?? true,
+      input.isEnabled ?? provider !== "zai",
       input.createdBy ?? null,
     ],
   );
@@ -355,6 +359,10 @@ export async function updateResearchProvider(id: string, patch: ProviderInput): 
         400,
         "invalid_provider_kind",
       );
+    }
+    if (patch.kinds !== "chat") {
+      const current = await db.query<{ provider: string }>("SELECT provider FROM research_providers WHERE id=$1", [id]);
+      if (current.rows[0]?.provider === "zai") throw new AppError("Z.ai GLM supports chat only here.", 400, "invalid_provider_kind");
     }
     // Flipping a row to search-only clears the model, because a search-only row has none; flipping
     // it back to chat requires a model and is refused here rather than left half-configured.

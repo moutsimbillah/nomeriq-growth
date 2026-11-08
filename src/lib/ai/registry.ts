@@ -61,6 +61,12 @@ export const PROVIDER_DEFAULTS: Record<
     model: "",
     kinds: "search",
   },
+  zai: {
+    label: "Z.ai (GLM 5.3 / 5.3 Flash)",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    model: "glm-5.3-flash",
+    kinds: "chat",
+  },
   custom: {
     label: "Custom (OpenAI-compatible)",
     baseUrl: "",

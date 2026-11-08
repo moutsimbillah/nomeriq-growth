@@ -56,6 +56,14 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
     fetchPath: "",
   });
 
+  const documentedModels = PROVIDER_CATALOG[form.provider]?.documentedModels;
+  function changeConnection(patch: { apiKey?: string; baseUrl?: string }) {
+    setModels([...(documentedModels ?? [])]);
+    setForm(current => ({ ...current, ...patch,
+      model: documentedModels?.includes(current.model) ? current.model : documentedModels ? PROVIDER_CATALOG[current.provider].model : "",
+    }));
+  }
+
   async function call(label: string, run: () => Promise<{ providers?: ProviderRowView[] } | null>) {
     setError(null);
     setNotice(null);
@@ -365,11 +373,13 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
                 value={form.provider}
                 onChange={(event) => {
                   const choice = PROVIDER_CATALOG[event.target.value];
-                  setModels([]);
+                  setModels([...(choice?.documentedModels ?? [])]);
                   setForm({
                     ...form,
                     provider: event.target.value,
-                    model: "",
+                    baseUrl: "",
+                    apiKey: "",
+                    model: choice?.documentedModels ? choice.model : "",
                     kinds: choice ? choice.kinds : form.kinds,
                   });
                 }}
@@ -380,6 +390,7 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
                   </option>
                 ))}
               </select>
+              <p className="field-hint">{PROVIDER_CATALOG[form.provider]?.hint}</p>
             </div>
             <div>
               <label className="label" htmlFor="provider-kinds">
@@ -389,6 +400,7 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
                 id="provider-kinds"
                 className="input"
                 value={form.kinds}
+                disabled={form.provider === "zai"}
                 onChange={(event) => setForm({ ...form, kinds: event.target.value })}
               >
                 <option value="chat">Chat only (a model)</option>
@@ -406,7 +418,7 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
                 type="password"
                 autoComplete="off"
                 value={form.apiKey}
-                onChange={(event) => { setModels([]); setForm({ ...form, apiKey: event.target.value, model: "" }); }}
+                onChange={(event) => changeConnection({ apiKey: event.target.value })}
               />
             </div>
             <div>
@@ -416,14 +428,14 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
               <input
                 id="provider-base"
                 className="input"
-                placeholder="https://api.deepseek.com"
+                placeholder={PROVIDER_CATALOG[form.provider]?.baseUrl || "https://your-gateway.example/v1"}
                 value={form.baseUrl}
-                onChange={(event) => { setModels([]); setForm({ ...form, baseUrl: event.target.value, model: "" }); }}
+                onChange={(event) => changeConnection({ baseUrl: event.target.value })}
               />
             </div>
             <div>
               <label className="label" htmlFor="provider-model">
-                Model {form.kinds === "search" ? "(not used)" : "(from provider list)"}
+                Model {form.kinds === "search" ? "(not used)" : documentedModels ? "(documented choices; Test verifies access)" : "(from provider list)"}
               </label>
               <select id="provider-model" className="input" value={form.model}
                 disabled={form.kinds === "search" || models.length === 0}
@@ -431,7 +443,7 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
                 <option value="">{form.kinds === "search" ? "search-only" : "Load models, then choose…"}</option>
                 {models.map(model => <option key={model} value={model}>{model}</option>)}
               </select>
-              {form.kinds !== "search" && <button type="button" className="btn mt-2"
+              {form.kinds !== "search" && !documentedModels && <button type="button" className="btn mt-2"
                 disabled={!form.apiKey.trim() || pending === "models"} onClick={() => void loadModels()}>
                 {pending === "models" ? "Loading models…" : "Load models"}
               </button>}
@@ -456,7 +468,7 @@ export function ProvidersCard({ initial, canDelete = false }: { initial: Provide
               type="button"
               className="btn-primary"
               onClick={() => void add()}
-              disabled={!!pending || (form.kinds !== "search" && !models.includes(form.model))}
+              disabled={!!pending || !form.name.trim() || !form.apiKey.trim() || (form.kinds !== "search" && !models.includes(form.model))}
             >
               {pending === "add" ? (
                 <LoaderCircle size={13} className="spin" />

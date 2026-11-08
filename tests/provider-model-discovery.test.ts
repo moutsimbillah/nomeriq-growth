@@ -13,7 +13,7 @@ it("returns exact model IDs only, never the submitted credential", async () => {
   const response = await POST(request());
   const text = await response.text();
   expect(response.status).toBe(200);
-  expect(JSON.parse(text)).toEqual({ ok: true, data: { models: ["exact-model"] } });
+  expect(JSON.parse(text)).toEqual({ ok: true, data: { models: ["exact-model"], source: "provider" } });
   expect(text).not.toContain(key);
 });
 it("refuses cross-origin discovery without calling the provider", async () => {

@@ -24,6 +24,8 @@ export interface ProviderDefault {
   kinds: ProviderKind;
   /** A short line for the Settings form, explaining what this provider is for. */
   hint: string;
+  /** Documented IDs, NOT a provider/account-discovered model list. Test checks actual access. */
+  documentedModels?: readonly string[];
 }
 
 export const PROVIDER_CATALOG: Record<string, ProviderDefault> = {
@@ -70,6 +72,14 @@ export const PROVIDER_CATALOG: Record<string, ProviderDefault> = {
     kinds: "search",
     hint: "Finds pages for any model. It can never be chosen to write text.",
   },
+  zai: {
+    label: "Z.ai (GLM 5.3 / 5.3 Flash)",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    model: "glm-5.3-flash",
+    kinds: "chat",
+    documentedModels: ["glm-5.3", "glm-5.3-flash"],
+    hint: "Standard Z.ai API key only, not a Coding Plan key. Documented choices; Test verifies access. Chat only; research remains DeepSeek. Low reasoning; Test allows up to 4096 tokens.",
+  },
   custom: {
     label: "Custom (OpenAI-compatible)",
     baseUrl: "",
@@ -79,5 +89,5 @@ export const PROVIDER_CATALOG: Record<string, ProviderDefault> = {
   },
 };
 
-/** The provider slugs migration 025's CHECK constraint allows. */
+/** The provider slugs allowed by the append-only migration chain (025, then032). */
 export const PROVIDER_SLUGS = Object.keys(PROVIDER_CATALOG);

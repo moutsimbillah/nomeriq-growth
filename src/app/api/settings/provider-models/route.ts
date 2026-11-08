@@ -24,6 +24,6 @@ export async function POST(request: Request) {
     let models: string[];
     try { models = await listProviderModels({ provider: input.provider, baseUrl, model: "" }, input.apiKey); }
     catch { throw new AppError("Could not load the model list. Check the provider URL and credential.", 502, "model_list_failed"); }
-    return NextResponse.json({ ok: true, data: { models } });
+    return NextResponse.json({ ok: true, data: { models, source: defaults.documentedModels ? "documented" : "provider" } });
   } catch (error) { return fail(error); }
 }

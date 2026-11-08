@@ -1,3 +1,5 @@
+import { PROVIDER_CATALOG } from "@/lib/ai/provider-catalog";
+
 export interface ChatProviderConfig {
   provider: string;
   baseUrl: string;
@@ -28,18 +30,18 @@ export type TransportResult =
   | { ok: false; code: string; reason: string; status?: number | null; elapsedMs?: number; providerCode?: string; failures?: ChatAttemptFailure[] };
 
 const OPTIONAL_FIELDS = ["response_format", "max_tokens", "max_completion_tokens", "stream"] as const;
-const RATE_CODES = new Set(["rate_limit", "rate_limit_exceeded", "rate_limit_error", "too_many_requests", "resource_exhausted", "429"]);
+const RATE_CODES = new Set(["rate_limit", "rate_limit_exceeded", "rate_limit_error", "too_many_requests", "resource_exhausted", "429", "1302"]);
 const CONTEXT_CODES = new Set(["context_length_exceeded", "context_window_exceeded", "input_too_long", "prompt_too_long", "request_too_large", "413"]);
-const QUOTA_CODES = new Set(["insufficient_quota", "quota_exceeded", "billing_error", "billing_hard_limit_reached", "insufficient_balance", "credit_balance_too_low"]);
-const AUTH_CODES = new Set(["authentication_error", "invalid_api_key", "permission_denied", "permission_error", "unauthenticated"]);
+const QUOTA_CODES = new Set(["insufficient_quota", "quota_exceeded", "billing_error", "billing_hard_limit_reached", "insufficient_balance", "credit_balance_too_low", "1113"]);
+const AUTH_CODES = new Set(["authentication_error", "invalid_api_key", "permission_denied", "permission_error", "unauthenticated", "1315"]);
 const TIMEOUT_CODES = new Set(["request_timeout", "timeout", "timeout_error", "deadline_exceeded", "408"]);
 const SERVER_CODES = new Set(["server_error", "internal_error", "internal_server_error", "api_error", "overloaded_error", "unavailable", "internal"]);
 const SAFE_CODES = new Set([...RATE_CODES, ...CONTEXT_CODES, ...QUOTA_CODES, ...AUTH_CODES, ...TIMEOUT_CODES, ...SERVER_CODES,
   "invalid_request", "invalid_request_error", "invalid_argument", "unsupported_parameter", "unknown_parameter", "unsupported_value", "model_not_found", "not_found_error"]);
 /** Inspect the private body, but expose only allowlisted stable codes and known field names. */
 export function safeProviderError(payload: unknown): { code: string | null; fields: typeof OPTIONAL_FIELDS[number][] } {
-  const root = payload as { error?: { code?: unknown; type?: unknown; status?: unknown; param?: unknown; message?: unknown } } | null;
-  const error = root?.error;
+  const root = payload as { error?: { code?: unknown; type?: unknown; status?: unknown; param?: unknown; message?: unknown }; code?: unknown; type?: unknown; status?: unknown; param?: unknown; message?: unknown } | null;
+  const error = root?.error ?? root;
   const candidate = [error?.code, error?.type, error?.status].find(value =>
     (typeof value === "string" || typeof value === "number") && SAFE_CODES.has(String(value).toLowerCase()));
   const code = candidate === undefined ? null : String(candidate);
@@ -52,7 +54,8 @@ export function safeProviderError(payload: unknown): { code: string | null; fiel
 }
 
 function quotaFailure(payload: unknown): boolean {
-  const error = (payload as { error?: { message?: unknown } } | null)?.error;
+  const root = payload as { error?: { message?: unknown }; message?: unknown } | null;
+  const error = root?.error ?? root;
   // This private inspection only suppresses retries; no remote text is returned or logged.
   return typeof error?.message === "string" && /quota|billing|credit|balance|payment/i.test(error.message);
 }
@@ -151,6 +154,9 @@ function completion(provider: string, raw: string): { text: string; model?: stri
 }
 
 export async function listProviderModels(config: ChatProviderConfig, key: string): Promise<string[]> {
+  // Z.ai publishes these IDs but has no model-list API. This proves neither key validity nor access.
+  const documented = PROVIDER_CATALOG[config.provider]?.documentedModels;
+  if (documented) return [...documented];
   const base = baseFor(config);
   const endpoint = config.provider === "gemini" ? `${base}/v1beta/models` : `${base}/v1/models`;
   const result: string[] = [];
@@ -190,11 +196,12 @@ export async function requestProviderChat(config: ChatProviderConfig, key: strin
     url = `${base}/v1beta/models/${config.model}:generateContent`;
     body = { systemInstruction: { parts: [{ text: input.system }] }, contents: [{ role: "user", parts: [{ text: input.user }] }], generationConfig: { maxOutputTokens: maxTokens, ...(input.json ? { responseMimeType: "application/json" } : {}) } };
   } else {
-    url = `${base}/v1/chat/completions`;
+    url = config.provider === "zai" ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
     body = {
       model: config.model,
       messages: [{ role: "system", content: input.system }, { role: "user", content: input.user }],
       ...(config.provider === "openai" ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
+      ...(config.provider === "zai" ? { thinking: { type: "enabled" }, reasoning_effort: "low" } : {}),
       ...(input.json ? { response_format: { type: "json_object" } } : {}),
       // Streaming is part of the standard Chat Completions protocol. Some gateways require it.
       stream: true,
@@ -202,7 +209,7 @@ export async function requestProviderChat(config: ChatProviderConfig, key: strin
   }
   const timeoutMs = Number.isFinite(input.timeoutMs) && input.timeoutMs! > 0 ? input.timeoutMs! : 60_000;
   const retryLimit = Number.isFinite(input.transientRetries) ? Math.max(0, Math.min(2, Math.floor(input.transientRetries!))) : 0;
-  const provider = ["openai", "anthropic", "gemini", "deepseek", "openrouter", "custom"].includes(config.provider) ? config.provider : "custom";
+  const provider = ["openai", "anthropic", "gemini", "deepseek", "openrouter", "custom", "zai"].includes(config.provider) ? config.provider : "custom";
   const changed = new Set<string>();
   const failures: ChatAttemptFailure[] = [];
   let transientRetries = 0;
