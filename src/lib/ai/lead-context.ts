@@ -5,6 +5,8 @@ import { getProspect } from "@/lib/services/prospects";
 import { getProductTruth, getWorkspaceSettings } from "@/lib/services/settings";
 import { resolveSendingProfile } from "@/lib/email/profiles";
 import { ASSISTANT_SKILL } from "@/lib/agent/instructions";
+import { getLeadModel } from "@/lib/services/lead-model";
+import { emptyLeadModel, LEAD_RULES_VERSION, type LeadModel } from "@/lib/leads/model";
 import type { ProductTruth, ProspectDetail } from "@/lib/types";
 
 /**
@@ -21,6 +23,7 @@ import type { ProductTruth, ProspectDetail } from "@/lib/types";
 
 export const CONTEXT_PARTS = [
   "lead",
+  "assessment",
   "audience",
   "markets",
   "pricing",
@@ -95,6 +98,68 @@ function day(value: string | null): string {
 
 function orNone(value: string | null | undefined): string {
   return value && value.trim() ? value.trim() : "not recorded";
+}
+
+/**
+ * Renders the stored assessment for the model that will write the email.
+ *
+ * The distinction that matters most is Unknown versus Low: a lead nobody has
+ * inspected yet must not read as a lead proven to lack a platform. The lines
+ * below say which is which in words, because the writing prompt tells the model
+ * never to invent a missing capability, and it can only obey that if the context
+ * tells it honestly what was actually checked.
+ */
+function assessmentBlock(prospect: ProspectDetail, model: LeadModel): string {
+  if (!model.assessmentId) {
+    return [
+      "Assessment: not recorded — this lead has not been assessed against the",
+      "lead rules. Do not describe its platform, tooling or gaps at all, and do not",
+      "imply anything is missing; ask rather than assert.",
+    ].join("\n");
+  }
+  const fitWords: Record<string, string> = {
+    high: "High — strong platform opportunity (evidenced gaps in how they run signals)",
+    medium: "Medium — partial infrastructure (some gaps evidenced)",
+    low: "Low — mature proprietary platform; do not pitch a replacement without an evidenced gap",
+    unknown: "Unknown — not enough evidence; make no claim about their setup",
+  };
+  const tierWords: Record<string, string> = {
+    tier_1: "Tier 1 — priority provider",
+    other: "Other signal provider",
+    email_no_website: "Email, no website (eligible, not counted toward targets)",
+    category_b: "Category B — alternative contact only; never emailed, saved as a research record",
+    excluded: "Excluded — does not meet the commercial signal requirements",
+  };
+  const present = model.findings.filter((f) => f.verdict === "present").map((f) => f.area);
+  const gaps = model.capabilityGaps.map((f) => `${f.area}: ${f.summary}`);
+  return [
+    `Assessment: recorded ${day(model.assessedAt)} (rules version ${LEAD_RULES_VERSION})`,
+    `Tier: ${model.tier ? tierWords[model.tier] ?? model.tier : "not set"}`,
+    `Product fit: ${fitWords[model.productFit] ?? model.productFit}`,
+    `Platform maturity: ${model.platformMaturity}`,
+    `Mobile app: ${model.mobileAppStatus}`,
+    model.fitReasoning.trim() ? `Why (from the research): ${clip(model.fitReasoning, 700)}` : null,
+    present.length ? `Evidence recorded for: ${[...new Set(present)].join(", ")}` : "Evidence recorded for: nothing yet",
+    `Research confidence: ${model.researchConfidence}${model.researchConfidence === "low" || model.researchConfidence === "unknown" ? " — treat the setup summary as tentative and ask rather than assert" : ""}`,
+    gaps.length ? `Evidenced capability gaps:\n${gaps.map((g) => `- ${clip(g, 300)}`).join("\n")}` : "Evidenced capability gaps: none recorded",
+    model.sourcesChecked.length
+      ? `Sources actually checked (${model.sourcesChecked.length}): ${model.sourcesChecked
+          .slice(0, 8)
+          .map((s) => `${s.url} (${day(s.checkedAt)})`)
+          .join("; ")}${model.sourcesChecked.length > 8 ? `; and ${model.sourcesChecked.length - 8} more` : ""}`
+      : "Sources actually checked: none recorded — an unchecked area is not a missing capability",
+    model.missingInformation.length
+      ? `Not yet investigated (must not be described as missing): ${model.missingInformation.map((m) => clip(m, 160)).join("; ")}`
+      : null,
+    model.overriddenFields.length
+      ? `Founder overrides in force (these win over the assessment): ${model.overriddenFields.join(", ")}`
+      : null,
+    model.eligibility === "excluded"
+      ? `Excluded from outreach: ${clip(model.exclusionReason ?? "reason not recorded", 300)}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /** The skill's own writing rules, taken from the shared skill so agents and the portal agree. */
@@ -237,12 +302,21 @@ export async function buildLeadContext(prospectId: string, options: { conversati
     ...prospect.otherSocials.map((social) => `${social.label}: ${social.url}`),
   ].filter(Boolean) as string[];
 
+  // The stored assessment, not a guess: tier, product fit, evidence areas,
+  // capability gaps and the founder's overrides. This is what lets a draft know
+  // a lead already runs a mature platform, or came from a Category B record.
+  const model = await getLeadModel(prospectId).catch(() => emptyLeadModel());
+  const assessmentLines = assessmentBlock(prospect, model);
+
   const sources = prospect.sources.map((source) =>
     `- ${source.label || source.sourceType}: ${source.url} (seen ${day(source.observedAt)})${source.notes ? ` — ${clip(source.notes, 400)}` : ""}`);
   const conversationText = conversationBlock(messages);
 
   const present: Record<ContextPart, boolean> = {
     lead: Boolean(prospect.businessName),
+    // Present only when a real assessment exists; an unassessed lead says so in
+    // the text and is honestly reported as absent here rather than looking rich.
+    assessment: Boolean(model.assessmentId),
     audience: audience.length > 0,
     markets: prospect.categories.length > 0,
     pricing: Boolean(prospect.pricingDetails?.trim()),
@@ -264,8 +338,10 @@ export async function buildLeadContext(prospectId: string, options: { conversati
     `Business: ${prospect.businessName}`,
     `Website: ${orNone(prospect.websiteUrl)}`,
     `Country: ${orNone(prospect.country)}`,
-    // Growth has no tier field yet; saying so is better than letting the model guess one.
-    "Tier: not recorded",
+    // The stored assessment replaces the old "Tier: not recorded" placeholder:
+    // the model now sees the tier, fit, evidence and gaps that were actually
+    // recorded, and says so honestly when nothing was assessed yet.
+    assessmentLines,
     `Markets: ${prospect.categories.length ? prospect.categories.join(", ") : "not recorded"}`,
     `Audience per platform:${audience.length ? "\n- " + audience.join("\n- ") : " not recorded"}`,
     `Signals offered / description: ${orNone(prospect.signalDescription)}`,

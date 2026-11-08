@@ -1,8 +1,12 @@
 import { z } from "zod";
+import { LEAD_RULES_PATH as CANONICAL_RULES_PATH, LEAD_RULES_TEXT, LEAD_RULES_VERSION as CANONICAL_RULES_VERSION } from "./rules";
 
 /** The founder's canonical policy and dated amendments, not a model-authored instruction. */
-export const LEAD_RULES_PATH = "docs/lead-rules.md";
-export const LEAD_RULES_VERSION = "lead-rules-2026-11-07";
+export {
+  CANONICAL_RULES_PATH as LEAD_RULES_PATH,
+  CANONICAL_RULES_VERSION as LEAD_RULES_VERSION,
+  LEAD_RULES_TEXT,
+};
 export const ESTABLISHED_AUDIENCE = 1000;
 export const TIERS = ["tier_1", "other", "email_no_website", "category_b", "excluded"] as const;
 export const FITS = ["high", "medium", "unknown", "low"] as const;

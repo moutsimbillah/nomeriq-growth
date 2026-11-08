@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "db:seed": "tsx scripts/seed.ts",
     "db:migrate": "tsx scripts/migrate.ts",
-    "db:reset-local": "tsx scripts/reset-local.ts"
+    "db:reset-local": "tsx scripts/reset-local.ts",
+    "sync:lead-rules": "node scripts/sync-lead-rules.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.14",

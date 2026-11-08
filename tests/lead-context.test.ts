@@ -17,6 +17,7 @@ import { suggestReply, replySystemPrompt } from "@/lib/ai/reply";
 import { draftSimulatedReply, simulationSystemPrompt } from "@/lib/ai/simulate";
 import { generateFollowUp } from "@/lib/ai/writer";
 import { getProspect } from "@/lib/services/prospects";
+import { saveLeadAssessment } from "@/lib/services/lead-model";
 import type { ProductTruth } from "@/lib/types";
 
 /** Leave no AI assignment behind: later test files expect an unconfigured registry. */
@@ -82,6 +83,39 @@ async function seedLead() {
      VALUES ($1, $2, 'first_contact', 0, 'sent', 'Señales Pro and Nomeriq', 'Hi team, a note about your VIP signals.', 'ana@senales.example.test', true, 'deepseek-flash', 'Growth-Chat-Search', '2026-11-01T09:00:00Z')`,
     [crypto.randomUUID(), prospectId],
   );
+  await db.query(
+    `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type)
+     VALUES ($1, $2, 'ana@senales.example.test', 'ana@senales.example.test', 'https://senales.example.test/vip', 'official_website')`,
+    [crypto.randomUUID(), prospectId],
+  );
+  // A real assessment through the real writer, so the context is fed by the same
+  // path production uses. It is Medium fit with an evidenced delivery gap: that
+  // is the case where a draft may name a gap, and it proves the context can tell
+  // Medium apart from Low and Unknown.
+  await saveLeadAssessment(prospectId, {
+    assessedAt: "2026-11-02T09:00:00Z",
+    sourceKind: "research",
+    eligibility: "eligible",
+    platformMaturity: "partial",
+    mobileAppStatus: "not_found_in_checked_sources",
+    productFit: "medium",
+    fitReasoning: "Runs a Telegram VIP group with manual delivery and no subscriber platform evidenced.",
+    researchConfidence: "medium",
+    provenanceKey: `ctx-${prospectId}`,
+    findings: [
+      { area: "paid_signals", summary: "VIP plan at 49 EUR per month is published.", sourceUrl: "https://senales.example.test/vip", observedAt: "2026-11-02T09:00:00Z", verdict: "present" },
+      { area: "markets", summary: "Forex and gold signals are sold.", sourceUrl: "https://senales.example.test/", observedAt: "2026-11-02T09:00:00Z", verdict: "present" },
+      { area: "email", summary: "A business contact address is published.", sourceUrl: "https://senales.example.test/vip", observedAt: "2026-11-02T09:00:00Z", verdict: "present" },
+      { area: "activity", summary: "Signals were published this month.", sourceUrl: "https://senales.example.test/", observedAt: "2026-11-02T09:00:00Z", verdict: "present" },
+      { area: "delivery", summary: "Signals go out through a Telegram group.", sourceUrl: "https://senales.example.test/vip", observedAt: "2026-11-02T09:00:00Z", verdict: "present" },
+      { area: "membership", summary: "A basic subscription page manages paid access.", sourceUrl: "https://senales.example.test/vip", observedAt: "2026-11-02T09:00:00Z", verdict: "present" },
+    ],
+    capabilityGaps: [
+      { area: "gap", summary: "No branded subscriber platform or web dashboard was evidenced.", sourceUrl: "https://senales.example.test/vip", observedAt: "2026-11-02T09:00:00Z", verdict: "present" },
+    ],
+    sourcesChecked: [{ url: "https://senales.example.test/vip", checkedAt: "2026-11-02T09:00:00Z" }],
+    missingInformation: ["Mobile app presence not investigated"],
+  });
 }
 
 beforeAll(async () => {
@@ -95,6 +129,10 @@ afterAll(async () => { await clearAiSettings();
   await db.query(`DELETE FROM messages WHERE conversation_id = $1`, [conversationId]);
   await db.query(`DELETE FROM conversations WHERE id = $1`, [conversationId]);
   await db.query(`DELETE FROM drafts WHERE prospect_id = $1`, [prospectId]);
+  // Newer tables reference the prospect, so they go first.
+  await db.query(`DELETE FROM prospect_assessments WHERE prospect_id = $1`, [prospectId]);
+  await db.query(`DELETE FROM prospect_emails WHERE prospect_id = $1`, [prospectId]);
+  await db.query(`DELETE FROM prospect_sources WHERE prospect_id = $1`, [prospectId]);
   await db.query(`DELETE FROM prospects WHERE id = $1`, [prospectId]);
   await closeDb(); });
 
@@ -106,7 +144,18 @@ describe("the shared lead context", () => {
     const text = context.text;
     // The lead.
     for (const needle of [
-      "Business: Señales Pro", "Website: https://senales.example.test", "Country: Spain", "Tier: not recorded",
+      "Business: Señales Pro", "Website: https://senales.example.test", "Country: Spain",
+      // The stored assessment replaces the old "Tier: not recorded" placeholder.
+      "Assessment: recorded 2026-11-02 09:00 UTC (rules version lead-rules-2026-11-07)",
+      "Tier: Other signal provider",
+      "Product fit: Medium — partial infrastructure (some gaps evidenced)",
+      "Platform maturity: partial",
+      "Mobile app: not_found_in_checked_sources",
+      "Evidenced capability gaps:",
+      "No branded subscriber platform or web dashboard was evidenced.",
+      "Research confidence: medium",
+      "Sources actually checked (1): https://senales.example.test/vip (2026-11-02 09:00 UTC)",
+      "Not yet investigated (must not be described as missing): Mobile app presence not investigated",
       "Markets: forex, gold", "Followers: 12,400", "Subscribers: 3,100", "Telegram: https://t.me/senalespro",
       "Instagram: https://instagram.example.test/senales", "YouTube: https://youtube.example.test/senales",
       "Daily XAUUSD and EURUSD entries", "Pricing: VIP 49 EUR/month", "Evidence summary: Official site lists VIP plans",

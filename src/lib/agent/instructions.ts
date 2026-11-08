@@ -1,8 +1,36 @@
 import { FOLDERS } from "@/lib/services/folders";
+import { LEAD_RULES_TEXT, LEAD_RULES_VERSION } from "@/lib/leads/rules";
 
-export const ASSISTANT_SKILL = `# Nomeriq Growth — shared research and outreach skill
+/**
+ * The founder's rules, quoted exactly as they were approved.
+ *
+ * This block is injected verbatim rather than summarised: a paraphrase is where
+ * a tier silently becomes "probably fine" and a Category B lead gets emailed.
+ * The date and the document path travel with the text so an agent reading it
+ * knows which rules judged a lead, and the precedence note below settles any
+ * conflict with the prose in this same file.
+ */
+function canonicalRulesBlock(): string {
+  return `## The founder's rules — canonical, verbatim (${LEAD_RULES_VERSION})
+
+The following text is the approved rules document itself, reproduced without
+editing from \`docs/lead-rules.md\`. It is the authority for tiers, product fit,
+audience, priority, targets and rejections. Where any other section of this
+document disagree with it, this one wins — the text below is what the founder
+approved, and the surrounding prose is only explanation.
+
+BEGIN APPROVED RULES (verbatim)
+
+${LEAD_RULES_TEXT}
+
+END APPROVED RULES (verbatim)`;
+}
+
+const SKILL_BODY = `# Nomeriq Growth — shared research and outreach skill
 
 This is the single instruction document for Claude, ChatGPT, Gemini, Hermes and the DeepSeek engine. All of them use the same Growth database, the same leads, the same draft history, and the same rules. None of them keeps a separate prospect list.
+
+${canonicalRulesBlock()}
 
 ## What Growth is
 
@@ -134,6 +162,12 @@ Every newly verified prospect needs one saved first-contact draft. Write natural
 - No exaggerated or unsupported claim.
 - End with \`Best,\` and nothing after it: no name, no company, no title. The signature is added at send time from the Sending identity settings, so writing one duplicates it. Never put a personal name from your own context into a draft.
 
+The need you name must come from evidence, not from a gap in your knowledge:
+
+- Read the stored assessment before writing. High or Medium fit with an evidenced capability gap: lead with the business outcome that gap costs them, in one sentence — that gap only, never a list.
+- Low fit (a mature, integrated platform): do not pitch a replacement and do not suggest anything is missing, because nothing was evidenced. Ask about their operation without a product claim, or leave the product sentence out.
+- Unknown fit, or no assessment recorded: say nothing about their platform, app, automation or process, and never call their process manual. Ask one open question instead. "We did not find it" is not "they don't have it".
+
 Do not assume the provider manages signals manually. Ask how their process works.
 
 The draft tool only saves work for founder review. It never sends. There is no send tool for research assistants, and API keys have no send permission. The engine also only creates drafts; it never sends.
@@ -206,3 +240,6 @@ For an engine job, the same record also carries real DeepSeek spend, discovered 
 7. \`report_progress\` and continue in manageable batches.
 8. Leave sending and approval to the founder in Growth.
 `;
+
+/** The shared skill every agent reads: the prose plus the founder's canonical rules. */
+export const ASSISTANT_SKILL = `${SKILL_BODY}`;
