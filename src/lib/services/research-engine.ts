@@ -35,6 +35,7 @@ import {
 } from "@/lib/services/research-runs";
 import { planResearchQueries } from "@/lib/services/research-queries";
 import { verifyCandidate } from "@/lib/deepseek/verify-candidate";
+import type { VerifiedCandidate } from "@/lib/deepseek/verify-candidate";
 import { resolveLeadResearch } from "@/lib/services/research-routing";
 import type { ResearchProvider } from "@/lib/deepseek/research-provider";
 import type { Category, ResearchJob, ResearchTickResult } from "@/lib/types";
@@ -712,7 +713,13 @@ async function researchCandidate(input: {
     }).catch(() => undefined);
   }
 
-  if (!verified.qualified || !verified.contactEmail || !verified.emailSourceUrl) {
+  // A business that genuinely sells paid signals is saved even when it publishes
+  // no email — that is exactly the Category B (Telegram-only) case. Only a
+  // business that fails qualification, or that qualified but produced nothing
+  // saveable at all, is rejected outright.
+  const hasEmail = Boolean(verified.contactEmail && verified.emailSourceUrl);
+  const hasRoute = verified.contactRoutes.some((route) => route.officialStatus === "verified");
+  if (!verified.businessQualified || (!hasEmail && !hasRoute)) {
     await setCandidateResult({
       candidateId: candidate.id,
       identityKey: candidate.identityKey,
@@ -721,8 +728,11 @@ async function researchCandidate(input: {
       lastError: verified.reason,
       evidence: {
         reason: verified.reason,
+        businessQualified: verified.businessQualified,
         pages: verified.pages.map((page) => page.url),
         emailsFound: verified.extractedEmails.map((entry) => entry.email),
+        robotsBlocked: verified.robotsBlocked,
+        contactRoutes: verified.contactRoutes.map((route) => `${route.platform}:${route.routeKind}`),
       },
       releaseClaim: true,
     });
@@ -748,8 +758,28 @@ async function researchCandidate(input: {
     notes: verified.evidenceSummary ?? undefined,
   }));
 
+  // Findings are already filtered to official sources by `verifyCandidate`, and
+  // the save path re-checks that against the freshly saved identities. Dates are
+  // stamped here so a finding's observation time is when the engine read it.
+  const observedAt = new Date().toISOString();
+  const toFinding = (finding: NonNullable<VerifiedCandidate["verdict"]>["findings"][number]) => ({
+    area: finding.area,
+    summary: finding.summary,
+    sourceUrl: finding.sourceUrl,
+    observedAt,
+    verdict: finding.verdict,
+    ...(finding.activityAt ? { activityAt: finding.activityAt } : {}),
+  });
+  const assessmentFindings = (verified.verdict?.findings ?? []).map(toFinding);
+  const assessmentGaps = (verified.verdict?.capabilityGaps ?? []).map(toFinding);
+
   let saved;
   try {
+    // The engine saves a lead through one path only: `saveProspect` with a
+    // lead-model intake. That path validates every finding against an official
+    // source, decides the tier from evidence, and is the same writer the portal
+    // uses — so the engine can never invent a tier or an email the portal would
+    // refuse.
     saved = await saveProspect({
       businessName: verified.businessName ?? label,
       websiteUrl: verified.websiteUrl,
@@ -764,16 +794,67 @@ async function researchCandidate(input: {
         verified.observation,
         `Verified automatically by the DeepSeek research engine.`,
         `Source pages: ${verified.pages.map((page) => page.url).join(", ")}`,
+        verified.robotsBlocked.length
+          ? `Skipped by robots.txt: ${verified.robotsBlocked.join(", ")}`
+          : null,
       ]
         .filter(Boolean)
         .join("\n"),
       email: verified.contactEmail,
       emailSourceUrl: verified.emailSourceUrl,
       emailSourceType: "official_website",
+      instagramUrl: verified.identity.instagramUrl,
+      youtubeUrl: verified.identity.youtubeUrl,
+      telegramUrl: verified.identity.telegramUrl,
+      xUrl: verified.identity.xUrl,
       sources,
       researchJobId: job.id,
-      qualificationStatus: "verified",
+      // With an intake assessment, `saveProspect` derives the real qualification
+      // from the model's eligibility, so this is a floor, not an override.
+      qualificationStatus: "candidate",
       actorType: "deepseek",
+      leadAssessment: verified.verdict
+        ? {
+            assessedAt: new Date().toISOString(),
+            eligibility: verified.verdict.exclusionReason ? "excluded" : "eligible",
+            exclusionReason: verified.verdict.exclusionReason,
+            platformMaturity: verified.verdict.platformMaturity,
+            mobileAppStatus: verified.verdict.mobileAppStatus,
+            productFit: verified.verdict.productFit,
+            fitReasoning: verified.verdict.fitReasoning,
+            researchConfidence: verified.verdict.researchConfidence,
+            missingInformation: verified.verdict.missingInformation,
+            findings: assessmentFindings,
+            capabilityGaps: assessmentGaps,
+            sourcesChecked: verified.pages.map((page) => ({
+              url: page.url,
+              checkedAt: new Date().toISOString(),
+            })),
+          }
+        : undefined,
+      audiences: verified.audiences.map((audience) => ({
+        platform: audience.platform,
+        accountKey: audience.accountKey,
+        handle: audience.handle,
+        accountUrl: audience.accountUrl,
+        countValue: audience.countValue,
+        countState: audience.countState,
+        checkedAt: new Date().toISOString(),
+        sourceUrl: audience.sourceUrl,
+        officialLinkSourceUrl: audience.officialLinkSourceUrl,
+        displayedText: audience.displayedText,
+      })),
+      contactRoutes: verified.contactRoutes.map((route) => ({
+        platform: route.platform,
+        routeKind: route.routeKind,
+        handle: route.handle,
+        routeUrl: route.routeUrl,
+        officialStatus: route.officialStatus,
+        checkedAt: new Date().toISOString(),
+        sourceUrl: route.sourceUrl,
+        officialLinkSourceUrl: route.officialStatus === "verified" ? route.sourceUrl : null,
+        notes: route.notes,
+      })),
     });
   } catch (error) {
     const message =

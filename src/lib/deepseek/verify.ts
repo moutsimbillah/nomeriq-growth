@@ -407,3 +407,363 @@ export function domainMatchesSite(url: string, siteDomain: string | null): boole
   if (!siteDomain) return false;
   return domainFromUrl(url) === siteDomain;
 }
+
+/**
+ * Reduces a URL to a comparison key that ignores inconsequential formatting
+ * differences (a trailing slash on the bare origin, a `www.` prefix, case),
+ * so a model that accurately echoes a fetched page's URL back with one of
+ * these harmless variations is not treated as having invented a source.
+ * Returns null for anything unparsable, which never matches anything.
+ */
+function canonicalUrlKey(value: string): string | null {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    const path = url.pathname.replace(/\/$/, "");
+    return `${url.protocol}//${host}${path}${url.search}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Builds a lookup from every acceptable spelling of a fetched URL back to the
+ * exact string it was fetched as, so a normalizer can both validate a model's
+ * cited source and substitute the canonical form the rest of the pipeline
+ * (page lists, official-source checks) already uses.
+ */
+function buildUrlIndex(validUrls: string[]): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const url of validUrls) {
+    const key = canonicalUrlKey(url);
+    if (key && !index.has(key)) index.set(key, url);
+  }
+  return index;
+}
+
+/** Resolves a model-cited source to the exact fetched URL it refers to, or null. */
+function resolveSourceUrl(raw: unknown, index: Map<string, string>): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (index.has(trimmed)) return trimmed;
+  const key = canonicalUrlKey(trimmed);
+  return key ? index.get(key) ?? null : null;
+}
+
+/* --------------------------- lead-model assessment verdict -------------------------- */
+
+/**
+ * The lead-model areas from `docs/lead-rules.md` / `src/lib/leads/model.ts`'s
+ * `findingSchema`. Kept as a literal union here (not imported) so this module,
+ * which has no database dependency, stays usable from a pure unit test.
+ */
+export type AssessmentArea =
+  | "paid_signals"
+  | "markets"
+  | "email"
+  | "identity"
+  | "activity"
+  | "delivery"
+  | "membership"
+  | "dashboard"
+  | "publishing"
+  | "performance"
+  | "payments"
+  | "app"
+  | "gap";
+
+export interface AssessmentFinding {
+  area: AssessmentArea;
+  summary: string;
+  sourceUrl: string;
+  verdict: "present" | "absent" | "unknown";
+  /** Only meaningful for area "activity": the date the activity itself happened. */
+  activityAt: string | null;
+}
+
+export interface AudienceCandidate {
+  platform: "instagram" | "youtube" | "telegram";
+  accountUrl: string;
+  handle: string | null;
+  countValue: number | null;
+  countState: "verified" | "unknown";
+  displayedText: string | null;
+  sourceUrl: string;
+}
+
+export interface ContactRouteCandidate {
+  platform: string;
+  routeKind: "dm" | "group" | "channel" | "bot" | "form" | "other";
+  handle: string | null;
+  routeUrl: string | null;
+  officialStatus: "verified" | "unknown" | "unofficial";
+  notes: string;
+  sourceUrl: string;
+}
+
+export interface AssessmentVerdict {
+  isSignalProvider: boolean;
+  sellsPaidSignals: boolean;
+  categories: Category[];
+  businessName: string | null;
+  country: string | null;
+  signalDescription: string | null;
+  pricingDetails: string | null;
+  evidenceSummary: string | null;
+  contactEmail: string | null;
+  emailSourceUrl: string | null;
+  exclusionReason: string | null;
+  confidence: number;
+  observation: string | null;
+  findings: AssessmentFinding[];
+  capabilityGaps: AssessmentFinding[];
+  platformMaturity: "unknown" | "fragmented" | "partial" | "integrated";
+  mobileAppStatus: "unknown" | "verified_present" | "not_found_in_checked_sources" | "verified_absent";
+  productFit: "high" | "medium" | "unknown" | "low";
+  fitReasoning: string;
+  researchConfidence: "unknown" | "low" | "medium" | "high";
+  missingInformation: string[];
+  audienceCandidates: AudienceCandidate[];
+  contactRouteCandidates: ContactRouteCandidate[];
+}
+
+const ASSESSMENT_AREAS: AssessmentArea[] = [
+  "paid_signals", "markets", "email", "identity", "activity", "delivery",
+  "membership", "dashboard", "publishing", "performance", "payments", "app", "gap",
+];
+
+/**
+ * The richer prompt for Part 2: one model call that both confirms qualification
+ * (as before) and supplies the lead-model's evidence-first findings, so the
+ * engine can save a modern assessment instead of only a legacy verdict. The
+ * founder's rules (`docs/lead-rules.md`) govern every definition used here.
+ */
+export function assessmentVerdictSystemPrompt(): string {
+  return [
+    verdictSystemPrompt(),
+    "In addition, support the lead-model assessment used to prioritise this business for Nomeriq's",
+    "white-label platform. Every finding must cite one of the official page URLs you were given as",
+    "its sourceUrl, and must be based only on what that page actually states — never invent a source",
+    "or a fact the text does not support.",
+    "findings: an array of {area, summary, sourceUrl, verdict, activityAt}. area is one of",
+    `${JSON.stringify(ASSESSMENT_AREAS)}. verdict is "present", "absent" or "unknown". Only set verdict`,
+    '"absent" when the page affirmatively shows the opposite (e.g. states no signals offered), never',
+    "merely because a feature was not mentioned. activityAt is an ISO date, only for area \"activity\",",
+    "and must be the date of the activity itself (a published result, a recent post), never today's date.",
+    "capabilityGaps: findings with area \"gap\" describing an evidenced capability the business lacks",
+    "that Nomeriq's platform could fill (e.g. no branded app, manual Telegram-only delivery, no dashboard).",
+    "Never claim a gap merely because a feature was not found; say so in missingInformation instead.",
+    "platformMaturity: \"fragmented\" (Telegram/Discord/WhatsApp/manual/basic site only), \"partial\" (own",
+    'site with some automation but gaps), "integrated" (a complete proprietary platform with branded',
+    'apps), or "unknown" when the pages do not show enough.',
+    'mobileAppStatus: "verified_present" only if a branded app is actually evidenced (store listing or',
+    'page reference), "verified_absent" only if the pages affirmatively show no app, otherwise',
+    '"not_found_in_checked_sources" or "unknown".',
+    "productFit: \"high\" when the business relies mainly on manual/basic tools with no comparable",
+    "platform found; \"medium\" for partial infrastructure with an evidenced gap; \"low\" for a mature",
+    "proprietary platform unless a credible gap is evidenced; \"unknown\" when evidence is insufficient.",
+    "Never say a prospect has no platform or app merely because none was found — use unknown.",
+    "fitReasoning: one or two sentences citing the actual evidence for the productFit you chose.",
+    "researchConfidence: \"high\", \"medium\", \"low\" or \"unknown\", reflecting how much of the pages you",
+    "could actually read.",
+    "missingInformation: short strings naming what would need checking to firm up an unknown.",
+    "audienceCandidates: official Instagram, YouTube or Telegram accounts you found linked from the",
+    "official pages, each {platform, accountUrl, handle, countValue, countState, displayedText,",
+    'sourceUrl}. countState is "verified" only when the page itself displays a follower/subscriber',
+    'number; otherwise "unknown" and countValue null. Never estimate a count.',
+    "contactRouteCandidates: non-email official contact routes you found (Telegram DM/channel, a",
+    "contact form, WhatsApp), each {platform, routeKind, handle, routeUrl, officialStatus, notes,",
+    'sourceUrl}. officialStatus is "verified" only when linked from the official site or profile.',
+    "Add findings, audienceCandidates and capabilityGaps as empty arrays when the pages gave no",
+    "evidence for them — never omit the keys.",
+    "Return ONLY a JSON object with all of the base keys plus: findings, capabilityGaps,",
+    "platformMaturity, mobileAppStatus, productFit, fitReasoning, researchConfidence,",
+    "missingInformation, audienceCandidates, contactRouteCandidates.",
+  ].join(" ");
+}
+
+export function buildAssessmentVerdictPrompt(input: {
+  businessName: string | null;
+  websiteUrl: string | null;
+  requirements: string;
+  pages: { url: string; title: string; content: string }[];
+  candidateEmails: string[];
+}): string {
+  return buildVerdictPrompt(input);
+}
+
+function normalizeFinding(
+  raw: any,
+  urlIndex: Map<string, string>,
+  requiredArea?: AssessmentArea,
+): AssessmentFinding | null {
+  if (!raw || typeof raw !== "object") return null;
+  const area = String(raw.area ?? "").trim() as AssessmentArea;
+  if (!ASSESSMENT_AREAS.includes(area)) return null;
+  if (requiredArea && area !== requiredArea) return null;
+  const summary = typeof raw.summary === "string" ? raw.summary.trim() : "";
+  if (summary.length < 3) return null;
+  // The model can never introduce a source that was not actually fetched and
+  // shown to it — the same rule already applied to the contact email. Minor
+  // formatting differences (trailing slash, www.) are tolerated; anything else
+  // is dropped rather than repaired.
+  const sourceUrl = resolveSourceUrl(raw.sourceUrl, urlIndex);
+  if (!sourceUrl) return null;
+  const verdictRaw = String(raw.verdict ?? "present").trim();
+  const verdict: AssessmentFinding["verdict"] =
+    verdictRaw === "absent" || verdictRaw === "unknown" ? verdictRaw : "present";
+  const activityAt =
+    area === "activity" && typeof raw.activityAt === "string" && !Number.isNaN(Date.parse(raw.activityAt))
+      ? new Date(raw.activityAt).toISOString()
+      : null;
+  return { area, summary: summary.slice(0, 4000), sourceUrl, verdict, activityAt };
+}
+
+function normalizeAudienceCandidate(raw: any, urlIndex: Map<string, string>): AudienceCandidate | null {
+  if (!raw || typeof raw !== "object") return null;
+  const platform = String(raw.platform ?? "").trim().toLowerCase();
+  if (!["instagram", "youtube", "telegram"].includes(platform)) return null;
+  let accountUrl: URL;
+  try {
+    accountUrl = new URL(String(raw.accountUrl ?? ""));
+  } catch {
+    return null;
+  }
+  if (!["http:", "https:"].includes(accountUrl.protocol)) return null;
+  const sourceUrl = resolveSourceUrl(raw.sourceUrl, urlIndex);
+  if (!sourceUrl) return null;
+  const countState: AudienceCandidate["countState"] = raw.countState === "verified" ? "verified" : "unknown";
+  // Number(null) is 0, not NaN — a null/missing countValue must never silently
+  // become a real zero follower count.
+  const countValue =
+    countState === "verified" && typeof raw.countValue === "number" && Number.isFinite(raw.countValue) && raw.countValue >= 0
+      ? Math.trunc(raw.countValue)
+      : null;
+  if (countState === "verified" && countValue === null) return null;
+  return {
+    platform: platform as AudienceCandidate["platform"],
+    accountUrl: accountUrl.toString(),
+    handle: typeof raw.handle === "string" && raw.handle.trim() ? raw.handle.trim() : null,
+    countValue: countState === "verified" ? countValue : null,
+    countState,
+    displayedText:
+      typeof raw.displayedText === "string" && raw.displayedText.trim() ? raw.displayedText.trim() : null,
+    sourceUrl,
+  };
+}
+
+function normalizeContactRouteCandidate(raw: any, urlIndex: Map<string, string>): ContactRouteCandidate | null {
+  if (!raw || typeof raw !== "object") return null;
+  const platform = typeof raw.platform === "string" ? raw.platform.trim() : "";
+  if (!platform) return null;
+  const routeKindRaw = String(raw.routeKind ?? "other").trim();
+  const routeKind: ContactRouteCandidate["routeKind"] = (
+    ["dm", "group", "channel", "bot", "form", "other"] as const
+  ).includes(routeKindRaw as any)
+    ? (routeKindRaw as ContactRouteCandidate["routeKind"])
+    : "other";
+  const sourceUrl = resolveSourceUrl(raw.sourceUrl, urlIndex);
+  if (!sourceUrl) return null;
+  const handle = typeof raw.handle === "string" && raw.handle.trim() ? raw.handle.trim() : null;
+  let routeUrl: string | null = null;
+  if (typeof raw.routeUrl === "string" && raw.routeUrl.trim()) {
+    try {
+      const url = new URL(raw.routeUrl.trim());
+      if (["http:", "https:"].includes(url.protocol)) routeUrl = url.toString();
+    } catch {
+      routeUrl = null;
+    }
+  }
+  if (!handle && !routeUrl) return null;
+  const officialStatusRaw = String(raw.officialStatus ?? "unknown").trim();
+  const officialStatus: ContactRouteCandidate["officialStatus"] =
+    officialStatusRaw === "verified" || officialStatusRaw === "unofficial" ? officialStatusRaw : "unknown";
+  return {
+    platform,
+    routeKind,
+    handle,
+    routeUrl,
+    officialStatus,
+    notes: typeof raw.notes === "string" ? raw.notes.slice(0, 2000) : "",
+    sourceUrl,
+  };
+}
+
+/**
+ * Normalizes the model's raw JSON into an `AssessmentVerdict`, dropping (never
+ * repairing) any finding, audience candidate or contact route whose sourceUrl
+ * was not one of the pages actually fetched for this candidate. `validUrls`
+ * must be exactly the URLs the model was shown.
+ */
+export function normalizeAssessmentVerdict(raw: any, validUrls: string[]): AssessmentVerdict {
+  const base = normalizeModelVerdict(raw);
+  const urls = buildUrlIndex(validUrls);
+  const findings = Array.isArray(raw?.findings)
+    ? raw.findings
+        .map((entry: any) => normalizeFinding(entry, urls))
+        .filter((entry: AssessmentFinding | null): entry is AssessmentFinding => entry !== null)
+        .slice(0, 20)
+    : [];
+  const capabilityGaps = Array.isArray(raw?.capabilityGaps)
+    ? raw.capabilityGaps
+        .map((entry: any) => normalizeFinding(entry, urls, "gap"))
+        .filter((entry: AssessmentFinding | null): entry is AssessmentFinding => entry !== null)
+        .slice(0, 10)
+    : [];
+  const audienceCandidates = Array.isArray(raw?.audienceCandidates)
+    ? raw.audienceCandidates
+        .map((entry: any) => normalizeAudienceCandidate(entry, urls))
+        .filter((entry: AudienceCandidate | null): entry is AudienceCandidate => entry !== null)
+        .slice(0, 10)
+    : [];
+  const contactRouteCandidates = Array.isArray(raw?.contactRouteCandidates)
+    ? raw.contactRouteCandidates
+        .map((entry: any) => normalizeContactRouteCandidate(entry, urls))
+        .filter((entry: ContactRouteCandidate | null): entry is ContactRouteCandidate => entry !== null)
+        .slice(0, 10)
+    : [];
+  const maturityRaw = String(raw?.platformMaturity ?? "unknown").trim();
+  const platformMaturity: AssessmentVerdict["platformMaturity"] = (
+    ["fragmented", "partial", "integrated"] as const
+  ).includes(maturityRaw as any)
+    ? (maturityRaw as AssessmentVerdict["platformMaturity"])
+    : "unknown";
+  const appRaw = String(raw?.mobileAppStatus ?? "unknown").trim();
+  const mobileAppStatus: AssessmentVerdict["mobileAppStatus"] = (
+    ["verified_present", "not_found_in_checked_sources", "verified_absent"] as const
+  ).includes(appRaw as any)
+    ? (appRaw as AssessmentVerdict["mobileAppStatus"])
+    : "unknown";
+  const fitRaw = String(raw?.productFit ?? "unknown").trim();
+  const productFit: AssessmentVerdict["productFit"] = (["high", "medium", "low"] as const).includes(
+    fitRaw as any,
+  )
+    ? (fitRaw as AssessmentVerdict["productFit"])
+    : "unknown";
+  const confidenceRaw = String(raw?.researchConfidence ?? "unknown").trim();
+  const researchConfidence: AssessmentVerdict["researchConfidence"] = (
+    ["low", "medium", "high"] as const
+  ).includes(confidenceRaw as any)
+    ? (confidenceRaw as AssessmentVerdict["researchConfidence"])
+    : "unknown";
+  const missingInformation = Array.isArray(raw?.missingInformation)
+    ? raw.missingInformation
+        .map((entry: unknown) => String(entry).trim())
+        .filter((entry: string) => entry.length > 0)
+        .slice(0, 10)
+    : [];
+  return {
+    ...base,
+    findings,
+    capabilityGaps,
+    platformMaturity,
+    mobileAppStatus,
+    productFit,
+    // Unknown fit with no supporting reasoning is still honest; never fabricate one.
+    fitReasoning: typeof raw?.fitReasoning === "string" ? raw.fitReasoning.trim().slice(0, 2000) : "",
+    researchConfidence,
+    missingInformation,
+    audienceCandidates,
+    contactRouteCandidates,
+  };
+}

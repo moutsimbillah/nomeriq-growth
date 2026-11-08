@@ -36,9 +36,13 @@ import {
   brokerSite,
   createFakeProvider,
   qualifyingSite,
+  telegramOnlySite,
+  withAudiences,
+  withRobots,
   type FakeProviderStats,
   type FakeSite,
 } from "./fake-provider";
+import { getLeadModel } from "@/lib/services/lead-model";
 
 const state = {
   userId: "",
@@ -779,5 +783,126 @@ describe("autonomous DeepSeek research engine", () => {
 
     const emails = after.map((lead) => lead.contactEmail?.toLowerCase());
     expect(new Set(emails).size).toBe(after.length);
+  });
+
+  /* ------------------------- lead-model assessment (Part 2) ----------------- */
+
+  async function qualifiedProspectId(jobId: string): Promise<string> {
+    const db = await getDb();
+    const row = (
+      await db.query<{ prospect_id: string }>(
+        `SELECT prospect_id FROM research_candidates
+         WHERE job_id = $1 AND status = 'qualified' AND prospect_id IS NOT NULL
+         ORDER BY updated_at DESC LIMIT 1`,
+        [jobId],
+      )
+    ).rows[0];
+    expect(row?.prospect_id).toBeTruthy();
+    return row!.prospect_id;
+  }
+
+  it("saves a Telegram-only seller as Category B instead of discarding it", async () => {
+    // The founder's rule: a genuine paid-signals business with no published
+    // email but an official Telegram channel is still a lead — Category B —
+    // not a rejection. Before this part, the engine required an email to save
+    // anything at all.
+    const jobId = await newJob({ name: "Category B", target: 1 });
+    const sites = [
+      telegramOnlySite({ domain: "catb-alpha.example.com", businessName: "Catb Alpha Signals" }),
+    ];
+    const { provider } = makeProvider(sites);
+
+    let guard = 0;
+    let job = (await getResearchJob(jobId))!;
+    while (guard < 5) {
+      await runResearchTick(jobId, { provider, workerId: `catb-${guard}` });
+      job = (await getResearchJob(jobId))!;
+      guard += 1;
+      const candidates = await listResearchCandidates(jobId);
+      if (candidates.some((c) => c.status === "qualified")) break;
+    }
+
+    const prospectId = await qualifiedProspectId(jobId);
+    const db = await getDb();
+    const prospect = (
+      await db.query<{ telegram_url: string | null }>(
+        `SELECT telegram_url FROM prospects WHERE id = $1`,
+        [prospectId],
+      )
+    ).rows[0];
+    const emailRows = await db.query(`SELECT 1 FROM prospect_emails WHERE prospect_id = $1`, [
+      prospectId,
+    ]);
+    expect(emailRows.rowCount).toBe(0);
+    expect(prospect?.telegram_url).toContain("t.me/");
+
+    const model = await getLeadModel(prospectId);
+    expect(model.tier).toBe("category_b");
+    expect(model.eligibility).toBe("eligible");
+    expect(model.contactRoutes.some((route) => route.officialStatus === "verified")).toBe(true);
+
+    // Category B must not inflate the counted verified target.
+    expect(job.verifiedCount).toBe(0);
+  });
+
+  it("obeys robots.txt: a disallowed contact page is skipped, never treated as absence", async () => {
+    const jobId = await newJob({ name: "Robots respect", target: 1 });
+    const blocked = withRobots(
+      qualifyingSite({
+        domain: "robot-alpha.example.com",
+        businessName: "Robot Alpha Signals",
+        email: "desk@robot-alpha.example.com",
+      }),
+      "User-agent: *\nDisallow: /contact\n",
+    );
+    const { provider } = makeProvider([blocked]);
+
+    let guard = 0;
+    let job = (await getResearchJob(jobId))!;
+    while (guard < 5 && job.status === "active") {
+      await runResearchTick(jobId, { provider, workerId: `robots-${guard}` });
+      job = (await getResearchJob(jobId))!;
+      guard += 1;
+    }
+
+    // The only contact page was disallowed, and this fixture has no other
+    // contact route, so the candidate is honestly rejected — never silently
+    // saved as if the business published nothing.
+    const candidates = await listResearchCandidates(jobId);
+    const target = candidates.find((c) => c.websiteUrl?.includes("robot-alpha"));
+    expect(target?.status).toBe("rejected");
+    const evidence = target?.lastError ?? "";
+    expect(evidence.toLowerCase()).not.toContain("could not be retrieved");
+    expect(job.verifiedCount).toBe(0);
+  });
+
+  it("promotes to tier_1 only when an official account displays >=1000 followers", async () => {
+    const jobId = await newJob({ name: "Established audience", target: 1 });
+    const withBigAudience = withAudiences(
+      qualifyingSite({
+        domain: "ig-alpha.example.com",
+        businessName: "IG Alpha Signals",
+        email: "desk@ig-alpha.example.com",
+      }),
+      [{ platform: "instagram", url: "https://instagram.com/igalphasignals", countValue: 15000 }],
+    );
+    const { provider } = makeProvider([withBigAudience]);
+
+    let guard = 0;
+    let job = (await getResearchJob(jobId))!;
+    while (guard < 6 && job.verifiedCount < job.targetCount) {
+      await runResearchTick(jobId, { provider, workerId: `aud-${guard}` });
+      job = (await getResearchJob(jobId))!;
+      guard += 1;
+    }
+
+    const prospectId = await qualifiedProspectId(jobId);
+    const model = await getLeadModel(prospectId);
+    expect(model.tier).toBe("tier_1");
+    expect(
+      model.audiences.some(
+        (a) => a.platform === "instagram" && a.countState === "verified" && a.countValue === 15000,
+      ),
+    ).toBe(true);
   });
 });
