@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildInfo } from "@/lib/build-info";
 import { GET } from "@/app/api/health/route";
 
@@ -8,7 +8,11 @@ import { GET } from "@/app/api/health/route";
 // payload therefore reports the commit the running bundle was compiled from — this suite pins that
 // field's contract so a future edit cannot quietly drop or rename it.
 describe("health route reports which build is serving", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("publishes the build's commit and build time", async () => {
+    vi.stubEnv("BUILD_COMMIT", "abcdef1");
+    vi.stubEnv("BUILD_TIME", "2026-11-08T07:25:51.204Z");
     const response = await GET();
     const body = await response.json();
 
@@ -17,20 +21,17 @@ describe("health route reports which build is serving", () => {
     expect(body.service).toBe("nomeriq-growth");
     expect(body.database).toBe("reachable");
     // The field an operator reads to answer "is the deploy live?".
-    expect(body).toHaveProperty("commit");
-    expect(body).toHaveProperty("builtAt");
-    expect(typeof body.commit).toBe("string");
-    expect(typeof body.builtAt).toBe("string");
-    expect(body.commit).not.toBe("");
+    expect(body.commit).toBe("abcdef1");
+    expect(body.builtAt).toBe("2026-11-08T07:25:51.204Z");
   });
 
-  it("never reports an empty commit, so a missing build stamp cannot read as a valid one", () => {
-    // Unbuilt trees, CI without git and local runs all report "unknown" — a value an operator can
-    // distinguish from a real short SHA. An empty string would silently look like a successful
-    // read that carries no information.
-    const info = buildInfo();
-    expect(info.commit).toBeTruthy();
-    expect(info.builtAt).toBeTruthy();
+  it.each([undefined, ""])("reports unknown for an absent or empty stamp (%s)", async (value) => {
+    vi.stubEnv("BUILD_COMMIT", value);
+    vi.stubEnv("BUILD_TIME", value);
+    expect(buildInfo()).toEqual({ commit: "unknown", builtAt: "unknown" });
+    const body = await (await GET()).json();
+    expect(body.commit).toBe("unknown");
+    expect(body.builtAt).toBe("unknown");
   });
 
   it("keeps the operational fields the live checks depend on", async () => {

@@ -8,11 +8,10 @@ const scriptPolicy = isDevelopment
   : "script-src 'self' 'unsafe-inline'";
 
 /**
- * Build identity, resolved once when this config is loaded — i.e. at `next build` time on the
- * server. Inlined via `env` below so the compiled bundle carries the commit it was built from,
- * which is what /api/health reports. `git rev-parse HEAD` on the server cannot answer this: a
- * checkout that was never built is indistinguishable from a deployed one until you ask the
- * running bundle. Falls back to "unknown" so a build without git still succeeds.
+ * Build identity is evaluated when Next loads this config, including at build and service start.
+ * The `env` values below are inlined into each compiled bundle during `next build`; /api/health
+ * therefore reports its compiled values, not values recalculated at service start or request time.
+ * Falls back to "unknown" so a build without git still succeeds.
  */
 function gitValue(command: string): string {
   try {

@@ -190,7 +190,12 @@ The keys do not have a send permission because no send permission exists. Keep t
 
 After deployment:
 
-- `/api/health` returns `ok: true` and `database: reachable`.
+- `/api/health` returns `ok: true` and `database: reachable`. For releases with build identity,
+  both loopback and public responses must also report `commit` equal to the reviewed commit's
+  `git rev-parse --short` value, and `builtAt` must be a valid build timestamp matching the compiled
+  health route. An absent, `unknown` or mismatched identity fails verification; a matching checkout
+  HEAD alone does not prove the running build is current. Perform these checks read-only without
+  signing in; this health check does not authorize the separate write-capable acceptance steps below.
 - Sign in and confirm the session cookie is `HttpOnly`, `Secure` and `SameSite=Lax`.
 - Confirm `/dashboard`, `/leads`, `/email`, `/product-truth`, `/research` and `/settings` load with no 500s.
 - **Settings → DeepSeek**: confirm the key status reads configured, run **Test connection**, and confirm the key itself is never displayed.
