@@ -44,7 +44,7 @@ const senders: string[] = [];
 type Axis = { name: string; values: () => unknown[] };
 
 const AXES: Axis[] = [
-  { name: "query", values: () => ["FilterFixture", "Matchland", "fixture-1.example.test", "matrix-1@example.test", "NoMatch"] },
+  { name: "query", values: () => ["FilterFixture", "Matchland", "fixture-1.example.test", "matrix-1@fixture-1.example.test", "NoMatch"] },
   { name: "status", values: () => [...PIPELINE] },
   { name: "category", values: () => CATEGORIES.map((c) => c.value) },
   { name: "qualification", values: () => [...QUALIFICATIONS] },

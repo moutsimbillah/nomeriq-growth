@@ -15,7 +15,7 @@ import {
  */
 type Filter = { query?: string; onlyReplied?: boolean };
 
-const QUERIES = ["", "FilterFixture", "Fixture", "matrix-1@example.test", "NoMatch"];
+const QUERIES = ["", "FilterFixture", "Fixture", "matrix-1@fixture-1.example.test", "NoMatch"];
 const REPLIED = [true, false];
 const AXES: { name: keyof Filter; values: (string | boolean)[] }[] = [
   { name: "query", values: QUERIES },

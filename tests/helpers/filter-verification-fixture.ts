@@ -85,26 +85,29 @@ export async function seedFilterVerificationFixture(suffix: string) {
     );
   }
 
-  type ProspectRow = { id: string; source_agent: string | null; created_at: Date; updated_at: Date };
+  type ProspectRow = { id: string; source_agent: string | null; website_url: string; created_at: Date; updated_at: Date };
   const prospects = await db.query<ProspectRow>(
-    `SELECT id, source_agent, created_at, updated_at FROM prospects ORDER BY created_at DESC`,
+    `SELECT id, source_agent, website_url, created_at, updated_at FROM prospects ORDER BY created_at DESC`,
   );
   const draftStatuses = ["draft", "approved", "sent", "discarded", "cancelled"] as const;
 
   for (let i = 0; i < prospects.rows.length; i += 1) {
     const row = prospects.rows[i];
+    // Each fixture business mails from its own website domain: strict deduplication holds two
+    // different leads sharing one business email domain for review (migration 034).
+    const mailDomain = row.website_url;
     if (i % 3 !== 0) {
       await db.query(
         `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url)
-         VALUES (gen_random_uuid(), $1, $2, $2, 'https://example.test')`,
-        [row.id, `matrix-${i}@example.test`],
+         VALUES (gen_random_uuid(), $1, $2, $2, $3)`,
+        [row.id, `matrix-${i}@${mailDomain}`, `https://${mailDomain}`],
       );
     }
     if (i % 10 === 0) {
       await db.query(
         `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url)
-         VALUES (gen_random_uuid(), $1, $2, $2, 'https://example.test')`,
-        [row.id, `matrix-extra-${i}@example.test`],
+         VALUES (gen_random_uuid(), $1, $2, $2, $3)`,
+        [row.id, `matrix-extra-${i}@${mailDomain}`, `https://${mailDomain}`],
       );
     }
     await db.query(

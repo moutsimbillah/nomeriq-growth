@@ -158,7 +158,9 @@ it.each(["valid", "invalid_json", "short", "failover"])("full research accounts 
   await assign(chat, source);
   const id = await job();
   const unique = crypto.randomUUID();
-  const site = qualifyingSite({ domain: `draft-${unique}.example.com`, businessName: `Synthetic Draft ${unique}`, email: `desk-${unique}@draft-fixture.example.com` });
+  // Every case is a separate business on its own domain: a shared email domain across cases would be
+  // held for review by strict deduplication and save nothing.
+  const site = qualifyingSite({ domain: `draft-${unique}.example.com`, businessName: `Synthetic Draft ${unique}`, email: `desk-${unique}@draft-${unique}.example.com` });
   const { provider: fake } = createFakeProvider({ sites: [site] });
   const db = await getDb();
   await db.query("INSERT INTO ai_task_settings(task,provider_id) VALUES('first_email',$1)", [chat]);

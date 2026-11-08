@@ -28,6 +28,8 @@ export async function decideMessageLink(messageId: string, input: LinkDecision, 
   const db = await getDb();
   try {
     return await db.transaction(async tx => {
+      // New contact identities use the same lock order as save/send/duplicate marking.
+      if (input.action === 'link') await tx.query('LOCK TABLE prospects IN SHARE ROW EXCLUSIVE MODE');
       // Serialize decisions for the same message before inspecting ownership.
       const m = (await tx.query<Row>(`SELECT m.*, c.prospect_id AS conversation_owner FROM messages m
         LEFT JOIN conversations c ON c.id = m.conversation_id WHERE m.id = $1 FOR UPDATE OF m`, [messageId])).rows[0];
@@ -77,6 +79,8 @@ export async function decideMessageLink(messageId: string, input: LinkDecision, 
       return { messageId, prospectId: input.action === 'link' ? prospectId : null, emailRowId, action: input.action };
     });
   } catch (error) {
+    if ((error as { constraint?: string }).constraint === 'growth_identity_conflict')
+      throw new AppError('This email or business domain overlaps another recorded lead. Review the duplicate before linking it.', 409, 'link_conflict');
     if ((error as { code?: string }).code === '23505') throw new AppError('The address or ownership changed concurrently. Reload and review the association.', 409, 'link_conflict');
     throw error;
   }

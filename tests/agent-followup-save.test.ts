@@ -25,11 +25,12 @@ const save = (...ids: string[]) => saveAgentFollowUpDrafts({ drafts: ids.map((id
 
 async function seed(): Promise<{id:string; conversationId:string; email:string}> {
   const id = crypto.randomUUID(); const conversationId = crypto.randomUUID();
-  const email = `${id}@example.test`; leads.push(id);
+  // Each fixture business mails from its own domain: different leads may not share a business domain.
+  const email = `${id}@${id}.example.test`; leads.push(id);
   await db.query(`INSERT INTO prospects (id,business_name,name_key,status,created_by_type)
     VALUES ($1,'Agent follow-up fixture',$2,'contacted','legacy')`,[id,`${marker}-${id}`]);
   await db.query(`INSERT INTO prospect_emails (id,prospect_id,email,normalized_email,source_url,source_type,is_primary)
-    VALUES (gen_random_uuid(),$1,$2,$2,'https://example.test','official_website',true)`,[id,email]);
+    VALUES (gen_random_uuid(),$1,$2,$2,$3,'official_website',true)`,[id,email,`https://${id}.example.test`]);
   await db.query(`INSERT INTO conversations (id,prospect_id,subject,last_outbound_at) VALUES ($1,$2,'Original',$3)`,[conversationId,id,daysAgo(20)]);
   await db.query(`INSERT INTO drafts (id,prospect_id,kind,sequence,status,subject,body,recipient_email,created_by_type,sent_at,created_at)
     VALUES (gen_random_uuid(),$1,'first_contact',0,'sent','Original','Original message',$2,'legacy',$3,$3)`,[id,email,daysAgo(20)]);

@@ -39,7 +39,7 @@ Nomeriq Growth is an internal B2B sales portal for Nomeriq, a white-label SaaS p
 
 The workflow is:
 
-Find commercial trading-signal providers → verify the signal service → find a publicly published business email → check the Growth database for duplicates → save the prospect, sources and email → save one personalized first-contact draft → the founder reviews and approves → the founder sends through the connected mailbox → replies are synchronized and associated → the founder responds or follows up → the pipeline is updated.
+Find a plausible commercial trading-signal provider → check known identities once before deep research → verify the signal service and published business email → save the prospect, sources and email (server rechecks automatically) → save one personalized first-contact draft → the founder reviews and approves → the founder sends through the connected mailbox → replies are synchronized and associated → the founder responds or follows up → the pipeline is updated.
 
 ## Two ways research runs
 
@@ -121,15 +121,15 @@ A lead without a source-confirmed email does not count toward the target. It may
 
 ## Duplicate checking — mandatory
 
-Before saving, call \`check_duplicate\` with all known identities: business name, aliases, website, email, Instagram, YouTube, X, Telegram.
+After quick triage, before spending deep-research calls, call \`check_duplicate\` once with all known identities: business name, aliases, website, email, Instagram, YouTube, X, Telegram. Do not use a capped prospect list as a substitute. No repeated pre-save checking ritual is needed: \`save_prospect\` always rechecks under a database lock, even when this early check was skipped.
 
 Compare against the whole Growth database. One business has one record. If a match exists, return the existing record to the founder. Do not create a second prospect. Do not overwrite founder-edited research or drafts.
 
-Identity is matched on: canonical website domain, business name and aliases, a business-specific contact email, Instagram handle, YouTube channel, X handle, and Telegram handle.
+Identity is matched on: canonical website domain, normalized business name and aliases, a business-specific contact email, Instagram handle, YouTube channel, X handle, and Telegram handle. Business email domains are also compared with recorded websites and other business email domains. Free-mail/shared-service domains do not identify a company; different country domains or merely similar names are never guessed to be the same business.
 
-**A generic inbox is not an identity.** Addresses such as \`info@\`, \`support@\`, \`contact@\`, \`sales@\`, \`hello@\` and \`admin@\` are shared by unrelated businesses and must never be the sole reason two records merge. They are still perfectly valid contact addresses; they are simply not a deduplication key on their own. Domain, name and social identity still deduplicate the same business.
+**A generic inbox is not proof of ownership.** Addresses such as \`info@\`, \`support@\`, \`contact@\`, \`sales@\`, \`hello@\` and \`admin@\` remain valid contact addresses. Their business domain can block a second save for review, but no inbox or shared domain automatically merges records. For example, a brand publishing \`support@parent-company.example\` is held when Growth already records \`parent-company.example\`.
 
-Database constraints enforce this protection even if an assistant skips the pre-check. If \`save_prospect\` returns \`created: false\`, that is a successful deduplication, not an error to work around. Return the existing record ID.
+Database constraints and write guards enforce this protection even if an assistant skips the pre-check. If \`save_prospect\` returns \`created: false\`, do not work around it by changing identities or retrying. \`resolution: "already_exists"\` returns the existing record. \`resolution: "review_required"\` means overlapping or conflicting identities: show every returned match and its reason, create nothing, and never draft against an arbitrarily chosen match. Archived/excluded identities stay known so the same lead is not researched again. Only the founder can mark a saved lead as a duplicate or restore it; MCP cannot delete, archive or merge it.
 
 When several agents research at once, Growth also takes short-lived database claims on a business identity. If another agent is already researching a company, let it finish rather than duplicating the work. Claims expire automatically, so a stopped worker never blocks an identity permanently.
 

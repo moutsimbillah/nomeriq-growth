@@ -24,7 +24,9 @@ const leads: string[] = [];
 
 async function seedLead(index: number, name: string): Promise<void> {
   const db = await getDb();
-  const email = `reason${index}@example.test`;
+  // A distinct business domain per lead: different leads may not share a business email domain.
+  const domain = `reason${index}.example.test`;
+  const email = `reason${index}@${domain}`;
   const prospect = await db.query<{ id: string }>(
     `INSERT INTO prospects (id, business_name, name_key, status, created_by_type, do_not_contact)
      VALUES (gen_random_uuid(), $1, $2, 'contacted', 'legacy', false) RETURNING id`,
@@ -34,8 +36,8 @@ async function seedLead(index: number, name: string): Promise<void> {
   leads.push(id);
   await db.query(
     `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary)
-     VALUES (gen_random_uuid(), $1, $2, $2, 'https://example.test', 'official_website', true)`,
-    [id, email],
+     VALUES (gen_random_uuid(), $1, $2, $2, $3, 'official_website', true)`,
+    [id, email, `https://${domain}`],
   );
   const sentAt = new Date(Date.now() - (index + 12) * 86_400_000).toISOString();
   await db.query(

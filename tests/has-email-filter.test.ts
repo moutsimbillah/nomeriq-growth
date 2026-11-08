@@ -11,8 +11,10 @@ const SEED = [
   `INSERT INTO prospects (id, business_name, name_key, created_by_type)
    SELECT gen_random_uuid(), 'EmailFixture' || i, 'email-fixture-' || i, 'api'
    FROM generate_series(1, 180) AS i`,
+  // Each fixture business has its own email domain; strict deduplication refuses a shared one.
   `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url)
-   SELECT gen_random_uuid(), p.id, 'f-' || i || '@example.test', 'f-' || i || '@example.test', 'https://example.test'
+   SELECT gen_random_uuid(), p.id, 'f-' || i || '@email-fixture-' || i || '.example.test',
+          'f-' || i || '@email-fixture-' || i || '.example.test', 'https://email-fixture-' || i || '.example.test'
    FROM generate_series(1, 160) AS i
    JOIN prospects p ON p.name_key = 'email-fixture-' || i`,
 ];

@@ -9,20 +9,17 @@ import type { AgentTag, ChannelTag } from "@/lib/types";
 import { mapDraft, mapProductTruth } from "./mappers";
 import type { FollowUpCandidate } from "./followups";
 import { getRecipientPolicy, getRecipientPoliciesBatch } from "./recipient-policy";
+import {
+  FOLLOW_UP_STOPPED_STATUSES_SQL,
+  followUpRejectionRecommendationSql,
+  followUpStoppedClassificationSql,
+  followUpStoppingInboundSql,
+  linkedDuplicateFollowUpStopSql,
+  realFollowUpInboundSql,
+} from "./linked-contact-policy";
 
-/** SQL counterpart of stored real-reply facts; never let a DSN/OOO restart or stop a sequence. */
-export function realFollowUpInboundSql(alias = "m"): string {
-  return `${alias}.direction='inbound'
-    AND COALESCE(${alias}.raw_headers->>'deliveryReport','false') <> 'true'
-    AND COALESCE(${alias}.raw_headers->>'autoReply','false') <> 'true'
-    AND NOT EXISTS (SELECT 1 FROM email_bounces b WHERE b.message_id=${alias}.id)
-    AND lower(${alias}.from_email) !~ '^(mailer-daemon|postmaster|no-?reply)@'
-    AND NOT EXISTS (SELECT 1 FROM email_accounts a WHERE lower(a.email_address)=lower(${alias}.from_email))
-    AND COALESCE(${alias}.subject,'') !~* '(out of (the )?office|automatic reply|auto.?reply|vacation|delivery status notification|undeliverable|delivery failure)'
-    AND NOT EXISTS (SELECT 1 FROM jsonb_each_text(COALESCE(${alias}.raw_headers,'{}'::jsonb)) h
-      WHERE (lower(h.key)='auto-submitted' AND h.value ~* '(auto-replied|auto-generated)')
-        OR (lower(h.key)='content-type' AND h.value ~* 'report-type[[:space:]]*=[[:space:]]*"?(delivery-status|feedback-report)'))`;
-}
+/** The real-reply predicate lives in the shared linked-contact policy module; kept as a re-export. */
+export { realFollowUpInboundSql } from "./linked-contact-policy";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const FOLLOW_UP_BATCH_MAX = 50;
@@ -80,21 +77,22 @@ const FOLLOW_UP_CANDIDATE_SQL = `
     ) activity ON true
     WHERE ($1::uuid IS NULL OR p.id=$1) AND p.archived_at IS NULL
       AND NOT p.do_not_contact AND NOT p.follow_up_excluded
-      AND NOT EXISTS (SELECT 1 FROM prospect_rejection_recommendations r WHERE r.prospect_id=p.id)
-      AND p.status NOT IN ('replied','interested','demo','proposal','won','lost')
-      AND NOT EXISTS (SELECT 1 FROM conversations co WHERE co.prospect_id=p.id AND co.classification IN ('unsubscribe','not_interested'))
+      AND NOT ${followUpRejectionRecommendationSql("p")}
+      AND p.status NOT IN (${FOLLOW_UP_STOPPED_STATUSES_SQL})
+      AND NOT ${followUpStoppedClassificationSql("p")}
       AND NOT EXISTS (SELECT 1 FROM suppressions s WHERE s.active=true AND s.reason <> 'bounce'
         AND (s.prospect_id=p.id OR s.normalized_email IN
           (SELECT normalized_email FROM prospect_emails WHERE prospect_id=p.id)))
       -- Once a human has replied, this is a conversation, never another cold follow-up,
-      -- even when the founder subsequently answered in external webmail.
-      AND NOT EXISTS (SELECT 1 FROM messages m WHERE ${realFollowUpInboundSql()}
-        AND (m.prospect_id=p.id OR m.conversation_id IN (SELECT id FROM conversations WHERE prospect_id=p.id)))
-      -- An undated inbound is not proof that the thread is unanswered. Fail closed rather than
-      -- treating its import/created time as the message date or silently ignoring a possible reply.
-      AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.direction='inbound'
-        AND COALESCE(m.received_at,m.sent_at) IS NULL
-        AND (m.prospect_id=p.id OR m.conversation_id IN (SELECT id FROM conversations WHERE prospect_id=p.id)))
+      -- even when the founder subsequently answered in external webmail. An undated inbound is
+      -- not proof that the thread is unanswered: fail closed rather than treating its import
+      -- time as the message date or silently ignoring a possible reply.
+      AND NOT ${followUpStoppingInboundSql("p")}
+      -- An active linked duplicate is the same business: its holds, replies and outcomes stop the
+      -- canonical lead's follow-ups exactly as its own would (shared linked-contact policy).
+      AND NOT EXISTS (SELECT 1 FROM prospect_duplicate_links ldl JOIN prospects ldp ON ldp.id=ldl.prospect_id
+        WHERE ldl.canonical_prospect_id=p.id AND ldl.restored_at IS NULL
+          AND ${linkedDuplicateFollowUpStopSql("ldl","ldp")})
       AND activity.last_outbound_at IS NOT NULL
       AND (activity.last_inbound_at IS NULL OR activity.last_inbound_at < activity.last_outbound_at)
     ORDER BY activity.last_outbound_at DESC,p.id`;

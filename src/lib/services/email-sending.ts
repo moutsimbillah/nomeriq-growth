@@ -35,6 +35,8 @@ import { getRecipientPolicy } from "./recipient-policy";
 import { assertLeadOutreachAllowed } from "./lead-outreach-guard";
 import { rejectionHeldAddresses } from "./lead-rejections";
 import { realFollowUpInboundSql } from "./agent-followups";
+import { linkedDuplicateFollowUpStopSql } from "./linked-contact-policy";
+import { assertNoDuplicateContact, lockSendReservations } from "./duplicate-contact";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -210,7 +212,7 @@ export async function getSendReadiness(
 async function checkRecipientSafety(
   prospectId: string,
   email: string,
-  options: { allowFounderEntered?: boolean } = {},
+  options: { allowFounderEntered?: boolean; draftId?: string | null } = {},
 ) {
   const db = await getDb();
   const prospect = await db.query<{ do_not_contact: boolean }>(
@@ -251,6 +253,8 @@ async function checkRecipientSafety(
   if (selected && (!selected.linked || selected.blocked)) {
     throw new AppError(selected.reason ?? "This recipient is unavailable.", 422, "unverified_recipient");
   }
+  // Cross-lead duplicate contact, checked BEFORE a typed address could be recorded on this lead.
+  await assertNoDuplicateContact({ prospectId, recipient: email, draftId: options.draftId }, db);
   if (!selected) {
     if (!options.allowFounderEntered) {
       throw new AppError(
@@ -259,10 +263,8 @@ async function checkRecipientSafety(
         "unverified_recipient",
       );
     }
-    // The founder typed this address. Record it as a founder-entered contact so the lead shows where
-    // it came from and the next send does not have to ask again.
-    await recordFounderEnteredEmail(prospectId, email);
-    await checkRecipientSafety(prospectId, email);
+    // Validate here, but persist a typed address only inside the locked send reservation below.
+    // A racing refusal must not leave an incorrect contact association behind.
   }
 }
 
@@ -277,6 +279,12 @@ async function priorContactExists(prospectId: string): Promise<boolean> {
      UNION ALL SELECT 1 FROM outbound_sends s JOIN drafts d ON d.id=s.draft_id
        WHERE s.status IN ('accepted','sandbox','uncertain') AND (s.prospect_id=$1 OR EXISTS (
          SELECT 1 FROM prospect_emails e WHERE e.prospect_id=$1 AND e.normalized_email=lower(trim(d.recipient_email))))
+     UNION ALL SELECT 1 FROM messages m LEFT JOIN conversations c ON c.id=m.conversation_id
+       JOIN prospect_duplicate_links l ON (l.prospect_id=m.prospect_id OR l.prospect_id=c.prospect_id)
+       WHERE l.canonical_prospect_id=$1 AND l.restored_at IS NULL AND m.delivery_status IS DISTINCT FROM 'failed'
+     UNION ALL SELECT 1 FROM outbound_sends s LEFT JOIN drafts d ON d.id=s.draft_id
+       JOIN prospect_duplicate_links l ON (l.prospect_id=s.prospect_id OR l.prospect_id=d.prospect_id)
+       WHERE l.canonical_prospect_id=$1 AND l.restored_at IS NULL AND s.status IN ('accepted','sandbox','uncertain','sending','queued')
      LIMIT 1`,
     [prospectId],
   );
@@ -332,7 +340,14 @@ async function hasFollowUpStoppingReply(prospectId: string): Promise<boolean> {
   const { rows } = await db.query(`SELECT 1 FROM messages m LEFT JOIN conversations c ON c.id=m.conversation_id
     WHERE (m.prospect_id=$1 OR c.prospect_id=$1) AND m.direction='inbound'
       AND (${realFollowUpInboundSql()} OR COALESCE(m.received_at,m.sent_at) IS NULL) LIMIT 1`, [prospectId]);
-  return rows.length > 0;
+  if (rows.length) return true;
+  // An active linked duplicate is the same business: its holds, replies and outcomes stop this
+  // lead's follow-ups exactly as its own would — the same shared policy the candidate list and the
+  // guarded draft INSERT apply, so a reply recorded on the duplicate stops the scheduled queue and
+  // this manual send at the same moment.
+  const linked = await db.query(`SELECT 1 FROM prospect_duplicate_links l JOIN prospects dp ON dp.id=l.prospect_id
+    WHERE l.canonical_prospect_id=$1 AND l.restored_at IS NULL AND ${linkedDuplicateFollowUpStopSql("l","dp")} LIMIT 1`, [prospectId]);
+  return linked.rows.length > 0;
 }
 
 export interface SendDraftOptions {
@@ -397,65 +412,79 @@ export async function sendDraft(
   }
   await checkRecipientSafety(draft.prospectId, draft.recipientEmail, {
     allowFounderEntered: options.allowFounderRecipient === true,
+    draftId: draft.id,
   });
 
-  if (existingRow) {
-    const row = existingRow;
-    if (row.status === "sending") {
-      throw new AppError(
-        "A send attempt for this draft is already in progress. Check Sent before retrying.",
-        409,
-        "send_in_progress",
+  if (existingRow?.status === "sending") {
+    throw new AppError(
+      "A send attempt for this draft is already in progress. Check Sent before retrying.",
+      409,
+      "send_in_progress",
+    );
+  }
+  if (existingRow && existingRow.status !== "queued" && existingRow.status !== "failed") {
+    throw new AppError(
+      "This draft cannot be sent in its current state.",
+      409,
+      "send_blocked",
+    );
+  }
+  // Reservation: under one serializing lock, re-check the cross-lead duplicate guard and write the
+  // 'sending' row in the same transaction, so two leads sharing an identity cannot both pass the
+  // check before either reservation exists. A refusal rolls back and writes nothing.
+  try {
+    await db.transaction(async (tx) => {
+      await lockSendReservations(tx, draft.prospectId);
+      await assertNoDuplicateContact(
+        { prospectId: draft.prospectId, recipient: draft.recipientEmail, draftId: draft.id },
+        tx,
       );
-    }
-    if (row.status === "queued") {
-      // The scheduler is taking this one up (or the founder pressed Send again): the hold is over.
-      await db.query(
-        `UPDATE outbound_sends SET status = 'sending', queued_at = null, error = null,
-          started_at = now(), completed_at = null WHERE id = $1`,
-        [row.id],
-      );
-    } else if (row.status === "failed") {
-      // A definitive SMTP rejection is safe to retry with the same ledger row.
-      await db.query(
-        `UPDATE outbound_sends SET status = 'sending', error = null,
-          started_at = now(), completed_at = null WHERE id = $1`,
-        [row.id],
-      );
-    } else {
-      throw new AppError(
-        "This draft cannot be sent in its current state.",
-        409,
-        "send_blocked",
-      );
-    }
-  } else {
-    try {
-      await db.query(
-        `INSERT INTO outbound_sends
-          (id, draft_id, account_id, prospect_id, campaign_id, idempotency_key, status)
-         VALUES ($1, $2, $3, $4, $5, $6, 'sending')`,
-        [
-          crypto.randomUUID(),
-          draft.id,
-          options.accountId ?? null,
-          draft.prospectId,
-          options.campaignId ?? null,
-          createHash("sha256")
-            .update(`${draft.id}:${draft.recipientEmail}`)
-            .digest("hex"),
-        ],
-      );
-    } catch (error) {
-      if (String((error as { code?: string }).code) === "23505") {
-        throw new AppError(
-          "A send attempt for this draft already exists.",
-          409,
-          "already_sent",
+      if (options.allowFounderRecipient) {
+        await recordFounderEnteredEmail(draft.prospectId, draft.recipientEmail, tx);
+      }
+      if (existingRow) {
+        // queued: the scheduler is taking this one up (or the founder pressed Send again): the hold
+        // is over. failed: a definitive SMTP rejection is safe to retry with the same ledger row.
+        const moved = await tx.query(
+          `UPDATE outbound_sends SET status = 'sending', error = null, started_at = now(), completed_at = null,
+            queued_at = CASE WHEN status = 'queued' THEN null ELSE queued_at END
+           WHERE id = $1 AND status = $2 RETURNING id`,
+          [existingRow.id, existingRow.status],
+        );
+        if (!moved.rows.length) {
+          throw new AppError(
+            "A send attempt for this draft is already in progress. Check Sent before retrying.",
+            409,
+            "send_in_progress",
+          );
+        }
+      } else {
+        await tx.query(
+          `INSERT INTO outbound_sends
+            (id, draft_id, account_id, prospect_id, campaign_id, idempotency_key, status)
+           VALUES ($1, $2, $3, $4, $5, $6, 'sending')`,
+          [
+            crypto.randomUUID(),
+            draft.id,
+            options.accountId ?? null,
+            draft.prospectId,
+            options.campaignId ?? null,
+            createHash("sha256")
+              .update(`${draft.id}:${draft.recipientEmail}`)
+              .digest("hex"),
+          ],
         );
       }
-      throw error;
+    });
+  } catch (error) {
+    if (!(error instanceof AppError) && String((error as { code?: string }).code) === "23505") {
+      throw new AppError(
+        "A send attempt for this draft already exists.",
+        409,
+        "already_sent",
+      );
     }
+    throw error;
   }
 
   // The lead's pinned profile wins outright. Until it is pinned, an explicit choice stands, and only a
@@ -620,7 +649,7 @@ export async function sendDraft(
 
   // Last read before transport: composing the footer/profile may have yielded to a new opt-out.
   try {
-    await checkRecipientSafety(draft.prospectId, draft.recipientEmail);
+    await checkRecipientSafety(draft.prospectId, draft.recipientEmail, { draftId: draft.id });
     if (draft.kind === "first_contact" && await priorContactExists(draft.prospectId)) {
       throw new AppError("This prospect has already been contacted.", 409, "already_contacted");
     }
@@ -883,6 +912,7 @@ const PERMANENT_STOP_CODES = new Set([
   "prospect_replied",
   "unverified_recipient",
   "smtp_rejected",
+  "duplicate_contact",
 ]);
 
 export interface QueuedSendOutcome {

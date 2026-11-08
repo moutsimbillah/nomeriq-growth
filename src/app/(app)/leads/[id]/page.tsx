@@ -60,8 +60,75 @@ import { LeadQualificationPills, AudiencePills, PriorityLabel, ProductFitPanel, 
 import { getLeadModel } from "@/lib/services/lead-model";
 import { latestOfferRejection } from "@/lib/services/lead-rejections";
 import { getLeadOutreachBlock } from "@/lib/services/lead-outreach-guard";
+import { getSessionUser } from "@/lib/auth/session";
+import {
+  getActiveDuplicateLink,
+  listDuplicatesOf,
+  type DuplicateLinkView,
+} from "@/lib/services/prospect-duplicates";
+import {
+  DuplicatesOfList,
+  MarkDuplicateButton,
+  RestoreDuplicateButton,
+} from "@/components/prospect-duplicate-control";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * An archived lead normally has no page. A lead the founder marked "Duplicate of" keeps a small one,
+ * so the link from the lead it duplicates works and the founder can restore it.
+ */
+function DuplicateLeadView({
+  link,
+  canManage,
+  timezone,
+}: {
+  link: DuplicateLinkView;
+  canManage: boolean;
+  timezone: string;
+}) {
+  return (
+    <div className="animate-fade-up">
+      <div className="mb-5 flex items-center gap-2 text-12 text-faint">
+        <Link href="/leads" className="inline-flex items-center gap-1 hover:text-ink">
+          <ArrowLeft size={11} /> All leads
+        </Link>
+        <span>/</span>
+        <span className="text-muted">{link.prospectName}</span>
+      </div>
+      <PageHeader
+        eyebrow="Archived · marked as a duplicate"
+        title={link.prospectName}
+        actions={canManage ? <RestoreDuplicateButton prospectId={link.prospectId} /> : undefined}
+      />
+      <div data-duplicate-of={link.canonicalProspectId}>
+      <Card className="p-5">
+        <SectionHeading
+          title="Duplicate of"
+          description="This lead is archived and marked do-not-contact. Work continues on the lead below."
+        />
+        <p className="mt-3 text-14">
+          {link.canonicalActive ? (
+            <Link
+              href={`/leads/${link.canonicalProspectId}`}
+              className="inline-flex items-center gap-1 font-semibold text-ink underline underline-offset-4"
+            >
+              {link.canonicalName} <ArrowRight size={12} />
+            </Link>
+          ) : (
+            <span className="font-semibold text-ink">{link.canonicalName} (now archived)</span>
+          )}
+        </p>
+        <p className="mt-3 text-12 text-muted">
+          Marked {formatDateTime(link.createdAt, timezone)} · {link.cancelledDrafts} unsent draft
+          {link.cancelledDrafts === 1 ? "" : "s"} cancelled · {link.blockedSends} queued email
+          {link.blockedSends === 1 ? "" : "s"} stopped. No address was suppressed.
+        </p>
+      </Card>
+      </div>
+    </div>
+  );
+}
 
 export default async function LeadDetailPage({
   params,
@@ -70,9 +137,21 @@ export default async function LeadDetailPage({
 }) {
   const { id } = await params;
   const prospect = await getProspect(id);
-  if (!prospect) notFound();
+  if (!prospect) {
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const link = UUID.test(id) ? await getActiveDuplicateLink(id) : null;
+    if (!link) notFound();
+    const [viewer, workspace] = await Promise.all([getSessionUser(), getWorkspaceSettings()]);
+    return (
+      <DuplicateLeadView
+        link={link}
+        canManage={viewer?.role === "founder"}
+        timezone={workspace.timezone}
+      />
+    );
+  }
 
-  const [draft, conversation, drafts, account, settings, addressStatuses, model, rejection] = await Promise.all([
+  const [draft, conversation, drafts, account, settings, addressStatuses, model, rejection, viewer, duplicatesOf] = await Promise.all([
     getFirstContactDraft(id),
     getConversationForProspect(id),
     listDraftsForProspect(id),
@@ -81,7 +160,10 @@ export default async function LeadDetailPage({
     getAddressDeliveryStatuses(prospect.id),
     getLeadModel(id),
     latestOfferRejection(id),
+    getSessionUser(),
+    listDuplicatesOf(prospect.id),
   ]);
+  const isFounder = viewer?.role === "founder";
   const profileAccounts = await listEmailAccounts();
   const profileLabelById = senderLabels(profileAccounts);
   const profileOptions = profileAccounts.map((row) => ({
@@ -220,6 +302,7 @@ export default async function LeadDetailPage({
                 via {CHANNEL_LABELS[prospect.sourceChannel]}
               </span>
             ) : null}
+            <DuplicatesOfList duplicates={duplicatesOf} />
           </span>
         }
         description={
@@ -249,6 +332,9 @@ export default async function LeadDetailPage({
               </Link>
             )}
             <ArchiveLeadButton prospectId={prospect.id} />
+            {isFounder && (
+              <MarkDuplicateButton prospectId={prospect.id} businessName={prospect.businessName} />
+            )}
           </>
         }
       />

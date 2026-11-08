@@ -20,10 +20,12 @@ const suppressionIds: string[] = [];
 const marker = crypto.randomUUID();
 
 async function makeLead(opts: {
-  email?: string; secondEmail?: string; doNotContact?: boolean; archived?: boolean;
-} = {}): Promise<{ id: string; email: string }> {
+  email?: string; secondLocal?: string; doNotContact?: boolean; archived?: boolean;
+} = {}): Promise<{ id: string; email: string; domain: string }> {
   const id = crypto.randomUUID();
-  const email = opts.email ?? `${id}@batch.test`;
+  // A distinct business domain per fixture lead: different leads may not share a business email domain.
+  const domain = `${id}.batch.test`;
+  const email = opts.email ?? `${id}@${domain}`;
   leads.push(id);
   await db.query(
     `INSERT INTO prospects (id, business_name, name_key, domain_key, do_not_contact, archived_at, created_by_type)
@@ -32,14 +34,14 @@ async function makeLead(opts: {
   );
   await db.query(
     `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary)
-     VALUES ($1, $2, $3, $3, 'https://batch.test', 'official_website', true)`,
-    [crypto.randomUUID(), id, email],
+     VALUES ($1, $2, $3, $3, $4, 'official_website', true)`,
+    [crypto.randomUUID(), id, email, `https://${domain}`],
   );
-  if (opts.secondEmail) {
+  if (opts.secondLocal) {
     await db.query(
       `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary)
-       VALUES ($1, $2, $3, $3, 'https://batch.test', 'official_website', false)`,
-      [crypto.randomUUID(), id, opts.secondEmail],
+       VALUES ($1, $2, $3, $3, $4, 'official_website', false)`,
+      [crypto.randomUUID(), id, `${opts.secondLocal}@${domain}`, `https://${domain}`],
     );
   }
   const conversationId = crypto.randomUUID();
@@ -49,7 +51,7 @@ async function makeLead(opts: {
      VALUES ($1, $2, $3, 'outbound', 'founder@batch.test', $4::jsonb, '2026-01-01')`,
     [crypto.randomUUID(), conversationId, id, JSON.stringify([email])],
   );
-  return { id, email };
+  return { id, email, domain };
 }
 async function suppress(email: string, reason: string, prospectId: string | null) {
   const id = crypto.randomUUID();
@@ -102,7 +104,7 @@ describe("batched recipient policy matches the single-lead reader", () => {
     const archived = await makeLead({ archived: true });
     const suppressed = await makeLead();
     await suppress(suppressed.email, "manual", suppressed.id);
-    const withAlt = await makeLead({ secondEmail: `alt-${crypto.randomUUID()}@batch.test` });
+    const withAlt = await makeLead({ secondLocal: `alt-${crypto.randomUUID()}` });
 
     const ids = [plain.id, dnc.id, archived.id, suppressed.id, withAlt.id];
     const batch = await getRecipientPoliciesBatch(ids, db);
@@ -112,8 +114,13 @@ describe("batched recipient policy matches the single-lead reader", () => {
   });
 
   it("agrees when an offer-rejection hold blocks a shared address across two leads", async () => {
-    // Only a generic local part (info/support/...) is allowed to repeat across prospects.
-    const shared = `info@shared-${crypto.randomUUID()}.batch.test`;
+    // Founder rule (strict deduplication, migration 034): a role mailbox on one business domain can
+    // no longer repeat across two different leads; the database refuses it for review.
+    const corporate = `info@shared-${crypto.randomUUID()}.batch.test`;
+    await makeLead({ email: corporate });
+    await expect(makeLead({ email: corporate })).rejects.toMatchObject({ code: "23505", constraint: "growth_identity_conflict" });
+    // A role mailbox on a free-mail host is the shared address that can still repeat across leads.
+    const shared = "info@gmx.net";
     const held = await makeLead({ email: shared, doNotContact: true });
     await db.query(
       `INSERT INTO audit_log (id, actor_type, actor_id, action, entity_type, entity_id, metadata)

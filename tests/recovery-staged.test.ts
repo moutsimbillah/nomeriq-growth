@@ -40,8 +40,9 @@ vi.mock("imapflow", () => ({ ImapFlow: class {
 const marker = crypto.randomUUID();
 const accountId = crypto.randomUUID();
 const userId = crypto.randomUUID();
+// Each staged business has its own email domain: strict deduplication refuses a shared business domain.
 const leads = Array.from({ length: 5 }, (_, index) => ({ id: crypto.randomUUID(), conversation: crypto.randomUUID(),
-  email: `contact${index}@${marker}.example`, seed: `<staged-seed-${marker}-${index}@example.test>` }));
+  email: `contact${index}@${marker}-${index}.example`, seed: `<staged-seed-${marker}-${index}@example.test>` }));
 const dates = ["2026-10-17T23:25:00Z", "2026-10-24T09:47:00Z"];
 function raw(uid: number, index = 0, inbound = false, date = dates[1], extra = "", body = "Historical webmail reply") {
   return `From: ${inbound ? leads[index].email : "founder@staged.example"}\r\nTo: ${inbound ? "founder@staged.example" : leads[index].email}\r\nSubject: Re: Staged ${index}\r\nMessage-ID: <staged-${marker}-${uid}@example.test>\r\nIn-Reply-To: ${leads[index].seed}\r\nDate: ${new Date(date).toUTCString()}\r\n${extra}\r\n${body}`;

@@ -26,6 +26,7 @@ import { getProspect } from "./prospects";
 import { newestMessageFirst } from "./message-order";
 import { getRecipientPolicy, isRealProspectMessage } from "./recipient-policy";
 import { assertLeadOutreachAllowed } from "./lead-outreach-guard";
+import { assertNoDuplicateContact, lockSendReservations } from "./duplicate-contact";
 import { getMessageTranslation } from "./message-translations";
 import { getProductTruth, getWorkspaceSettings } from "./settings";
 import {
@@ -486,19 +487,17 @@ export async function sendReply(input: SendReplyInput) {
     }
     if (existing.rows[0].status === "failed") {
       reusableSendRowId = existing.rows[0].id;
-      await db.query(
-        `UPDATE outbound_sends SET status = 'sending', error = null,
-          started_at = now(), completed_at = null WHERE id = $1`,
-        [existing.rows[0].id],
-      );
     } else if (existing.rows[0].status === "sending") {
       throw new AppError(
         "This reply is already being processed. Check Sent before retrying.",
         409,
         "reply_in_progress",
       );
+    } else {
+      throw new AppError("This reply is blocked. Review it before retrying.", 409, "send_blocked");
     }
   }
+  await assertNoDuplicateContact({ prospectId: conversation.prospect.id, recipient: conversation.replyTo }, db);
 
   // A reply must come from the address the prospect is already talking to: the lead's profile first,
   // then the thread's, and only then an explicit pick or the default.
@@ -542,46 +541,39 @@ export async function sendReply(input: SendReplyInput) {
   const cleanBody = draftBodyOnly(body, [settings.senderSignature, account.signature]);
   if (!cleanBody) throw new AppError("Write a reply before sending.", 400, "empty_draft_body");
   const signedBody = withEmailIdentity(cleanBody, settings, account.signature);
+  const sendRowId = reusableSendRowId ?? crypto.randomUUID();
+  try {
+    await db.transaction(async tx => {
+      await lockSendReservations(tx, conversation.prospect.id);
+      await assertNoDuplicateContact({ prospectId: conversation.prospect.id, recipient: conversation.replyTo! }, tx);
+      if (reusableSendRowId) {
+        const moved = await tx.query(`UPDATE outbound_sends SET status='sending',error=NULL,started_at=now(),completed_at=NULL
+          WHERE id=$1 AND status='failed' RETURNING id`,[sendRowId]);
+        if (!moved.rows.length) throw new AppError("This reply is already being processed.",409,"reply_in_progress");
+      } else {
+        await tx.query(`INSERT INTO outbound_sends
+          (id,conversation_id,kind,recipient_email,subject,account_id,prospect_id,idempotency_key,status)
+          VALUES ($1,$2,'reply',$3,$4,$5,$6,$7,'sending')`,
+          [sendRowId,conversation.id,conversation.replyTo,subject,account.id,conversation.prospect.id,keyHash]);
+      }
+    });
+  } catch (error) {
+    if (String((error as {code?:string}).code)==="23505") throw new AppError("This reply was already submitted.",409,"already_sent");
+    throw error;
+  }
   const footer = await buildComplianceFooter({
     accountProvider: account.provider,
     prospectId: conversation.prospect.id,
     email: conversation.replyTo,
     settings,
+  }).catch(async error => {
+    await db.query(`UPDATE outbound_sends SET status='failed',error='Reply preparation failed before delivery',completed_at=now()
+      WHERE id=$1 AND status='sending'`,[sendRowId]);
+    throw error;
   });
   const messageId = `<${crypto.randomUUID()}@${account.emailAddress.split("@")[1] || "nomeriq.local"}>`;
   const text = `${signedBody}\n${footer.text}`;
   const html = `${textToHtmlParagraphs(signedBody)}<hr style="border:none;border-top:1px solid #ddd;margin:24px 0" /><div style="font-size:12px;color:#666">${textToHtmlParagraphs(footer.text.replace(/^\n+/, ""))}</div>`;
-  const sendRowId = reusableSendRowId ?? crypto.randomUUID();
-
-  if (!reusableSendRowId) {
-    try {
-      await db.query(
-        `INSERT INTO outbound_sends
-          (id, conversation_id, kind, recipient_email, subject, account_id,
-           prospect_id, idempotency_key, status)
-         VALUES ($1, $2, 'reply', $3, $4, $5, $6, $7, 'sending')`,
-        [
-          sendRowId,
-          conversation.id,
-          conversation.replyTo,
-          subject,
-          account.id,
-          conversation.prospect.id,
-          keyHash,
-        ],
-      );
-    } catch (error) {
-      if (String((error as { code?: string }).code) === "23505") {
-        throw new AppError(
-          "This reply was already submitted.",
-          409,
-          "already_sent",
-        );
-      }
-      throw error;
-    }
-  }
-
   const readiness = await getSendReadiness(account.id);
   if (!readiness.ready) {
     // Nothing was sent, so nothing is recorded as sent: the attempt row goes back and the reply can be
@@ -600,6 +592,13 @@ export async function sendReply(input: SendReplyInput) {
   if (currentPolicy.blocked || currentPolicy.recipient !== conversation.replyTo) {
     await db.query(`UPDATE outbound_sends SET status = 'failed', error = 'Recipient policy changed before sending', completed_at = now() WHERE id = $1 AND status = 'sending'`, [sendRowId]);
     throw new AppError(currentPolicy.reason ?? 'Reply recipient changed. Reload before sending.', 409, 'recipient_changed');
+  }
+  try {
+    await assertNoDuplicateContact({ prospectId: conversation.prospect.id, recipient: conversation.replyTo }, db);
+  } catch (error) {
+    await db.query(`UPDATE outbound_sends SET status='blocked',error='Duplicate contact detected before delivery',completed_at=now()
+      WHERE id=$1 AND status='sending'`,[sendRowId]);
+    throw error;
   }
   try {
     delivery = await deliverEmail(account, {

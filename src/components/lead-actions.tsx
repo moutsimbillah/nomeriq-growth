@@ -55,6 +55,8 @@ export function AddLeadButton({
     id: string;
     name: string;
     matchedOn: string[];
+    reviewRequired: boolean;
+    matches: { prospectId: string; businessName: string; matchedOn: string[] }[];
   } | null>(null);
 
   const [businessName, setBusinessName] = useState("");
@@ -119,6 +121,8 @@ export function AddLeadButton({
           id: result.prospect.id,
           name: result.prospect.businessName,
           matchedOn: result.matchedOn || [],
+          reviewRequired: result.resolution === "review_required",
+          matches: result.matches ?? [],
         });
         return;
       }
@@ -147,23 +151,27 @@ export function AddLeadButton({
       >
         {duplicate ? (
           <div className="space-y-4">
-            <Notice tone="warning" title="This business already exists in Growth.">
+            <Notice tone="warning" title={duplicate.reviewRequired ? "Save blocked — review overlapping identities." : "This business already exists in Growth."}>
               Matched on {duplicate.matchedOn.join(", ") || "an existing identity"}.
-              One business keeps one prospect record.
+              {duplicate.reviewRequired ? " No record was created or merged. A shared domain or name does not prove common ownership." : " One business keeps one prospect record."}
             </Notice>
             <div className="rounded-xl border border-line bg-white/60 p-4">
-              <div className="text-13 font-semibold text-ink">{duplicate.name}</div>
+              {!duplicate.matches.length && <div className="text-13 font-semibold text-ink">{duplicate.name}</div>}
               <p className="mt-1 text-12 leading-5 text-muted">
-                Return to the existing research rather than overwriting it.
+                {duplicate.reviewRequired ? "Inspect the recorded matches below. Resolve the identity overlap before adding another lead." : "Return to the existing research rather than overwriting it."}
               </p>
+              {duplicate.matches.map(match => <div key={match.prospectId} className="mt-3 text-12">
+                <Link href={`/leads/${match.prospectId}`} className="text-accent underline">{match.businessName}</Link>
+                <p className="text-muted">{match.matchedOn.join(", ")}</p>
+              </div>)}
             </div>
             <SubmitBar>
               <button type="button" className="btn-secondary" onClick={resetDuplicate}>
                 Back to form
               </button>
-              <Link href={`/leads/${duplicate.id}`} className="btn-primary">
+              {!duplicate.reviewRequired && <Link href={`/leads/${duplicate.id}`} className="btn-primary">
                 Open existing record <ArrowRight size={14} />
-              </Link>
+              </Link>}
             </SubmitBar>
           </div>
         ) : (

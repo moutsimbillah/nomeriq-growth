@@ -4,6 +4,7 @@ import { CATEGORIES } from "@/lib/types";
 import type { Category, ResearchJob } from "@/lib/types";
 import {
   checkDuplicate,
+  duplicateResolution,
   getProspect,
   getProspectConversationContext,
   listProspects,
@@ -131,6 +132,7 @@ function describeResearchJobForAgent(job: ResearchJob) {
 
 const duplicateSchema = z.object({
   businessName: z.string().optional().nullable(),
+  aliases: z.array(z.string()).max(20).optional(),
   websiteUrl: z.string().optional().nullable(),
   email: z.string().optional().nullable(),
   instagramUrl: z.string().optional().nullable(),
@@ -321,6 +323,7 @@ async function executeAgentAction(
       if (!parsed.success) failValidation(parsed.error);
       const matches = await checkDuplicate({
         businessName: parsed.data.businessName,
+        aliases: parsed.data.aliases,
         websiteUrl: parsed.data.websiteUrl,
         emails: parsed.data.email ? [parsed.data.email] : [],
         instagramUrl: parsed.data.instagramUrl,
@@ -330,6 +333,7 @@ async function executeAgentAction(
       });
       result = {
         duplicate: matches.length > 0,
+        resolution: duplicateResolution(matches),
         matches: matches.map((match) => ({
           prospectId: match.prospect.id,
           businessName: match.prospect.businessName,
@@ -363,10 +367,14 @@ async function executeAgentAction(
       result = {
         created: saved.created,
         duplicate: saved.duplicate,
+        resolution: saved.resolution,
+        matches: saved.matches ?? [],
         matchedOn: saved.matchedOn ?? [],
         prospect: saved.prospect,
         leadModel: saved.leadModel ?? null,
-        message: saved.duplicate
+        message: saved.resolution === "review_required"
+          ? "Save blocked: recorded identities overlap. No record was created or merged. Show the matches and reasons for founder review; do not work around this with different fields or draft against an arbitrary match."
+          : saved.duplicate
           ? "A matching prospect already existed. Return this existing record; do not create another."
           : saved.leadModel?.tier === "category_b" ? "Alternative-contact research record saved. Never prepare or send email for Category B."
           : saved.leadModel?.tier === "excluded" ? "Excluded business saved with its reason. Do not research it again or prepare outreach."
@@ -703,13 +711,14 @@ export const TOOL_DEFINITIONS = [
   {
     name: "check_duplicate",
     description:
-      "Check the entire Growth database for a matching business before saving. Use all known identities.",
+      "Check once before deep research using all known identities. Includes business email-domain overlap. Saves automatically recheck; overlapping identities require review, never automatic merging.",
     inputSchema: {
       type: "object",
       properties: {
         businessName: { type: "string" },
         websiteUrl: { type: "string" },
         email: { type: "string" },
+        aliases: { type: "array", items: { type: "string" }, maxItems: 20 },
         instagramUrl: { type: "string" },
         youtubeUrl: { type: "string" },
         xUrl: { type: "string" },

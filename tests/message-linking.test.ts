@@ -14,7 +14,9 @@ async function lead() {
 }
 async function message(email?: string, subject = 'Hello') {
   const db = await getDb(); const id = crypto.randomUUID(); messages.push(id);
-  const from = email ?? `person-${id}@link.test`; addresses.push(from);
+  // A distinct sender domain per message: linking two different leads to one business email domain
+  // is held for review under strict deduplication.
+  const from = email ?? `person-${id}@${id}.link.test`; addresses.push(from);
   await db.query(`INSERT INTO messages (id, direction, source, from_email, subject, body_text, received_at) VALUES ($1, 'inbound', 'imap', $2, $3, 'Fixture message text', '2026-01-05')`, [id, from, subject]); return id;
 }
 afterAll(async () => {
@@ -97,14 +99,25 @@ describe('append-only founder message linking', () => {
     await expect(decideMessageLink(m,{action:'link',prospectId:other},'fixture-founder')).rejects.toMatchObject({status:409,code:'ownership_conflict'});
   });
   it('refuses non-generic address ownership collisions with a 409', async () => {
-    const p = await lead(); const other = await lead(); const email = `unique-${crypto.randomUUID()}@link.test`;
+    const key = crypto.randomUUID(); const p = await lead(); const other = await lead(); const email = `unique-${key}@${key}.link.test`;
     await decideMessageLink(await message(email),{action:'link',prospectId:p},'fixture-founder');
     const m = await message(email);
     await expect(decideMessageLink(m,{action:'link',prospectId:other},'fixture-founder')).rejects.toMatchObject({status:409,code:'address_conflict'});
     expect((await getMessageLinkSuggestions(m)).currentProspectId).toBeNull();
   });
-  it('generic shared address needs explicit confirmation and never merges leads', async () => {
+  it('a role mailbox on one business domain is refused for a second lead even with confirmation', async () => {
+    // Founder rule (strict deduplication, migration 034): the old "generic address may be shared"
+    // allowance no longer lets two different leads own support@/info@ on one business domain.
     const p = await lead(); const other = await lead(); const email = `info@${crypto.randomUUID()}.link.test`;
+    await decideMessageLink(await message(email),{action:'link',prospectId:p},'fixture-founder');
+    const m = await message(email);
+    await expect(decideMessageLink(m,{action:'link',prospectId:other},'fixture-founder')).rejects.toMatchObject({status:409,code:'shared_address_confirmation'});
+    await expect(decideMessageLink(m,{action:'link',prospectId:other,confirmSharedAddress:true},'fixture-founder')).rejects.toMatchObject({status:409,code:'link_conflict'});
+    const db = await getDb(); expect((await db.query(`SELECT DISTINCT prospect_id FROM prospect_emails WHERE normalized_email = $1`,[email])).rows).toEqual([{prospect_id:p}]);
+    expect((await getMessageLinkSuggestions(m)).currentProspectId).toBeNull();
+  });
+  it('a free-mail role mailbox needs explicit confirmation and never merges leads', async () => {
+    const p = await lead(); const other = await lead(); const email = 'contact@tuta.com';
     await decideMessageLink(await message(email),{action:'link',prospectId:p},'fixture-founder');
     const m = await message(email);
     await expect(decideMessageLink(m,{action:'link',prospectId:other},'fixture-founder')).rejects.toMatchObject({status:409,code:'shared_address_confirmation'});

@@ -3,7 +3,7 @@ import { ASSISTANT_SKILL } from "./instructions";
 /** Tool/resource surfaces keep serving ASSISTANT_SKILL without download wrappers. */
 export const SKILL_NAME = "nomeriq-growth-portal";
 /** Bump when the shared skill changes materially. All platforms share this version. */
-export const SKILL_VERSION = "3.0";
+export const SKILL_VERSION = "3.1";
 
 export const SKILL_PLATFORMS = ["claude", "chatgpt", "gemini", "hermes"] as const;
 export type SkillPlatform = (typeof SKILL_PLATFORMS)[number];
@@ -23,7 +23,7 @@ export const SKILL_DESCRIPTION =
   "Nomeriq Growth is the shared sales database for Nomeriq, the white-label SaaS platform for trading-signal businesses. Use it through the leads-nomeriq MCP connector to read the current instructions, search and save verified trading-signal providers, check for duplicates and prepare drafts for founder review. It can read Product Truth and save evidence, but it can never approve, queue or send email, delete records or change settings. Read get_instructions first and follow it.";
 
 const NEUTRAL_DESCRIPTION =
-  "Use the configured Nomeriq Growth MCP connection to read current instructions, research trading-signal businesses and save drafts for founder review. Read get_instructions every session. Never approve, queue or send email, delete records or change settings.";
+  "Use for Nomeriq Growth lead research via MCP.";
 
 /** Only connection guidance differs; business rules always come from ASSISTANT_SKILL. */
 const CONNECTION_GUIDANCE: Record<SkillPlatform, string> = {

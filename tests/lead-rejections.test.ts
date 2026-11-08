@@ -74,7 +74,15 @@ it("a rejection retains address-wide protection across shared-address leads and 
   const first=await fixture("Not interested in integrations.");
   const second=await fixture("A different business using the same generic contact.");
   const typed=await fixture("Another separate business.");
-  const db=await getDb(); const shared=`info@${crypto.randomUUID()}.example.test`;
+  const db=await getDb();
+  // Founder rule (strict deduplication, migration 034): two different leads may no longer share a
+  // role mailbox on one business domain; the database refuses it for review instead of storing it.
+  const corporate=`info@${crypto.randomUUID()}.example.test`;
+  await db.query("UPDATE prospect_emails SET email=$2,normalized_email=$2 WHERE prospect_id=$1",[first.id,corporate]);
+  await expect(db.query("UPDATE prospect_emails SET email=$2,normalized_email=$2 WHERE prospect_id=$1",[second.id,corporate])).rejects.toMatchObject({code:"23505",constraint:"growth_identity_conflict"});
+  // A role mailbox on a free-mail host is the shared address that can still sit on two leads, so the
+  // address-wide rejection protection must still hold across them.
+  const shared="info@fastmail.com";
   for(const f of [first,second]) {
     await db.query("UPDATE prospect_emails SET email=$2,normalized_email=$2 WHERE prospect_id=$1",[f.id,shared]);
     await db.query("UPDATE drafts SET recipient_email=$2 WHERE id=$1",[f.firstContactDraftId,shared]);

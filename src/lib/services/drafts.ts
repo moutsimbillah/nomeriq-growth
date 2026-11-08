@@ -23,6 +23,7 @@ import { recordDraftSaved } from "./research";
 import { recordResearchUsage } from "./research-usage";
 import { mapDraft } from "./mappers";
 import { assertLeadOutreachAllowed } from "./lead-outreach-guard";
+import { assertNoDuplicateContact, lockSendReservations } from "./duplicate-contact";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -567,12 +568,7 @@ export async function saveDraft(input: {
   if (!isEmail(recipientEmail)) {
     throw new AppError("Add a valid recipient email address.");
   }
-  if (!(await recipientIsVerified(draft.prospectId, recipientEmail))) {
-    // The founder typed an address the research did not find. Keep it, as a founder-entered contact,
-    // rather than refusing the edit. AI-written drafts never reach here with a recipient of their own:
-    // the tool path always takes the prospect's confirmed address.
-    await recordFounderEnteredEmail(draft.prospectId, recipientEmail);
-  }
+  const storeFounderAddress = !(await recipientIsVerified(draft.prospectId, recipientEmail));
   const truth = await getProductTruth();
   const warnings = validateDraft({
     subject,
@@ -592,6 +588,12 @@ export async function saveDraft(input: {
   // Replacing a draft keeps the text it is replacing: draft_revisions is the version history, so a
   // second save leaves the earlier text retrievable rather than overwriting it into oblivion.
   await db.transaction(async (tx) => {
+    if (storeFounderAddress) {
+      // A new association must not attach another lead's contacted mailbox to this draft.
+      await lockSendReservations(tx, draft.prospectId);
+      await assertNoDuplicateContact({prospectId:draft.prospectId,recipient:recipientEmail,draftId:draft.id},tx);
+      await recordFounderEnteredEmail(draft.prospectId,recipientEmail,tx);
+    }
     await tx.query(
       `INSERT INTO draft_revisions
         (id, draft_id, subject, body, recipient_email, warnings, edited_by,
@@ -640,18 +642,21 @@ export async function approveDraft(
   if (draft.status === "sent") {
     throw new AppError("This draft has already been sent.", 409);
   }
-  if (!(await recipientIsVerified(draft.prospectId, draft.recipientEmail))) {
-    // Same rule as the edit path: approving a draft addressed to a founder-entered contact is allowed,
-    // and the address is recorded as founder-entered so the send gate agrees.
-    await recordFounderEnteredEmail(draft.prospectId, draft.recipientEmail);
-  }
+  const storeFounderAddress = !(await recipientIsVerified(draft.prospectId, draft.recipientEmail));
   const db = await getDb();
-  await db.query(
+  await db.transaction(async tx => {
+    if (storeFounderAddress) {
+      await lockSendReservations(tx,draft.prospectId);
+      await assertNoDuplicateContact({prospectId:draft.prospectId,recipient:draft.recipientEmail,draftId:draft.id},tx);
+      await recordFounderEnteredEmail(draft.prospectId,draft.recipientEmail,tx);
+    }
+    await tx.query(
     `UPDATE drafts SET status = 'approved', approved_at = now(), approved_by = $1,
       updated_at = now()
      WHERE id = $2 AND status IN ('draft')`,
     [userId, id],
-  );
+    );
+  });
   return (await getDraft(id))!;
 }
 

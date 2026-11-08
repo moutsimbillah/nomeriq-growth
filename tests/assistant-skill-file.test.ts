@@ -138,6 +138,7 @@ describe.each(platformFormats)("$platform / $format", ({ platform, format }) => 
       expect(fields.name).toMatch(/^[a-z0-9-]{1,64}$/);
       expect(fields.description.length).toBeGreaterThan(20);
       expect(fields.description.length).toBeLessThan(1024);
+      if (platform === "hermes") expect(fields.description.length).toBeLessThanOrEqual(60);
       // These fixed plain YAML scalars must not introduce mappings, comments or tags.
       expect(fields.description).not.toMatch(/: |[<>\n#]|^[!&*{}[\],]/);
     } else {

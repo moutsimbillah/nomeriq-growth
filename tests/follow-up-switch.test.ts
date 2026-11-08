@@ -28,7 +28,8 @@ async function seed() {
   );
   for (let index = 0; index < 4; index += 1) {
     const name = `Switch Lead ${index + 1}`;
-    const email = `switch${index + 1}@example.test`;
+    // A distinct business domain per lead: different leads may not share a business email domain.
+    const email = `switch${index + 1}@switch${index + 1}.example.test`;
     const prospect = await db.query<{ id: string }>(
       `INSERT INTO prospects (id, business_name, name_key, status, created_by_type, do_not_contact)
        VALUES (gen_random_uuid(), $1, $2, 'contacted', 'legacy', false) RETURNING id`,
@@ -37,8 +38,8 @@ async function seed() {
     leads.push(prospect.rows[0].id);
     await db.query(
       `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary)
-       VALUES (gen_random_uuid(), $1, $2, $2, 'https://example.test', 'official_website', true)`,
-      [prospect.rows[0].id, email],
+       VALUES (gen_random_uuid(), $1, $2, $2, $3, 'official_website', true)`,
+      [prospect.rows[0].id, email, `https://switch${index + 1}.example.test`],
     );
     // lead 1 sent most recently: the cap must take the newest, not the oldest
     const sentAt = new Date(Date.now() - (index + 10) * 86_400_000).toISOString();
@@ -141,10 +142,10 @@ describe("automatic follow-ups", () => {
     );
     const excludedId = prospect.rows[0].id;
     leads.push(excludedId);
-    const email = "switchexcluded@example.test";
+    const email = "switchexcluded@switch-excluded.example.test";
     await db.query(
       `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary)
-       VALUES (gen_random_uuid(), $1, $2, $2, 'https://example.test', 'official_website', true)`,
+       VALUES (gen_random_uuid(), $1, $2, $2, 'https://switch-excluded.example.test', 'official_website', true)`,
       [excludedId, email],
     );
     const sentAt = new Date(Date.now() - 12 * 86_400_000).toISOString();

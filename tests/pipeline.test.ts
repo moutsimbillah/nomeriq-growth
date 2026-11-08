@@ -30,7 +30,8 @@ async function lead(key: string, status: string, msgs: Msg[] = [], extra: { supp
   const id = crypto.randomUUID();
   ids.push(id);
   byKey[key] = id;
-  const email = `${key}@pipeline.example.test`;
+  // Mail on the lead's own business domain: different leads may not share a business email domain.
+  const email = `${key}@${key}.pipeline.example.test`;
   await db.query(
     `INSERT INTO prospects (id, business_name, name_key, domain_key, status, qualification_status, created_by_type,
        country, follower_count, sending_profile_id, next_action)
@@ -39,8 +40,8 @@ async function lead(key: string, status: string, msgs: Msg[] = [], extra: { supp
   );
   await db.query(
     `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary)
-     VALUES (gen_random_uuid(), $1, $2, $2, 'https://pipeline.example.test', 'official_website', true)`,
-    [id, email],
+     VALUES (gen_random_uuid(), $1, $2, $2, $3, 'official_website', true)`,
+    [id, email, `https://${key}.pipeline.example.test`],
   );
   if (extra.suppression) {
     await db.query(`INSERT INTO suppressions (id, normalized_email, email, reason, prospect_id) VALUES (gen_random_uuid(), $1, $1, $2, $3)`, [email, extra.suppression, id]);
@@ -115,7 +116,7 @@ beforeAll(async () => {
   await lead("bounce", "contacted", [{ dir: "out", days: 5, kind: "first_contact" }], { suppression: "bounce" });
   await lead("stale", "replied", [{ dir: "out", days: 30, kind: "first_contact" }, { dir: "in", days: 25 }, { dir: "out", days: 20 }]);
   await db.query(
-    `INSERT INTO email_bounces (account_id, normalized_email, kind, diagnostic, action) VALUES ($1, 'bounce@pipeline.example.test', 'permanent', 'pipeline-test', 'suppressed')`,
+    `INSERT INTO email_bounces (account_id, normalized_email, kind, diagnostic, action) VALUES ($1, 'bounce@bounce.pipeline.example.test', 'permanent', 'pipeline-test', 'suppressed')`,
     [accountId],
   );
 });

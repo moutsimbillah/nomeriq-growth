@@ -59,6 +59,16 @@ export interface DuplicateMatch {
   reasons: string[];
 }
 
+/**
+ * Internal-only resolver options; deliberately NOT part of the identity input, so no MCP/REST/user
+ * payload can reach them. `ignoreTarget` is the id of an EXISTING lead being written: matches that
+ * belong to that lead's own founder-linked duplicate family are not conflicts. New saves never pass
+ * it and keep full protection. Matches are always reported as their canonical (kept) lead.
+ */
+interface DuplicateCheckOptions {
+  ignoreTarget?: string;
+}
+
 export async function checkDuplicate(input: {
   businessName?: string | null;
   websiteUrl?: string | null;
@@ -69,7 +79,7 @@ export async function checkDuplicate(input: {
   xUrl?: string | null;
   telegramUrl?: string | null;
   socialAccounts?: SocialIdentity[];
-}, client?: DbClient): Promise<DuplicateMatch[]> {
+}, client?: DbClient, options: DuplicateCheckOptions = {}): Promise<DuplicateMatch[]> {
   const db = client ?? await getDb();
   const domainKeys = [businessDomain(input.websiteUrl)].filter(
     (value): value is string => Boolean(value),
@@ -77,112 +87,22 @@ export async function checkDuplicate(input: {
   const allEmails = (input.emails ?? [])
     .filter((value) => isEmail(value))
     .map(normalizeEmail);
-  // info@ / support@ can be shared by unrelated businesses. Match those only
-  // when another strong identity (domain, name, social) already matches.
-  const emails = allEmails.filter((value) => !isGenericBusinessEmail(value));
+
   const aliasKeys = [input.businessName, ...(input.aliases ?? [])]
     .filter((value): value is string => Boolean(value?.trim()))
     .map(normalizeName)
     .filter(Boolean);
 
-  const found = new Map<string, DuplicateMatch>();
-
-  const addRows = (rows: any[], reason: string) => {
-    for (const row of rows) {
-      const existing = found.get(row.id);
-      if (existing) {
-        if (!existing.reasons.includes(reason)) existing.reasons.push(reason);
-      } else {
-        found.set(row.id, { prospect: mapProspect(row), reasons: [reason] });
-      }
-    }
-  };
-
-  if (domainKeys.length) {
-    const rows = await db.query<any>(
-      `${PROSPECT_SELECT}
-       WHERE p.domain_key = ANY($1::text[])
-       LIMIT 5`,
-      [domainKeys],
-    );
-    addRows(rows.rows, "official website domain");
-  }
-
-  if (emails.length) {
-    const rows = await db.query<any>(
-      `${PROSPECT_SELECT}
-       WHERE EXISTS (
-           SELECT 1 FROM prospect_emails pe
-           WHERE pe.prospect_id = p.id
-             AND pe.normalized_email = ANY($1::text[])
-         )
-       LIMIT 5`,
-      [emails],
-    );
-    addRows(rows.rows, "contact email");
-  }
-
-  if (aliasKeys.length) {
-    const rows = await db.query<any>(
-      `${PROSPECT_SELECT}
-       WHERE p.name_key = ANY($1::text[]) OR EXISTS (
-           SELECT 1 FROM prospect_aliases pa
-           WHERE pa.prospect_id = p.id
-             AND pa.alias_key = ANY($1::text[])
-         )
-       LIMIT 5`,
-      [aliasKeys],
-    );
-    addRows(rows.rows, "business name or alias");
-  }
-
   const accounts = identitySocialKeys(input);
-  const socials = { instagram_key: accounts.instagram, youtube_key: accounts.youtube, x_key: accounts.x, telegram_key: accounts.telegram };
-  const socialLabels: Record<string, string> = {
-    instagram_key: "Instagram handle",
-    youtube_key: "YouTube channel",
-    x_key: "X handle",
-    telegram_key: "Telegram handle",
-  };
-  const activeSocials = Object.entries(socials).filter(([, values]) => values.length);
-  if (activeSocials.length) {
-    const rows = await db.query<any>(
-      `${PROSPECT_SELECT}
-       WHERE (
-         p.instagram_key = ANY($1::text[]) OR
-         p.youtube_key = ANY($2::text[]) OR
-         p.x_key = ANY($3::text[]) OR
-         p.telegram_key = ANY($4::text[]) OR
-         EXISTS (SELECT 1 FROM prospect_audience_observations a WHERE a.prospect_id=p.id AND (
-           (a.platform='instagram' AND a.account_key=ANY($1::text[])) OR
-           (a.platform='youtube' AND a.account_key=ANY($2::text[])) OR
-           (a.platform='telegram' AND a.account_key=ANY($4::text[]))))
-       )
-       LIMIT 5`,
-      [
-        accounts.instagram,
-        accounts.youtube,
-        accounts.x,
-        accounts.telegram,
-      ],
-    );
-    for (const row of rows.rows) {
-      const reasons = activeSocials
-        .filter(([column, values]) => row[column] && values.includes(row[column]))
-        .map(([column]) => socialLabels[column]);
-      addRows([row], reasons[0] ?? "social identity");
-      const match = found.get(row.id);
-      if (match) {
-        for (const reason of reasons) {
-          if (!match.reasons.includes(reason)) match.reasons.push(reason);
-        }
-      }
-    }
-  }
-
   const profiles = [...new Set([input.websiteUrl,input.instagramUrl,input.youtubeUrl,input.telegramUrl,input.xUrl,...(input.socialAccounts??[]).map(a=>a.url)].map(sharedProfileKey).filter((v):v is string=>Boolean(v)))];
-  if (profiles.length) addRows((await db.query<any>(`${PROSPECT_SELECT} WHERE lower(regexp_replace(regexp_replace(split_part(p.website_url,'?',1),'^https?://(www\\.)?','','i'),'/$',''))=ANY($1::text[]) LIMIT 5`, [profiles])).rows, "official shared-host profile");
-  return [...found.values()];
+  // The exact same resolver runs in the DB write guards. One round trip,
+  // no AI/network lookup, and no per-key LIMIT that could hide conflicting owners.
+  const rows = await db.query<any>(`${PROSPECT_SELECT.replace("SELECT p.*,", "SELECT p.*, identity_match.reasons AS identity_reasons,")}
+    JOIN growth_find_identity_matches($1::text[],$2::text[],$3::text[],$4::text[],$5::text[],$6::text[],$7::text[],$8::text[],$9::uuid) identity_match
+      ON identity_match.prospect_id=p.id
+    ORDER BY p.created_at, p.id`,
+    [domainKeys,allEmails,aliasKeys,accounts.instagram,accounts.youtube,accounts.x,accounts.telegram,profiles,options.ignoreTarget ?? null]);
+  return rows.rows.map(row => ({ prospect: mapProspect(row), reasons: row.identity_reasons }));
 }
 
 class ConcurrentProspectDuplicate extends Error {}
@@ -222,9 +142,25 @@ export interface SaveProspectInput extends LeadIntake {
 export interface SaveProspectResult {
   created: boolean;
   duplicate: boolean;
+  resolution?: "created" | "already_exists" | "review_required";
+  matches?: { prospectId: string; businessName: string; matchedOn: string[] }[];
   prospect: ProspectSummary | ProspectDetail;
   matchedOn?: string[];
   leadModel?: LeadModel;
+}
+
+export function duplicateResolution(matches: DuplicateMatch[]): "clear" | "already_exists" | "review_required" {
+  if (!matches.length) return "clear";
+  return matches.length !== 1 || matches[0].reasons.every(reason => reason === "business email domain" || reason === "business name or alias") ? "review_required" : "already_exists";
+}
+
+function duplicateResult(matches: DuplicateMatch[], prospect?: ProspectDetail): SaveProspectResult {
+  return {
+    created: false, duplicate: true, resolution: duplicateResolution(matches) as "already_exists" | "review_required",
+    prospect: prospect ?? matches[0].prospect,
+    matchedOn: [...new Set(matches.flatMap(match => match.reasons))],
+    matches: matches.map(match => ({ prospectId: match.prospect.id, businessName: match.prospect.businessName, matchedOn: match.reasons })),
+  };
 }
 
 function httpUrl(value: string | null | undefined, field: string): string {
@@ -327,12 +263,7 @@ export async function saveProspect(
       });
     }
     const existing = await getProspect(duplicate[0].prospect.id);
-    return {
-      created: false,
-      duplicate: true,
-      prospect: existing ?? duplicate[0].prospect,
-      matchedOn: duplicate[0].reasons,
-    };
+    return duplicateResult(duplicate, existing ?? undefined);
   }
 
   const db = await getDb();
@@ -544,12 +475,7 @@ export async function saveProspect(
             actorType: input.actorType ?? "founder",
           });
         }
-        return {
-          created: false,
-          duplicate: true,
-          prospect: afterRace[0].prospect,
-          matchedOn: afterRace[0].reasons,
-        };
+        return duplicateResult(afterRace);
       }
       throw new AppError(
         "A prospect with one of these identities already exists. Search Leads before retrying.",
@@ -565,7 +491,7 @@ export async function saveProspect(
   }
   const created = await getProspect(id);
   if (!created) throw new AppError("Prospect could not be loaded.", 500);
-  return { created: true, duplicate: false, prospect: created, ...(leadModel ? {leadModel} : {}) };
+  return { created: true, duplicate: false, resolution: "created", prospect: created, ...(leadModel ? {leadModel} : {}) };
 }
 
 async function recordDuplicateRejection(
@@ -1063,6 +989,8 @@ export async function updateProspect(
     input.xUrl !== undefined ||
     input.telegramUrl !== undefined
   ) {
+    // An identity edit to this existing lead: duplicates the founder already linked to it are its
+    // own family, never a conflict. Every other lead (and the exact-address unique index) still is.
     const duplicate = await checkDuplicate({
       businessName: input.businessName ?? existing.businessName,
       websiteUrl:
@@ -1079,7 +1007,7 @@ export async function updateProspect(
         input.telegramUrl === undefined
           ? existing.telegramUrl
           : input.telegramUrl,
-    });
+    }, undefined, { ignoreTarget: id });
     if (duplicate.some((match) => match.prospect.id !== id)) {
       throw new AppError(
         "Those changes match another prospect already in Growth.",
@@ -1143,7 +1071,7 @@ export async function updateProspect(
     await db.transaction(async (tx) => {
       if (["businessName","websiteUrl","instagramUrl","youtubeUrl","xUrl","telegramUrl"].some(key => key in input)) {
         await tx.query("LOCK TABLE prospects IN SHARE ROW EXCLUSIVE MODE");
-        const raced = await checkDuplicate({ businessName: input.businessName ?? existing.businessName, websiteUrl: input.websiteUrl === undefined ? existing.websiteUrl : input.websiteUrl, aliases: existing.aliases, instagramUrl: input.instagramUrl === undefined ? existing.instagramUrl : input.instagramUrl, youtubeUrl: input.youtubeUrl === undefined ? existing.youtubeUrl : input.youtubeUrl, xUrl: input.xUrl === undefined ? existing.xUrl : input.xUrl, telegramUrl: input.telegramUrl === undefined ? existing.telegramUrl : input.telegramUrl }, tx);
+        const raced = await checkDuplicate({ businessName: input.businessName ?? existing.businessName, websiteUrl: input.websiteUrl === undefined ? existing.websiteUrl : input.websiteUrl, aliases: existing.aliases, instagramUrl: input.instagramUrl === undefined ? existing.instagramUrl : input.instagramUrl, youtubeUrl: input.youtubeUrl === undefined ? existing.youtubeUrl : input.youtubeUrl, xUrl: input.xUrl === undefined ? existing.xUrl : input.xUrl, telegramUrl: input.telegramUrl === undefined ? existing.telegramUrl : input.telegramUrl }, tx, { ignoreTarget: id });
         if (raced.some(match => match.prospect.id !== id)) throw new AppError("Those changes match another existing business.", 409, "duplicate");
       }
       await tx.query(
@@ -1289,25 +1217,37 @@ export async function archiveProspect(id: string, userId: string): Promise<void>
  *
  * It is stored as a founder-entered contact so the send gate allows it, and so the lead still shows
  * which addresses came from a source and which came from the founder. A duplicate address for the
- * same lead is a no-op; an address already on another lead is left alone (the global business-email
- * unique would refuse it, and that refusal is correct).
+ * same lead is a no-op. A conflicting identity is an explicit refusal, not a silently swallowed
+ * write failure. Send reservations supply their transaction client so association and reservation
+ * either both commit or both roll back.
  */
 export async function recordFounderEnteredEmail(
   prospectId: string,
   email: string,
+  client?: DbClient,
 ): Promise<void> {
   const normalized = normalizeEmail(email);
   if (!normalized) return;
-  const db = await getDb();
-  await db
-    .query(
+  const db = client ?? await getDb();
+  try {
+    const inserted = await db.query(
       `INSERT INTO prospect_emails
          (id, prospect_id, email, normalized_email, source_url, source_type, is_primary, verified_at)
        VALUES (gen_random_uuid(), $1, $2, $3, 'Entered by the founder in the portal.', 'founder_entered', false, now())
-       ON CONFLICT DO NOTHING`,
+       ON CONFLICT DO NOTHING RETURNING id`,
       [prospectId, normalized, normalized],
-    )
-    .catch(() => undefined);
+    );
+    if (!inserted.rows.length) {
+      // DO NOTHING covers two cases. The same lead already holding the address is a no-op; any other
+      // skip means the exact address belongs to another lead (a linked duplicate included, which the
+      // identity guard exempts by family). It stays with that lead: refuse instead of a silent no-op.
+      const own = await db.query(`SELECT 1 FROM prospect_emails WHERE prospect_id = $1 AND normalized_email = $2 LIMIT 1`, [prospectId, normalized]);
+      if (!own.rows.length) throw new AppError("This exact address is already recorded on another lead, including a lead linked as a duplicate. It stays with that lead; nothing was moved.",409,"duplicate_contact");
+    }
+  } catch (error) {
+    if (isUniqueViolation(error)) throw new AppError("This contact identity overlaps another recorded lead. Review the duplicate before adding the address.",409,"duplicate_contact");
+    throw error;
+  }
 }
 
 export async function getProspectEmails(prospectId: string): Promise<string[]> {

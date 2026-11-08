@@ -41,7 +41,9 @@ async function newAccount(signature: string): Promise<string> {
 async function newProspectWithDraft(body: string): Promise<{ prospectId: string; draftId: string }> {
   const db = await getDb();
   seq += 1;
-  const recipient = `recipient-${seq}-${Date.now()}@signature.example`;
+  // A distinct business domain per fixture prospect: two different leads may not share one.
+  const domain = `signature-${seq}-${Date.now()}.example`;
+  const recipient = `recipient@${domain}`;
   const prospect = await db.query<{ id: string }>(
     `INSERT INTO prospects (id, business_name, name_key, created_by_type)
      VALUES (gen_random_uuid(), $1, $2, 'founder')
@@ -52,8 +54,8 @@ async function newProspectWithDraft(body: string): Promise<{ prospectId: string;
   created.prospects.push(prospectId);
   await db.query(
     `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type)
-     VALUES (gen_random_uuid(), $1, $2, $2, 'https://signature.example', 'official_website')`,
-    [prospectId, recipient],
+     VALUES (gen_random_uuid(), $1, $2, $2, $3, 'official_website')`,
+    [prospectId, recipient, `https://${domain}`],
   );
   const draft = await db.query<{ id: string }>(
     `INSERT INTO drafts (id, prospect_id, kind, sequence, status, subject, body, recipient_email,

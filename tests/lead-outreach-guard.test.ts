@@ -33,11 +33,13 @@ afterAll(async () => {
 async function fixture(tier: "category_b" | "excluded" | null, queued = false) {
   const db = await getDb();
   const id = crypto.randomUUID(); leads.push(id);
-  const email = `${id}@example.test`;
+  // Its own business domain: different leads sharing one business email domain are held for review.
+  const domain = `${id}.example.test`;
+  const email = `${id}@${domain}`;
   await db.query(`INSERT INTO prospects (id,business_name,name_key,categories,qualification_status,status)
     VALUES ($1,$2,$2,'["forex"]','verified','verified')`, [id, `tier-guard-${id}`]);
   await db.query(`INSERT INTO prospect_emails (id,prospect_id,email,normalized_email,source_url)
-    VALUES ($1,$2,$3,$3,'https://example.test/contact')`, [crypto.randomUUID(),id,email]);
+    VALUES ($1,$2,$3,$3,$4)`, [crypto.randomUUID(),id,email,`https://${domain}/contact`]);
   if (tier) await db.query(`INSERT INTO prospect_assessments
     (id,prospect_id,rules_version,assessed_at,source_kind,eligibility,tier,exclusion_reason,provenance_key)
     VALUES ($1,$2,'fixture',now(),'research',$3,$4,$5,$6)`,
@@ -49,7 +51,7 @@ async function fixture(tier: "category_b" | "excluded" | null, queued = false) {
   await db.query(`INSERT INTO conversations (id,prospect_id,subject) VALUES ($1,$2,'Existing thread')`, [conversationId,id]);
   if (queued) await db.query(`INSERT INTO outbound_sends (id,prospect_id,draft_id,idempotency_key,status)
     VALUES ($1,$2,$3,$4,'queued')`, [crypto.randomUUID(),id,draftId,crypto.randomUUID()]);
-  return { id,email,draftId,conversationId };
+  return { id,email,domain,draftId,conversationId };
 }
 
 it("Category B is refused at the final send gate even for old approved and queued drafts", async () => {
@@ -61,7 +63,7 @@ it("Category B is refused at the final send gate even for old approved and queue
 });
 it("a typed founder recipient cannot create an address to bypass Category B", async () => {
   const f = await fixture("category_b"); const db = await getDb();
-  const typed = `${crypto.randomUUID()}@example.test`;
+  const typed = `${crypto.randomUUID()}@${f.domain}`;
   await db.query("UPDATE drafts SET recipient_email=$2 WHERE id=$1", [f.draftId, typed]);
   await expect(sendDraft({ actorUserId: crypto.randomUUID(), draftId: f.draftId, allowFounderRecipient: true })).rejects.toMatchObject({ code: "alternative_contact_only" });
   expect((await db.query("SELECT id FROM prospect_emails WHERE normalized_email=$1", [typed])).rows).toHaveLength(0);

@@ -11,9 +11,10 @@ async function fixture() {
   const db = await getDb(); const id = crypto.randomUUID(); leads.push(id);
   await db.query(`INSERT INTO prospects (id, business_name, name_key, domain_key, created_by_type) VALUES ($1::uuid, 'Policy fixture', $1::text, $1::text, 'founder')`, [id]);
   const emailIds = [crypto.randomUUID(), crypto.randomUUID()];
-  const emails = [`first-${id}@policy.test`, `latest-${id}@policy.test`]; addresses.push(...emails);
+  // A distinct business domain per fixture lead: different leads may not share a business email domain.
+  const emails = [`first-${id}@${id}.policy.test`, `latest-${id}@${id}.policy.test`]; addresses.push(...emails);
   for (let n = 0; n < 2; n++) await db.query(`INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary)
-    VALUES ($1, $2, $3, $3, 'https://policy.test', 'official_website', $4)`, [emailIds[n], id, emails[n], n === 0]);
+    VALUES ($1, $2, $3, $3, $5, 'official_website', $4)`, [emailIds[n], id, emails[n], n === 0, `https://${id}.policy.test`]);
   const conversationId = crypto.randomUUID();
   await db.query(`INSERT INTO conversations (id, prospect_id, subject) VALUES ($1, $2, 'Policy')`, [conversationId, id]);
   await db.query(`INSERT INTO messages (id, conversation_id, prospect_id, direction, from_email, to_emails, sent_at)

@@ -24,7 +24,8 @@ async function lead(spec: {
   const db = await getDb();
   const id = crypto.randomUUID();
   ids.push(id);
-  const email = `${spec.key}@inbox.example.test`;
+  // Mail on the lead's own business domain: different leads may not share a business email domain.
+  const email = `${spec.key}@${spec.key}.inbox.example.test`;
   await db.query(
     `INSERT INTO prospects (id, business_name, name_key, domain_key, status, qualification_status, created_by_type, source_agent, archived_at, do_not_contact)
      VALUES ($1, $2, $3, $4, $5, $6, 'founder', $7, $8, $9)`,
@@ -33,8 +34,8 @@ async function lead(spec: {
   );
   await db.query(
     `INSERT INTO prospect_emails (id, prospect_id, email, normalized_email, source_url, source_type, is_primary)
-     VALUES (gen_random_uuid(), $1, $2, $2, 'https://inbox.example.test', 'official_website', true)`,
-    [id, email],
+     VALUES (gen_random_uuid(), $1, $2, $2, $3, 'official_website', true)`,
+    [id, email, `https://${spec.key}.inbox.example.test`],
   );
   if (spec.suppression) {
     await db.query(`INSERT INTO suppressions (id, normalized_email, email, reason, prospect_id) VALUES (gen_random_uuid(), $1, $1, $2, $3)`, [email, spec.suppression, id]);

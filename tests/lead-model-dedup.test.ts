@@ -26,10 +26,11 @@ it("Instagram and Linktree domains never collapse unrelated businesses, while th
  const link=await seed({websiteUrl:`https://linktr.ee/${a}`});expect((await checkDuplicate({websiteUrl:`https://linktr.ee/${a}/?source=fixture`})).some(m=>m.prospect.id===link.prospect.id)).toBe(true);
  expect((await seed({websiteUrl:`https://linktr.ee/${b}`})).created).toBe(true);
 });
-it("a shared generic address alone does not merge businesses; a non-generic address does",async()=>{
+it("a business email domain blocks a second save for review, without merging records",async()=>{
  const key=crypto.randomUUID();const generic=`info@${key}.example.test`,source=`https://${key}.example.test/contact`;
- await seed({email:generic,emailSourceUrl:source});expect(await checkDuplicate({emails:[generic]})).toHaveLength(0);expect((await seed({email:generic,emailSourceUrl:source})).created).toBe(true);
- const specific=`trader@${key}.example.test`;const f=await seed({email:specific,emailSourceUrl:source});expect((await checkDuplicate({emails:[specific]})).some(m=>m.prospect.id===f.prospect.id)).toBe(true);
+ const first=await seed({email:generic,emailSourceUrl:source});expect(await checkDuplicate({emails:[generic]})).toHaveLength(1);
+ const second=await seed({email:generic,emailSourceUrl:source});expect(second).toMatchObject({created:false,resolution:"review_required"});expect(second.prospect.id).toBe(first.prospect.id);
+ const specific=`trader@other-${key}.example.test`;const f=await seed({email:specific,emailSourceUrl:source});expect((await checkDuplicate({emails:[specific]})).some(m=>m.prospect.id===f.prospect.id)).toBe(true);
 });
 it("multiple official accounts participate in duplicate checks and cannot be claimed by another business",async()=>{
  const key=crypto.randomUUID();const f=await seed({websiteUrl:`https://${key}.example.test`});const url=`https://instagram.com/secondary_${key}`;

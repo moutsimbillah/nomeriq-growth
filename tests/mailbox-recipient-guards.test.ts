@@ -20,13 +20,16 @@ const actor = { actorType: "claude" as const, sourceAgent: "claude" as const, so
 
 async function lead(opts: { contacted?: boolean } = {}) {
   const id = crypto.randomUUID(); const conversationId = crypto.randomUUID();
-  const primary = `primary-${id}@guards.example`; const alt = `alt-${id}@guards.example`;
+  // One business domain per fixture business: strict deduplication holds two different leads that
+  // share a business email domain for review, and the send guard refuses a domain another lead owns.
+  const domain = `guards-${id}.example`;
+  const primary = `primary-${id}@${domain}`; const alt = `alt-${id}@${domain}`;
   leads.push(id);
   await db.query(`INSERT INTO prospects (id,business_name,name_key,status,created_by_type)
     VALUES ($1,'Recipient guard fixture',$2,$3,'legacy')`, [id, `${marker}-${id}`, opts.contacted === false ? "verified" : "contacted"]);
   await db.query(`INSERT INTO prospect_emails (id,prospect_id,email,normalized_email,source_url,source_type,is_primary,created_at)
-    VALUES (gen_random_uuid(),$1,$2,$2,'https://guards.example','official_website',true,now()-interval '2 days'),
-           (gen_random_uuid(),$1,$3,$3,'https://guards.example/team','official_website',false,now()-interval '1 day')`, [id, primary, alt]);
+    VALUES (gen_random_uuid(),$1,$2,$2,$4,'official_website',true,now()-interval '2 days'),
+           (gen_random_uuid(),$1,$3,$3,$4 || '/team','official_website',false,now()-interval '1 day')`, [id, primary, alt, `https://${domain}`]);
   if (opts.contacted !== false) {
     await db.query(`INSERT INTO conversations (id,prospect_id,subject,last_outbound_at) VALUES ($1,$2,'Original',$3)`, [conversationId, id, daysAgo(20)]);
     await db.query(`INSERT INTO drafts (id,prospect_id,kind,sequence,status,subject,body,recipient_email,created_by_type,sent_at,created_at)
@@ -35,7 +38,7 @@ async function lead(opts: { contacted?: boolean } = {}) {
       VALUES (gen_random_uuid(),$1,$2,'outbound','smtp','founder@nomeriq.example',$3::jsonb,'Original','Original',$4,'accepted')`,
       [id, conversationId, JSON.stringify([primary]), daysAgo(20)]);
   }
-  return { id, conversationId, primary, alt };
+  return { id, conversationId, primary, alt, domain };
 }
 async function suppress(email: string, reason: string, prospectId: string | null = null) {
   const id = crypto.randomUUID(); suppressions.push(id);
@@ -97,7 +100,7 @@ describe("whole-lead recipient policy at send", () => {
   it("an unsubscribe on ANY linked alias refuses a newly typed founder address and records nothing", async () => {
     const l = await lead({ contacted: false });
     await suppress(l.alt, "unsubscribe");
-    const typed = `typed-${l.id}@guards.example`;
+    const typed = `typed-${l.id}@${l.domain}`;
     const draftId = await draft(l.id, typed);
     expect(await code(() => sendDraft({ draftId, accountId, actorUserId: userId, allowFounderRecipient: true }))).toBe("suppressed");
     expect((await db.query(`SELECT 1 FROM prospect_emails WHERE prospect_id=$1 AND normalized_email=$2`, [l.id, typed])).rows).toHaveLength(0);
@@ -177,7 +180,7 @@ describe("follow-up candidates use the recipient policy", () => {
   it("a DSN (deliveryReport) is not a reply and does not stop the alternate follow-up", async () => {
     const l = await lead();
     await suppress(l.primary, "bounce");
-    await inbound(l.conversationId, "mailer-daemon@guards.example", daysAgo(19), { deliveryReport: true }, "Undeliverable");
+    await inbound(l.conversationId, `mailer-daemon@${l.domain}`, daysAgo(19), { deliveryReport: true }, "Undeliverable");
     await inbound(l.conversationId, l.primary, daysAgo(18), { autoReply: true }, "Out of office");
     expect((await save(l.id)).saved).toBe(1);
   });
@@ -198,7 +201,7 @@ describe("follow-up candidates use the recipient policy", () => {
   });
   it("an undated inbound still fails closed", async () => {
     const l = await lead();
-    await db.query(`INSERT INTO messages (id,conversation_id,direction,source,from_email) VALUES (gen_random_uuid(),$1,'inbound','imap','x@guards.example')`, [l.conversationId]);
+    await db.query(`INSERT INTO messages (id,conversation_id,direction,source,from_email) VALUES (gen_random_uuid(),$1,'inbound','imap',$2)`, [l.conversationId, `x@${l.domain}`]);
     expect((await save(l.id)).refused).toBe(1);
   });
   it("a follow-up send is refused at the send gate after any real reply, even an older one", async () => {

@@ -28,7 +28,8 @@ async function lead() {
 }
 async function address(id: string, key: string, reason?: string) {
   const db = await getDb(); const eid = crypto.randomUUID();
-  const email = `${key}-${id}@mailbox-folders.example.test`;
+  // Mail on the lead's own business domain: different leads may not share a business email domain.
+  const email = `${key}-${id}@${id}.mailbox-folders.example.test`;
   await db.query(`INSERT INTO prospect_emails (id,prospect_id,email,normalized_email,source_type,source_url,is_primary)
     VALUES ($1,$2,$3,$3,'official_website','https://example.test', $4)`, [eid,id,email,key === 'primary']);
   if (reason) await db.query(`INSERT INTO suppressions (id, prospect_id,email,normalized_email,reason)
