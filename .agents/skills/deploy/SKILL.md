@@ -63,6 +63,17 @@ the checkout:
 ssh host 'sudo -n bash /home/growth/deploy/deploy.sh prepare'
 ```
 
+`prepare` dumps, then runs `checkout schema-only`, which **refuses with exit 7**
+("REFUSING: prepare requires unchanged dependencies") whenever `package.json` or
+`package-lock.json` differs between the current HEAD and `origin/master`
+(`scripts/deploy.sh:108-111`). A release that adds an npm script line therefore cannot use
+`prepare`, and the refusal happens after the dump — safe, but the deploy cannot finish. For
+that change shape use the step set `docs/DEPLOYMENT.md` names as separately callable —
+`dump`, then `build`, then `restart` — where `build()` calls `checkout` with no argument
+(`scripts/deploy.sh:134-135`) so the dependency guard does not apply. Read the change's own
+diff (`git diff <live-sha>..<candidate> -- package.json package-lock.json`) before choosing
+the step set, and state in the review packet which one you chose and why.
+
 It prints the dump path, byte size, mode and table-data count, and hard-fails below 50
 entries. Expect about 106 entries and 8.0 MB at roughly 580 leads. Listing the dump's table
 data with the backup-restore tool is what this runbook used to do, but the agent deny list
@@ -96,7 +107,7 @@ record it with `ON CONFLICT DO NOTHING`. Never record on faith.
 
 ```
 git push origin master
-ssh host 'sudo -n bash /home/growth/deploy/deploy.sh prepare'
+ssh host 'sudo -n bash /home/growth/deploy/deploy.sh prepare'   # OR: dump -> build -> restart
 ssh host 'sudo -n bash /home/growth/deploy/deploy.sh build'
 ssh host 'sudo -n bash /home/growth/deploy/deploy.sh restart'   # FOUNDER APPROVAL, ASKED FIRST
 ```
