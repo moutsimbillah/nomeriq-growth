@@ -56,12 +56,20 @@ Report the real numbers. A partial run is not a gate.
 
 ## 2. Verified backup FIRST
 
-A deploy without a fresh dump is not a deploy.
+A deploy without a fresh dump is not a deploy. `deploy.sh prepare` makes the dump and moves
+the checkout:
 
-1. Dump the live database into `/var/backups/growth` and print the path and byte size.
-2. `python3 /home/growth/app/scripts/pgx.py pg_restore --list <dump> | grep -c "TABLE DATA"` must count real table data —
-   the previous deploy's dump was 7,490,180 bytes with 97 data entries.
-3. Record the byte size in the report. A dump that is empty or unreadable stops the deploy.
+```
+ssh host 'sudo -n bash /home/growth/deploy/deploy.sh prepare'
+```
+
+It prints the dump path, byte size, mode and table-data count, and hard-fails below 50
+entries. Expect about 106 entries and 8.0 MB at roughly 580 leads. `pg_restore --list` is
+the count this runbook used to do, but the agent deny list covers `*pg_restore*`, so that
+command is refused and must NOT be reworded, scripted or routed around. Reviewed alternative,
+accepted by independent review: rely on the script's own count (it fails closed) **plus** an
+independent `sudo -n stat -c "%s %a" <dump>` that must match the script's size and show mode
+exactly 600. A dump that is empty, mis-sized or not mode 600 stops the deploy.
 
 ## 3. Assert the migration target BEFORE anything is applied
 
@@ -87,14 +95,21 @@ record it with `ON CONFLICT DO NOTHING`. Never record on faith.
 
 ```
 git push origin master
-ssh host 'sudo -n -u growth git -C /home/growth/app fetch --all --prune'
-ssh host 'sudo -n -u growth git -C /home/growth/app reset --hard origin/master'
-ssh host 'sudo -n -u growth bash -c "cd /home/growth/app && npm ci && npm run build"'
-ssh host 'sudo -n systemctl restart growth.service'      # FOUNDER APPROVAL
+ssh host 'sudo -n bash /home/growth/deploy/deploy.sh prepare'
+ssh host 'sudo -n bash /home/growth/deploy/deploy.sh build'
+ssh host 'sudo -n bash /home/growth/deploy/deploy.sh restart'   # FOUNDER APPROVAL, ASKED FIRST
 ```
-The deploy key on the server is **read-only**; the push happens from this PC.
-`systemctl restart growth.service` is a founder-approval action — the runbook does not
-authorise it on its own.
+
+`prepare` dumps the database and checks out `origin/master`; `build` produces the new
+`.next` and is the point of no return (it replaces the build under the running process);
+`restart` swaps the process over. The server's deploy script hash must equal the hash
+`docs/DEPLOYMENT.md` records as current and founder-approved, checked read-only before
+anything runs. The deploy key on the server is **read-only**; the push happens from this PC.
+
+**Ask for the restart approval BEFORE the first live write, in the same turn as the deploy
+starts.** `build` is the point of no return, so a "no" asked at the restart step leaves live
+half-changed with no reviewed undo. Record the founder's own words in the review packet as a
+gate ahead of the push. A yes given for an earlier change does not carry over to a new change.
 
 ## 6. Verify after deploying
 
@@ -104,8 +119,16 @@ authorise it on its own.
 - Counts **unchanged** except where the change intended otherwise: report
   leads/verified/drafts/messages before and after.
 - `systemctl is-active growth.service` = `active`; all four timers enabled+active.
-- `journalctl -u growth.service -p err --since "-10 min"` is empty.
+- `journalctl -u growth.service -p err --since "<restart time>"` is empty, and a fixed
+  window (10 minutes) after the restart holds zero `timeout exceeded when trying to connect`
+  lines, read in the background so the wait is not idle polling.
 - Update `.agents/notes/current-task.md` in the same pass.
+- Never sign in to verify, and never time a route behind the login wall.
+
+**The deploy commands raise an on-screen approval prompt** (the backup/`prepare` one is the
+blocker). Tell the founder to be at the screen and press Approve; a chat "deploy karo" is not
+that prompt. If no one answers within five minutes the command does not run: stop and report,
+never re-run it hoping for a different result, and never rephrase it to dodge the prompt.
 
 ## 7. Failure
 
