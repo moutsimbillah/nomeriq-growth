@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import type { NextConfig } from "next";
 
 const isDevelopment = process.env.NODE_ENV !== "production";
@@ -5,6 +6,26 @@ const usesHttps = (process.env.APP_URL || "").startsWith("https://");
 const scriptPolicy = isDevelopment
   ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
   : "script-src 'self' 'unsafe-inline'";
+
+/**
+ * Build identity, resolved once when this config is loaded — i.e. at `next build` time on the
+ * server. Inlined via `env` below so the compiled bundle carries the commit it was built from,
+ * which is what /api/health reports. `git rev-parse HEAD` on the server cannot answer this: a
+ * checkout that was never built is indistinguishable from a deployed one until you ask the
+ * running bundle. Falls back to "unknown" so a build without git still succeeds.
+ */
+function gitValue(command: string): string {
+  try {
+    return execSync(command, { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+const buildCommit = gitValue("git rev-parse --short HEAD") || "unknown";
+const buildTime = new Date().toISOString();
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -34,6 +55,13 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  // Read by src/lib/build-info.ts through process.env at request time; these two values are
+  // substituted into the server bundle at build time, which is what makes them describe the
+  // running build rather than the working tree.
+  env: {
+    BUILD_COMMIT: buildCommit,
+    BUILD_TIME: buildTime,
+  },
   serverExternalPackages: [
     "@electric-sql/pglite",
     "imapflow",
