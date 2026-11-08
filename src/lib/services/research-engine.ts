@@ -34,7 +34,7 @@ import {
   DEEPSEEK_WORKER_ID,
 } from "@/lib/services/research-runs";
 import { planResearchQueries } from "@/lib/services/research-queries";
-import { verifyCandidate } from "@/lib/deepseek/verify-candidate";
+import { publicUrlRefusal, verifyCandidate } from "@/lib/deepseek/verify-candidate";
 import type { VerifiedCandidate } from "@/lib/deepseek/verify-candidate";
 import { resolveLeadResearch } from "@/lib/services/research-routing";
 import type { ResearchProvider } from "@/lib/deepseek/research-provider";
@@ -515,6 +515,15 @@ async function discoverMore(input: {
 
     const candidates = search.results
       .filter((entry) => entry.url && domainFromUrl(entry.url))
+      // A search result can point anywhere. A non-public address is dropped
+      // here, before it is ever queued, so the engine cannot later be asked to
+      // read the server's own network — and the drop is reported, not silent.
+      .filter((entry) => {
+        const refusal = publicUrlRefusal(entry.url);
+        if (!refusal) return true;
+        result.notes.push(`Skipped ${entry.url} (${refusal}).`);
+        return false;
+      })
       .map((entry) => ({
         businessName: entry.title || null,
         websiteUrl: entry.url,
@@ -732,6 +741,7 @@ async function researchCandidate(input: {
         pages: verified.pages.map((page) => page.url),
         emailsFound: verified.extractedEmails.map((entry) => entry.email),
         robotsBlocked: verified.robotsBlocked,
+        refusedUrls: verified.refusedUrls,
         contactRoutes: verified.contactRoutes.map((route) => `${route.platform}:${route.routeKind}`),
       },
       releaseClaim: true,
@@ -796,6 +806,11 @@ async function researchCandidate(input: {
         `Source pages: ${verified.pages.map((page) => page.url).join(", ")}`,
         verified.robotsBlocked.length
           ? `Skipped by robots.txt: ${verified.robotsBlocked.join(", ")}`
+          : null,
+        verified.refusedUrls.length
+          ? `Refused (not a public website): ${verified.refusedUrls
+              .map((entry) => `${entry.url} (${entry.reason})`)
+              .join(", ")}`
           : null,
       ]
         .filter(Boolean)

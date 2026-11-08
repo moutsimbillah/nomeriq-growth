@@ -32,6 +32,168 @@ export const MAX_OFFICIAL_PROFILE_PAGES = 2;
  */
 export const RESEARCH_USER_AGENT = "NomeriqResearchBot";
 
+/** Polite gap between two reads from the same origin, in milliseconds. */
+export const FETCH_PACING_MS = 1_000;
+/** Most reads from any single origin for one candidate (its own site, then a profile). */
+export const MAX_FETCHES_PER_ORIGIN = 6;
+/** Ceiling for the growing gap after reads from an origin keep failing, in milliseconds. */
+export const MAX_FETCH_BACKOFF_MS = 8_000;
+
+/**
+ * IPv4 ranges that are never a public website: "this network", private, carrier
+ * NAT, loopback, link-local (which is also where every cloud metadata service
+ * lives, e.g. 169.254.169.254), protocol test nets, benchmarking, multicast and
+ * reserved space. A research crawl has no business reading any of them, and
+ * following a link into one could reach the server's own or a neighbour's
+ * internal service — the classic SSRF path.
+ */
+const PRIVATE_IPV4_RANGES: { base: number; bits: number; label: string }[] = [
+  { base: 0x00000000, bits: 8, label: "this network" },
+  { base: 0x0a000000, bits: 8, label: "private" },
+  { base: 0x64400000, bits: 10, label: "carrier NAT" },
+  { base: 0x7f000000, bits: 8, label: "loopback" },
+  { base: 0xa9fe0000, bits: 16, label: "link-local" },
+  { base: 0xac100000, bits: 12, label: "private" },
+  { base: 0xc0000000, bits: 24, label: "reserved" },
+  { base: 0xc0000200, bits: 24, label: "documentation" },
+  { base: 0xc0586300, bits: 24, label: "relay" },
+  { base: 0xc0a80000, bits: 16, label: "private" },
+  { base: 0xc6120000, bits: 15, label: "benchmark" },
+  { base: 0xc6336400, bits: 24, label: "documentation" },
+  { base: 0xcb007100, bits: 24, label: "documentation" },
+  { base: 0xe0000000, bits: 4, label: "multicast" },
+  { base: 0xf0000000, bits: 4, label: "reserved" },
+];
+
+/** Host suffixes that only ever resolve inside a private network. */
+const INTERNAL_HOST_SUFFIXES = [
+  ".local",
+  ".localhost",
+  ".internal",
+  ".intranet",
+  ".corp",
+  ".lan",
+  ".home.arpa",
+];
+
+function ipv4ToInt(parts: number[]): number {
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+function privateIpv4Label(ip: string): string | null {
+  const parts = ip.split(".").map((value) => Number(value));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return null;
+  }
+  const value = ipv4ToInt(parts);
+  for (const range of PRIVATE_IPV4_RANGES) {
+    const mask = range.bits === 0 ? 0 : (0xffffffff << (32 - range.bits)) >>> 0;
+    if ((value & mask) === (range.base & mask)) return range.label;
+  }
+  return null;
+}
+
+/**
+ * Decides whether a URL is a public website the engine may read.
+ *
+ * Returns `null` when it is fine, otherwise a short reason. The check runs on
+ * the *parsed* host, so the usual disguises — a decimal IP (`http://2130706433/`),
+ * hex or short form (`http://0x7f.1/`), or an IPv4-mapped IPv6 literal — are
+ * normalised by `URL` first and still caught. Callers report a refused URL
+ * rather than treating it as content that was absent.
+ */
+export function publicUrlRefusal(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "not a valid URL";
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return `unsupported scheme ${parsed.protocol}`;
+  }
+  if (parsed.username || parsed.password) {
+    return "URL carries credentials";
+  }
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
+  if (!host) return "missing host";
+
+  if (host.startsWith("[") && host.endsWith("]")) {
+    const literal = host.slice(1, -1).toLowerCase();
+    // IPv4-mapped/compatible forms (::ffff:7f00:1) must be judged as IPv4.
+    const mapped = literal.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (mapped) {
+      const high = parseInt(mapped[1], 16);
+      const low = parseInt(mapped[2], 16);
+      const label = privateIpv4Label(
+        [high >> 8, high & 0xff, low >> 8, low & 0xff].join("."),
+      );
+      return label ? `IPv4-mapped ${label} address` : null;
+    }
+    if (literal === "::1") return "loopback address";
+    if (literal === "::") return "unspecified address";
+    if (/^f[cd][0-9a-f]{2}:/.test(literal)) return "unique-local address";
+    if (/^fe[89ab][0-9a-f]:/.test(literal)) return "link-local address";
+    if (/^ff[0-9a-f]{2}:/.test(literal)) return "multicast address";
+    return null;
+  }
+
+  const label = privateIpv4Label(host);
+  if (label) return `IPv4 ${label} address`;
+  if (host === "localhost" || INTERNAL_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))) {
+    return "internal host name";
+  }
+  // A name with no dot is not publicly resolvable, so it can only be an
+  // intranet host; refuse rather than let a resolver decide.
+  if (!host.includes(".")) return "single-label host name";
+  return null;
+}
+
+/** Convenience shape for callers that just want a yes/no. */
+export function isPublicHttpUrl(url: string): boolean {
+  return publicUrlRefusal(url) === null;
+}
+
+/** Live fetch bookkeeping for one origin, kept per candidate and never shared. */
+export interface OriginFetchState {
+  /** Earliest time the next read from this origin may start. */
+  nextAt: number;
+  /** Reads already made from this origin for this candidate. */
+  count: number;
+  /** Consecutive failed reads, used to grow the gap. */
+  failures: number;
+}
+
+/**
+ * Reserves the right to make one more read from an origin, waiting for the
+ * polite gap when needed.
+ *
+ * Returns `allowed: false` when the origin has had enough reads for this
+ * candidate, and a `waitMs` when a previous read failed — the caller can then
+ * stop this candidate's crawl cleanly and let the next attempt (a later tick)
+ * inherit the backoff instead of hammering a struggling site.
+ */
+export async function reserveOriginFetch(
+  states: Map<string, OriginFetchState>,
+  origin: string | null,
+): Promise<{ allowed: boolean; waitMs: number }> {
+  if (!origin) return { allowed: true, waitMs: 0 };
+  const now = Date.now();
+  const state = states.get(origin) ?? { nextAt: now, count: 0, failures: 0 };
+  states.set(origin, state);
+  if (state.count >= MAX_FETCHES_PER_ORIGIN) return { allowed: false, waitMs: 0 };
+  // After failures, do not wait it out inside the same tick: report the gap.
+  if (state.failures > 0) {
+    const waitMs = Math.min(FETCH_PACING_MS * 2 ** state.failures, MAX_FETCH_BACKOFF_MS);
+    return { allowed: false, waitMs };
+  }
+  const wait = Math.max(0, state.nextAt - now);
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  state.count += 1;
+  state.nextAt = Date.now() + FETCH_PACING_MS;
+  return { allowed: true, waitMs: 0 };
+}
+
 /**
  * Decides whether robots.txt permits a path for a user agent.
  *
@@ -247,6 +409,12 @@ export interface VerifiedCandidate {
   }[];
   /** URLs skipped because robots.txt forbade them — reported, never treated as absence. */
   robotsBlocked: string[];
+  /**
+   * URLs the engine refused to read because they are not public websites
+   * (loopback/private/link-local/metadata addresses, internal host names).
+   * Recorded so a refused read is never mistaken for a missing fact.
+   */
+  refusedUrls: { url: string; reason: string }[];
   /** Sum of Fetch API costs incurred, so the caller can record real spend. */
   fetchCostUsd: number;
   /** Model usage for the verdict call, when it ran. */
@@ -369,10 +537,32 @@ export async function verifyCandidate(
   const extracted: ExtractedEmail[] = [];
   const visited = new Set<string>();
   const robotsBlocked: string[] = [];
+  const refusedUrls: { url: string; reason: string }[] = [];
   /** Official profile/app-store links, with the page on this site that published each. */
   const officialLinks = new Map<string, { platform: string; url: string; foundOn: string }>();
   let fetchCostUsd = 0;
   let usage: VerifiedCandidate["usage"] = null;
+  /** Live pacing/count state per origin, local to this one candidate. */
+  const originState = new Map<string, OriginFetchState>();
+  const originFor = (url: string): string | null => {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return null;
+    }
+  };
+  const reserveFetchSlot = async (url: string) =>
+    reserveOriginFetch(originState, originFor(url));
+  const noteFetchSuccess = (url: string) => {
+    const key = originFor(url);
+    const state = key ? originState.get(key) : null;
+    if (state) state.failures = 0;
+  };
+  const noteFetchFailure = (url: string) => {
+    const key = originFor(url);
+    const state = key ? originState.get(key) : null;
+    if (state) state.failures += 1;
+  };
 
   const origin = (() => {
     try {
@@ -410,6 +600,16 @@ export async function verifyCandidate(
   const fetchInto = async (url: string) => {
     if (visited.has(url) || pages.length >= maxPages) return;
     visited.add(url);
+
+    // Public-network gate first: a URL that resolves inside the server's own
+    // network (or a cloud metadata service) is never read. It is recorded as
+    // refused, which is not the same as a page that was absent.
+    const refusal = publicUrlRefusal(url);
+    if (refusal) {
+      refusedUrls.push({ url, reason: refusal });
+      return;
+    }
+
     // A blocked path is reported, never silently counted as absence.
     const path = (() => {
       try {
@@ -422,21 +622,51 @@ export async function verifyCandidate(
       robotsBlocked.push(url);
       return;
     }
-    const fetched = await input.provider.fetch({ url });
-    fetchCostUsd += fetched.costUsd;
-    if (!fetched.content?.trim()) return;
-    pages.push({
-      url,
-      title: fetched.title,
-      content: fetched.content.slice(0, MAX_PAGE_CHARS),
-    });
-    extracted.push(
-      ...extractEmailsFromPage({
-        content: fetched.content,
-        pageUrl: url,
-        siteDomain,
-      }),
-    );
+
+    // Polite pacing, a per-origin ceiling and a growing gap after failures:
+    // one candidate must not hammer a small site, and repeated failures from
+    // the same origin back off instead of retrying at full speed. A read the
+    // pacing rules declined is recorded, never silently dropped.
+    const { allowed, waitMs } = await reserveFetchSlot(url);
+    if (!allowed) {
+      refusedUrls.push({
+        url,
+        reason: waitMs
+          ? `origin is backing off after failures (${waitMs}ms)`
+          : "per-origin read limit reached for this candidate",
+      });
+      return;
+    }
+
+    try {
+      const fetched = await input.provider.fetch({ url });
+      fetchCostUsd += fetched.costUsd;
+      noteFetchSuccess(url);
+      if (!fetched.content?.trim()) return;
+      pages.push({
+        url,
+        title: fetched.title,
+        content: fetched.content.slice(0, MAX_PAGE_CHARS),
+      });
+      extracted.push(
+        ...extractEmailsFromPage({
+          content: fetched.content,
+          pageUrl: url,
+          siteDomain,
+        }),
+      );
+    } catch (error) {
+      noteFetchFailure(url);
+      // An unreadable entry page means nothing can be judged, so the caller must
+      // see the provider's real error. A failure on a later page is different:
+      // one broken /contact must not discard a site whose /pricing was read, so
+      // it is recorded and the remaining pages are still tried.
+      if (!pages.length) throw error;
+      refusedUrls.push({
+        url,
+        reason: `unreadable: ${error instanceof Error ? error.message : "fetch failed"}`,
+      });
+    }
   };
 
   await fetchInto(input.entryUrl ?? input.websiteUrl);
@@ -489,7 +719,9 @@ export async function verifyCandidate(
       businessQualified: false,
       reason: robotsBlocked.length
         ? "The official pages are disallowed by the site's robots.txt."
-        : "The official website could not be retrieved.",
+        : refusedUrls.length
+          ? `The official address is not a public website (${refusedUrls[0].reason}), so it was not read.`
+          : "The official website could not be retrieved.",
       pages,
       businessName: input.businessName,
       websiteUrl: input.websiteUrl,
@@ -507,6 +739,7 @@ export async function verifyCandidate(
       audiences: [],
       contactRoutes: [],
       robotsBlocked,
+      refusedUrls,
       fetchCostUsd,
       usage: null,
     };
@@ -564,6 +797,7 @@ export async function verifyCandidate(
       audiences: [],
       contactRoutes: [],
       robotsBlocked,
+      refusedUrls,
       fetchCostUsd,
       usage: null,
     };
@@ -687,6 +921,7 @@ export async function verifyCandidate(
     audiences: audiences.slice(0, 10),
     contactRoutes: contactRoutes.slice(0, 10),
     robotsBlocked,
+    refusedUrls,
     fetchCostUsd,
     usage,
   };

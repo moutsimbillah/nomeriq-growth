@@ -61,6 +61,12 @@ export interface FakeProviderOptions {
   throwOnFetch?: boolean;
   /** Fail the model call, to prove a model outage cannot create leads. */
   failChat?: boolean;
+  /**
+   * Throws only when the fetched URL's pathname is in this list, leaving every
+   * other page served normally — models one broken page on an otherwise
+   * working site, as opposed to `throwOnFetch`'s total outage.
+   */
+  throwOnPaths?: string[];
 }
 
 export interface FakeProviderStats {
@@ -149,6 +155,17 @@ export function createFakeProvider(options: FakeProviderOptions): {
       stats.fetches += 1;
       if (options.throwOnFetch) {
         throw new Error("Failed to scrape page with Firecrawl");
+      }
+      if (options.throwOnPaths) {
+        let fetchedPath: string;
+        try {
+          fetchedPath = new URL(input.url).pathname || "/";
+        } catch {
+          fetchedPath = "/";
+        }
+        if (options.throwOnPaths.includes(fetchedPath)) {
+          throw new Error(`Failed to scrape ${fetchedPath} with Firecrawl`);
+        }
       }
       if (options.failFetches) {
         stats.fetchCostUsd += fetchCost;

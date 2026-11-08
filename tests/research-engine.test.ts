@@ -876,6 +876,79 @@ describe("autonomous DeepSeek research engine", () => {
     expect(job.verifiedCount).toBe(0);
   });
 
+  it("keeps a candidate whose official-profile fetch fails, instead of discarding it", async () => {
+    const jobId = await newJob({ name: "Resilient crawl", target: 1 });
+    // The business's own pages (home/pricing/contact) all work and qualify it
+    // on their own; only its linked Instagram account fails to load. A broken
+    // enrichment page must not sink a candidate that already qualifies.
+    const flaky = withAudiences(
+      qualifyingSite({
+        domain: "flaky-profile.example.com",
+        businessName: "Flaky Profile Signals",
+        email: "desk@flaky-profile.example.com",
+      }),
+      [{ platform: "instagram", url: "https://instagram.com/flakyprofilesignals", countValue: 5000 }],
+    );
+    const { provider, stats } = createFakeProvider({
+      sites: [flaky],
+      throwOnPaths: ["/flakyprofilesignals"],
+    });
+
+    let guard = 0;
+    let job = (await getResearchJob(jobId))!;
+    while (guard < 6 && job.verifiedCount < job.targetCount && job.status === "active") {
+      await runResearchTick(jobId, { provider, workerId: `flaky-${guard}` });
+      job = (await getResearchJob(jobId))!;
+      guard += 1;
+    }
+
+    // The business's own pages were read and still produced a lead — the
+    // broken Instagram fetch was recorded, not fatal.
+    expect(job.verifiedCount).toBe(1);
+    expect(stats.fetches).toBeGreaterThan(1);
+  });
+
+  it("never reads a search result that is not a public website", async () => {
+    const jobId = await newJob({ name: "Public only", target: 1 });
+    // A search engine can return anything. These two are the classic SSRF
+    // targets: the cloud metadata service and the server's own loopback.
+    const { provider, stats } = makeProvider([
+      qualifyingSite({
+        domain: "169.254.169.254",
+        businessName: "Metadata Signals",
+        email: "desk@metadata.example.com",
+      }),
+      qualifyingSite({
+        domain: "localhost",
+        businessName: "Loopback Signals",
+        email: "desk@loopback.example.com",
+      }),
+    ]);
+
+    let guard = 0;
+    let job = (await getResearchJob(jobId))!;
+    const notes: string[] = [];
+    while (guard < 5 && job.status === "active") {
+      const tick = await runResearchTick(jobId, { provider, workerId: `ssrf-${guard}` });
+      notes.push(...tick.notes);
+      job = (await getResearchJob(jobId))!;
+      guard += 1;
+    }
+
+    // The searches really did run and really did return these two addresses, so
+    // a zero fetch count is the gate working — not an empty result set.
+    expect(stats.searches).toBeGreaterThan(0);
+    const allNotes = notes.join("\n");
+    expect(allNotes).toContain("169.254.169.254");
+    expect(allNotes).toContain("link-local");
+    expect(allNotes).toContain("localhost");
+    expect(allNotes).toContain("internal host name");
+    // Refused before any read: not one fetch was spent on either address.
+    expect(stats.fetches).toBe(0);
+    expect(await listResearchCandidates(jobId)).toHaveLength(0);
+    expect(job.verifiedCount).toBe(0);
+  });
+
   it("promotes to tier_1 only when an official account displays >=1000 followers", async () => {
     const jobId = await newJob({ name: "Established audience", target: 1 });
     const withBigAudience = withAudiences(
