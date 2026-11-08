@@ -1,9 +1,10 @@
-import { decryptSecret } from "@/lib/auth/crypto";
-import { resolveAiTask, type AiProviderRow } from "@/lib/ai/registry";
+import { resolveAiTask } from "@/lib/ai/registry";
 import { providerOption, type ChatProviderOption } from "@/lib/ai/routing";
-import { DeepSeekResearchProvider, type ResearchProvider } from "@/lib/deepseek/research-provider";
+import { ConfiguredResearchProvider, officialDeepSeek, researchAdapterError } from "@/lib/deepseek/configured-research-provider";
+import { pricedResearchTool } from "@/lib/deepseek/research-pricing";
+import type { ResearchProvider } from "@/lib/deepseek/research-provider";
 import { FailoverResearchProvider } from "@/lib/deepseek/provider-pool";
-import { cleanBaseUrl, type DeepSeekConfig } from "@/lib/deepseek/provider";
+import type { AiProviderRow } from "@/lib/ai/registry";
 import { testResearchProvider } from "@/lib/services/research-provider-admin";
 
 export interface ResearchConfiguration {
@@ -16,32 +17,8 @@ export interface ResearchConfiguration {
   warnings: string[];
 }
 
-// This repair deliberately retains the existing, priced adapter. Generic chat transport drops
-// usage and native search adapters/prices are not implemented: never bill them as DeepSeek.
-function adapterError(row: AiProviderRow, operation: "chat" | "search"): string | null {
-  if (!row.isEnabled) return `${row.name} is disabled.`;
-  let url: URL;
-  try { url = new URL(row.baseUrl); } catch { return `${row.name} has an invalid URL.`; }
-  if (row.provider !== "deepseek" || url.origin !== "https://api.deepseek.com" || !["", "/", "/v1", "/v1/"].includes(url.pathname)) {
-    return `${row.name}: this research engine currently supports only the official DeepSeek adapter with known usage/pricing; other chat/search sources are not implemented.`;
-  }
-  if (operation === "chat" && !["deepseek-flash", "deepseek-v4-pro"].includes(row.model)) {
-    return `${row.name}: research pricing is not implemented for model ${row.model}.`;
-  }
-  if (operation === "search" && row.kinds === "chat") return `${row.name} has no search/fetch capability.`;
-  try {
-    if (!decryptSecret(row.encryptedApiKey).trim()) return `${row.name} has no stored API key.`;
-  } catch { return `${row.name}: the stored key cannot be read. Enter it again in Settings.`; }
-  return null;
-}
-
-function config(row: AiProviderRow): DeepSeekConfig {
-  return { apiKey: decryptSecret(row.encryptedApiKey), baseUrl: cleanBaseUrl(row.baseUrl),
-    model: row.model, source: "database", searchPath: row.searchPath, fetchPath: row.fetchPath };
-}
-
 /** Read-only resolution. No legacy credentials/env, probes, metadata writes or implicit assignment. */
-export async function resolveLeadResearch(input = { searchQps: 2, fetchQps: 1 }) {
+export async function resolveLeadResearch(input: { searchQps: number; fetchQps: number; jobId?: string } = { searchQps: 2, fetchQps: 1 }) {
   const publicConfig: ResearchConfiguration = { configured: false, assigned: null, selected: null,
     search: null, chain: [], error: null, warnings: [] };
   let selection;
@@ -55,28 +32,21 @@ export async function resolveLeadResearch(input = { searchQps: 2, fetchQps: 1 })
   const tests: { chat: AiProviderRow; search: AiProviderRow; error: string | null }[] = [];
   for (const row of selection.fallbackChain) {
     const search = selection.search ?? row;
-    const error = adapterError(row, "chat") ?? adapterError(search, "search");
+    const error = researchAdapterError(row, "chat") ?? researchAdapterError(search, "search");
     tests.push({ chat: row, search, error });
     if (error) { publicConfig.warnings.push(error); continue; }
-    const chatAdapter = new DeepSeekResearchProvider(config(row));
-    const searchAdapter = new DeepSeekResearchProvider(config(search), {
+    const combined: ResearchProvider = new ConfiguredResearchProvider(row, search, {
       search: Math.max(1, Math.min(5, input.searchQps)), fetch: Math.max(1, Math.min(5, input.fetchQps)),
-    });
-    // Each operation retains the actual serving row name, including a separate search source.
-    let used: string | null = null;
-    const combined: ResearchProvider = {
-      get model() { return row.model; }, get lastUsedProvider() { return used; },
-      lastUsedProviderFor: { search: search.name, fetch: search.name, chat: row.name },
-      async search(value) { const out = await searchAdapter.search(value); used = search.name; return out; },
-      async fetch(value) { const out = await searchAdapter.fetch(value); used = search.name; return out; },
-      async chatJson<T>(value: { system: string; user: string; maxTokens?: number }) {
-        const out = await chatAdapter.chatJson<T>(value); used = row.name; return out;
-      },
-    };
+    }, input.jobId);
     entries.push({ name: row.name, provider: combined });
     if (!publicConfig.selected) {
       publicConfig.selected = providerOption(row);
       publicConfig.search = providerOption(search);
+    }
+    if ((!officialDeepSeek(row) || !["deepseek-flash", "deepseek-v4-pro"].includes(row.model) ||
+      !pricedResearchTool(search, "search") || !pricedResearchTool(search, "fetch")) &&
+      !publicConfig.warnings.some(warning => warning.startsWith("Cost unknown"))) {
+      publicConfig.warnings.push("Cost unknown for unpriced calls in the configured chain. Known spend is tracked separately; the dollar budget cannot cap unknown charges. Request, rate and crawl limits still apply.");
     }
   }
   publicConfig.configured = entries.length > 0;

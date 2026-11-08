@@ -6,6 +6,7 @@ import {
   type ResearchProvider,
 } from "@/lib/deepseek/research-provider";
 import { getDb } from "@/lib/db/client";
+import { isResearchAccountingError } from "./research-errors";
 
 /**
  * Several DeepSeek-compatible providers, tried in priority order.
@@ -90,13 +91,17 @@ interface PoolEntry {
  */
 export class FailoverResearchProvider implements ResearchProvider {
   lastUsedProvider: string | null = null;
+  private lastChatModel: string | null = null;
+  private accountingError: Error | null = null;
   readonly lastUsedProviderFor: Partial<Record<"search" | "fetch" | "chat", string>> = {};
 
   constructor(private readonly entries: PoolEntry[]) {}
 
   get model(): string {
-    return this.entries[0]?.provider.model ?? "unconfigured";
+    return this.lastChatModel ?? this.entries[0]?.provider.model ?? "unconfigured";
   }
+
+  get recordsUsage() { return this.entries.every(entry => entry.provider.recordsUsage === true); }
 
   /** Every provider in priority order, for reporting. */
   get names(): string[] {
@@ -104,15 +109,18 @@ export class FailoverResearchProvider implements ResearchProvider {
   }
 
   private async attempt<T>(operation: "search" | "fetch" | "chat", run: (provider: ResearchProvider) => Promise<T>): Promise<T> {
+    if (this.accountingError) throw this.accountingError;
     let lastError: unknown = null;
 
     for (const entry of this.entries) {
       try {
         const value = await run(entry.provider);
+        if (operation === "chat") this.lastChatModel = entry.provider.model;
         this.lastUsedProvider = entry.provider.lastUsedProvider ?? entry.name;
         this.lastUsedProviderFor[operation] = entry.provider.lastUsedProviderFor?.[operation] ?? this.lastUsedProvider;
         return value;
       } catch (error) {
+        if (isResearchAccountingError(error)) { this.accountingError = error; throw error; }
         lastError = error;
       }
     }

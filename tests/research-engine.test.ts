@@ -344,7 +344,7 @@ describe("autonomous DeepSeek research engine", () => {
     expect(usage.costUsd).toBeGreaterThan(0);
     const budget = await getJobBudget(jobId);
     expect(budget?.spentUsd).toBeGreaterThan(0);
-    expect(budget!.spentUsd).toBeCloseTo(usage.costUsd, 6);
+    expect(budget!.spentUsd).toBeCloseTo(usage.costUsd!, 6);
   });
 
   it("never saves a lead when a duplicate already exists in the database", async () => {
@@ -608,11 +608,11 @@ describe("autonomous DeepSeek research engine", () => {
     expect(usage.searches).toBeGreaterThan(0);
     expect(usage.costUsd).toBeGreaterThan(0);
     expect(usage.recent.length).toBeGreaterThan(0);
-    expect(usage.recent.every((entry) => entry.costUsd >= 0)).toBe(true);
+    expect(usage.recent.every((entry) => entry.costUsd !== null && entry.costUsd >= 0)).toBe(true);
     expect(stats.searches).toBeGreaterThan(0);
 
     // Recorded spend must equal the recorded operations, not an estimate.
-    const operations = usage.recent.reduce((sum, entry) => sum + entry.costUsd, 0);
+    const operations = usage.recent.reduce((sum, entry) => sum + entry.costUsd!, 0);
     expect(operations).toBeGreaterThan(0);
   });
 
@@ -743,7 +743,8 @@ describe("autonomous DeepSeek research engine", () => {
 
     const budget = await getJobBudget(jobId);
     const usage = await getResearchUsage(jobId);
-    expect(budget!.spentUsd).toBeCloseTo(usage.costUsd, 6);
+    expect(usage.unknownCostCalls).toBe(0);
+    expect(budget!.spentUsd).toBeCloseTo(usage.costUsd!, 6);
     expect(usage.costUsd).toBeGreaterThan(0);
     // A 50 USD budget must not have been silently exhausted by 10 leads.
     expect(usage.costUsd).toBeLessThan(50);

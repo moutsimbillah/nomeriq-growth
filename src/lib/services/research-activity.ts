@@ -32,6 +32,7 @@ export interface ResearchActivityItem {
   title: string;
   detail: string | null;
   costUsd: number | null;
+  costUnknown?: boolean;
   businessName: string | null;
 }
 
@@ -201,11 +202,12 @@ function describeEvent(row: any): ResearchActivityItem {
 
 function describeUsage(row: any): ResearchActivityItem {
   const metadata = (row.metadata ?? {}) as Record<string, any>;
-  const costUsd = number(row.cost_usd);
+  const costUsd = row.cost_known === false ? null : number(row.cost_usd);
   const base = {
     id: `usage:${row.id}`,
     at: iso(row.created_at) ?? "",
     costUsd,
+    costUnknown: row.cost_known === false,
     businessName: null as string | null,
   };
   const failed = row.status === "error";
@@ -233,7 +235,7 @@ function describeUsage(row: any): ResearchActivityItem {
       ...base,
       kind: "fetch",
       tone: failed ? "bad" : "progress",
-      title: `Read ${number(row.request_count)} page(s) from the official site.`,
+      title: failed ? "Could not read the official page." : `Read ${number(row.request_count)} page(s) from the official site.`,
       detail: pages.length ? truncate(pages.join(", "), 200) : null,
     };
   }
@@ -243,8 +245,8 @@ function describeUsage(row: any): ResearchActivityItem {
     tone: failed ? "bad" : "progress",
     title:
       row.operation === "draft"
-        ? "Wrote a personalized draft."
-        : "Asked the model for a verdict on the evidence.",
+        ? failed ? "Draft model request failed." : "Requested a personalized draft."
+        : failed ? "Verification model request failed." : "Asked the model for a verdict on the evidence.",
     detail: row.model ? `Model: ${row.model}` : null,
   };
 }
@@ -369,7 +371,7 @@ export async function getResearchActivity(
     });
     if (!match) return item;
     claimedUsage.add(match.id);
-    return { ...item, costUsd: number(match.cost_usd) || item.costUsd };
+    return { ...item, costUsd: match.cost_known === false ? null : number(match.cost_usd), costUnknown: match.cost_known === false };
   });
 
   const usageItems = usage.rows

@@ -10,6 +10,7 @@ import {
   setCandidateResult,
   expireStaleClaims,
   candidateDisplayName,
+  returnAccountingFailureClaims,
   type DiscoveryResult,
 } from "@/lib/services/research-candidates";
 import {
@@ -38,6 +39,7 @@ import { publicUrlRefusal, verifyCandidate } from "@/lib/deepseek/verify-candida
 import type { VerifiedCandidate } from "@/lib/deepseek/verify-candidate";
 import { resolveLeadResearch } from "@/lib/services/research-routing";
 import type { ResearchProvider } from "@/lib/deepseek/research-provider";
+import { isResearchAccountingError } from "@/lib/deepseek/research-errors";
 import type { Category, ResearchJob, ResearchTickResult } from "@/lib/types";
 import { domainFromUrl } from "@/lib/utils";
 
@@ -186,6 +188,7 @@ async function runLeasedTick(
   let provider = options.provider ?? null;
   if (!provider) {
     const resolved = await resolveLeadResearch({
+      jobId,
       searchQps: options.searchQps ?? settings.deepseekSearchQps,
       fetchQps: options.fetchQps ?? settings.deepseekFetchQps,
     });
@@ -241,8 +244,17 @@ async function runLeasedTick(
     result.status = after?.status ?? job.status;
     result.stopReason = summary.stopReason ?? result.stopReason;
     result.spentUsd = after?.spentUsd ?? result.spentUsd;
+    result.unknownCostCalls = after?.unknownCostCalls ?? 0;
     return result;
   } catch (error) {
+    if (isResearchAccountingError(error)) {
+      await pauseForProviderFailure(jobId, error.message, notes);
+      await returnAccountingFailureClaims(jobId, workerId);
+      await finishResearchRun({ runId, status: "failed", stopReason: error.message });
+      result.status = "paused";
+      result.stopReason = error.message;
+      return result;
+    }
     const message =
       error instanceof Error ? error.message : "Research tick failed.";
     result.status = "failed";
@@ -460,10 +472,11 @@ async function discoverMore(input: {
       });
       result.searches += 1;
     } catch (error) {
+      if (isResearchAccountingError(error)) throw error;
       const message =
         error instanceof Error ? error.message : "Search request failed.";
       result.notes.push(`Search failed for "${planned.query}": ${message}`);
-      await recordResearchUsage({
+      if (!provider.recordsUsage) await recordResearchUsage({
         jobId: job.id,
         provider: provider.lastUsedProviderFor?.search ?? provider.lastUsedProvider ?? "deepseek",
         operation: "search",
@@ -487,7 +500,7 @@ async function discoverMore(input: {
       continue;
     }
 
-    await recordResearchUsage({
+    if (!provider.recordsUsage) await recordResearchUsage({
       jobId: job.id,
       provider: provider.lastUsedProviderFor?.search ?? provider.lastUsedProvider ?? "deepseek",
       operation: "search",
@@ -662,6 +675,7 @@ async function researchCandidate(input: {
     result.fetches += verified.pages.length;
     result.modelCalls += verified.usage ? 1 : 0;
   } catch (error) {
+    if (isResearchAccountingError(error)) throw error;
     const message =
       error instanceof Error ? error.message : "Verification failed.";
     await setCandidateResult({
@@ -695,7 +709,7 @@ async function researchCandidate(input: {
       actorType: "deepseek",
     }).catch(() => undefined);
   }
-  if (verified.fetchCostUsd > 0 || verified.usage) {
+  if (!provider.recordsUsage && (verified.fetchCostUsd === null || verified.fetchCostUsd > 0 || verified.usage)) {
     await recordResearchUsage({
       jobId: job.id,
       provider: provider.lastUsedProviderFor?.fetch ?? provider.lastUsedProvider ?? "deepseek",
@@ -709,7 +723,7 @@ async function researchCandidate(input: {
       },
     }).catch(() => undefined);
   }
-  if (verified.usage) {
+  if (!provider.recordsUsage && verified.usage) {
     await recordResearchUsage({
       jobId: job.id,
       provider: provider.lastUsedProviderFor?.chat ?? provider.lastUsedProvider ?? "deepseek",
@@ -870,7 +884,8 @@ async function researchCandidate(input: {
         officialLinkSourceUrl: route.officialStatus === "verified" ? route.sourceUrl : null,
         notes: route.notes,
       })),
-    });
+    }, { aiProvider: provider.lastUsedProviderFor?.chat ?? provider.lastUsedProvider ?? null,
+      aiModel: verified.usage?.model ?? null });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Saving the lead failed.";
@@ -908,6 +923,12 @@ async function researchCandidate(input: {
   result.saved += 1;
   result.processed += 1;
 
+  // A pause during optional drafting must not requeue an already saved qualified lead.
+  await setCandidateResult({ candidateId: candidate.id, identityKey: candidate.identityKey, jobId: job.id,
+    status: "qualified", prospectId, draftId: null, releaseClaim: true,
+    evidence: { businessName: verified.businessName, email: verified.contactEmail,
+      pages: verified.pages.map(page => page.url), observation: verified.observation } });
+
   // Draft generation is best effort: a saved verified lead is still valuable
   // even if drafting fails, and the failure is recorded rather than hidden.
   let draftId: string | null = null;
@@ -919,6 +940,7 @@ async function researchCandidate(input: {
     });
     draftId = draft.id;
   } catch (error) {
+    if (isResearchAccountingError(error)) throw error;
     const message =
       error instanceof Error ? error.message : "Draft generation failed.";
     input.result.notes.push(`Draft failed for ${label}: ${message}`);

@@ -10,6 +10,7 @@ import {
   type ModelVerdict,
 } from "./verify";
 import type { ResearchProvider } from "./research-provider";
+import { isResearchAccountingError } from "./research-errors";
 import { domainFromUrl, normalizeHandle } from "@/lib/utils";
 import type { Category } from "@/lib/types";
 
@@ -416,9 +417,9 @@ export interface VerifiedCandidate {
    */
   refusedUrls: { url: string; reason: string }[];
   /** Sum of Fetch API costs incurred, so the caller can record real spend. */
-  fetchCostUsd: number;
+  fetchCostUsd: number | null;
   /** Model usage for the verdict call, when it ran. */
-  usage: { model: string; inputTokens: number; outputTokens: number; costUsd: number } | null;
+  usage: { model: string | null; inputTokens: number | null; outputTokens: number | null; costUsd: number | null } | null;
 }
 
 /**
@@ -540,7 +541,7 @@ export async function verifyCandidate(
   const refusedUrls: { url: string; reason: string }[] = [];
   /** Official profile/app-store links, with the page on this site that published each. */
   const officialLinks = new Map<string, { platform: string; url: string; foundOn: string }>();
-  let fetchCostUsd = 0;
+  let fetchCostUsd: number | null = 0;
   let usage: VerifiedCandidate["usage"] = null;
   /** Live pacing/count state per origin, local to this one candidate. */
   const originState = new Map<string, OriginFetchState>();
@@ -587,9 +588,10 @@ export async function verifyCandidate(
     }
     try {
       const page = await input.provider.fetch({ url: `${origin}/robots.txt` });
-      fetchCostUsd += page.costUsd;
+      fetchCostUsd = fetchCostUsd === null || page.costUsd === null ? null : fetchCostUsd + page.costUsd;
       robotsText = page.content ?? null;
-    } catch {
+    } catch (error) {
+      if (isResearchAccountingError(error)) throw error;
       // An unreadable robots.txt is not a prohibition; the policy check below
       // treats empty content as allowed.
       robotsText = null;
@@ -640,7 +642,7 @@ export async function verifyCandidate(
 
     try {
       const fetched = await input.provider.fetch({ url });
-      fetchCostUsd += fetched.costUsd;
+      fetchCostUsd = fetchCostUsd === null || fetched.costUsd === null ? null : fetchCostUsd + fetched.costUsd;
       noteFetchSuccess(url);
       if (!fetched.content?.trim()) return;
       pages.push({
@@ -656,6 +658,7 @@ export async function verifyCandidate(
         }),
       );
     } catch (error) {
+      if (isResearchAccountingError(error)) throw error;
       noteFetchFailure(url);
       // An unreadable entry page means nothing can be judged, so the caller must
       // see the provider's real error. A failure on a later page is different:
@@ -772,6 +775,7 @@ export async function verifyCandidate(
       costUsd: response.usage.costUsd,
     };
   } catch (error) {
+    if (isResearchAccountingError(error)) throw error;
     // A model failure must not silently become a "qualified" lead.
     verdict = null;
     const reason =

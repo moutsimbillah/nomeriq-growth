@@ -85,7 +85,8 @@ describe("spend reconciliation", () => {
     expect(usage.costUsd).toBeCloseTo(expected, 6);
     // The stored job spend must reconcile exactly with the recorded operations.
     expect(budget!.spentUsd).toBeCloseTo(expected, 6);
-    expect(Math.abs(budget!.spentUsd - usage.costUsd)).toBeLessThan(1e-9);
+    expect(usage.unknownCostCalls).toBe(0);
+    expect(Math.abs(budget!.spentUsd - usage.costUsd!)).toBeLessThan(1e-9);
   });
 
   it("keeps spend reconciled through a real engine run", async () => {
@@ -119,7 +120,8 @@ describe("spend reconciliation", () => {
 
     const usage = await getResearchUsage(job.id);
     const budget = await getJobBudget(job.id);
-    expect(budget!.spentUsd).toBeCloseTo(usage.costUsd, 9);
+    expect(usage.unknownCostCalls).toBe(0);
+    expect(budget!.spentUsd).toBeCloseTo(usage.costUsd!, 9);
   });
 
   it("reconciles pre-existing drift on an already-deployed database", async () => {

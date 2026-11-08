@@ -43,6 +43,7 @@ interface ActivityItem {
   title: string;
   detail: string | null;
   costUsd: number | null;
+  costUnknown?: boolean;
   businessName: string | null;
 }
 
@@ -190,7 +191,7 @@ export function ResearchActivityFeed({
                   <span className="min-w-0 flex-1 break-words text-12 font-medium leading-4 text-ink">
                     {item.title}
                   </span>
-                  {item.costUsd ? (
+                  {item.costUnknown ? <span className="shrink-0 text-12 text-faint">Cost unknown</span> : item.costUsd !== null ? (
                     <span className="shrink-0 font-mono text-12 text-faint">
                       ${item.costUsd.toFixed(4)}
                     </span>

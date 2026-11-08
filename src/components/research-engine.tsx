@@ -26,9 +26,10 @@ interface EngineSnapshot {
     spentUsd: number;
     remainingUsd: number;
     exhausted: boolean;
+    unknownCostCalls?: number;
   } | null;
   usage: {
-    costUsd: number;
+    costUsd: number | null;
     searches: number;
     fetches: number;
     modelCalls: number;
@@ -36,7 +37,7 @@ interface EngineSnapshot {
     recent: {
       operation: string;
       model: string | null;
-      costUsd: number;
+      costUsd: number | null;
       status: string;
       createdAt: string | null;
     }[];
@@ -152,6 +153,7 @@ export function ResearchEnginePanel({
     spentUsd: job.spentUsd,
     remainingUsd: Math.max(0, job.budgetUsd - job.spentUsd),
     exhausted: job.spentUsd >= job.budgetUsd - 1e-9,
+    unknownCostCalls: job.unknownCostCalls ?? 0,
   };
   const isActive = current.status === "active";
   const isTerminal = current.status === "completed" || current.status === "cancelled";
@@ -318,10 +320,10 @@ export function ResearchEnginePanel({
           </div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-20 leading-none text-ink">
-              {money(budget.spentUsd)}
+              {budget.unknownCostCalls ? "Cost unknown" : money(budget.spentUsd)}
             </span>
             <span className="text-12 text-faint">
-              of ${budget.budgetUsd.toFixed(2)} budget
+              {budget.unknownCostCalls ? `${money(budget.spentUsd)} known subtotal` : `of $${budget.budgetUsd.toFixed(2)} budget`}
             </span>
           </div>
           <div className="mt-2">
@@ -332,7 +334,9 @@ export function ResearchEnginePanel({
             />
           </div>
           <p className="mt-2 text-12 leading-4 text-faint">
-            {budget.exhausted
+            {budget.unknownCostCalls
+              ? `${budget.exhausted ? "Known budget exhausted. Progress is preserved; raise the budget to continue. " : ""}${budget.unknownCostCalls} operations have unknown cost. The $${budget.budgetUsd.toFixed(2)} budget applies only to known spend; it cannot cap unknown charges. Rate and crawl limits still apply.`
+              : budget.exhausted
               ? "Budget exhausted. Progress is preserved; raise the budget to continue."
               : `${money(budget.remainingUsd)} remaining. Cost is recorded per real API operation.`}
           </p>
@@ -359,7 +363,7 @@ export function ResearchEnginePanel({
             ))}
           </div>
           <p className="mt-2 text-12 leading-4 text-faint">
-            Search and Fetch bill per successful request. Model cost is token-based.
+            Counts are recorded per operation. Pricing varies by provider; unavailable prices are shown as unknown, not free.
           </p>
         </div>
       </div>

@@ -106,12 +106,15 @@ export interface BudgetState {
   spentUsd: number;
   remainingUsd: number;
   exhausted: boolean;
+  unknownCostCalls: number;
 }
 
 export async function getJobBudget(jobId: string): Promise<BudgetState | null> {
   const db = await getDb();
   const result = await db.query<any>(
-    `SELECT budget_usd, spent_usd FROM research_jobs WHERE id = $1`,
+    `SELECT budget_usd, spent_usd,
+       (SELECT count(*) FROM research_usage u WHERE u.job_id = research_jobs.id AND NOT u.cost_known) AS unknown_cost_calls
+     FROM research_jobs WHERE id = $1`,
     [jobId],
   );
   const row = result.rows[0];
@@ -122,6 +125,7 @@ export async function getJobBudget(jobId: string): Promise<BudgetState | null> {
     budgetUsd,
     spentUsd,
     remainingUsd: Math.max(0, budgetUsd - spentUsd),
+    unknownCostCalls: number(row.unknown_cost_calls),
     // A tiny epsilon avoids a floating point "0.0000001 remaining" loop.
     exhausted: spentUsd >= budgetUsd - 1e-9,
   };

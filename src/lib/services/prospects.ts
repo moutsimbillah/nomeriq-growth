@@ -242,6 +242,7 @@ function httpUrl(value: string | null | undefined, field: string): string {
 
 export async function saveProspect(
   input: SaveProspectInput,
+  provenance?: { aiProvider: string | null; aiModel: string | null },
 ): Promise<SaveProspectResult> {
   const businessName = input.businessName?.trim();
   if (!businessName || businessName.length < 2) {
@@ -402,6 +403,8 @@ export async function saveProspect(
         ],
       );
 
+      if (provenance) await tx.query("UPDATE prospects SET ai_provider=$1, ai_model=$2 WHERE id=$3",
+        [provenance.aiProvider, provenance.aiModel, id]);
       await tx.query(
         `INSERT INTO prospect_aliases (id, prospect_id, alias, alias_key)
          VALUES ($1, $2, $3, $4)`,

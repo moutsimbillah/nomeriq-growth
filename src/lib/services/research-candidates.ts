@@ -384,6 +384,18 @@ async function claimCandidateIdentityWithin(
   };
 }
 
+/** An infrastructure failure is not a failed candidate attempt. Release only this worker's claims. */
+export async function returnAccountingFailureClaims(jobId: string, workerId: string): Promise<void> {
+  const db = await getDb();
+  await db.transaction(async tx => {
+    await tx.query(`UPDATE research_candidates SET status='pending', claim_id=NULL,
+      attempts=greatest(attempts-1,0), updated_at=now()
+      WHERE job_id=$1 AND status='researching' AND claim_id IN
+        (SELECT claim_id FROM candidate_claims WHERE job_id=$1 AND claimed_by=$2)`, [jobId, workerId]);
+    await tx.query("DELETE FROM candidate_claims WHERE job_id=$1 AND claimed_by=$2", [jobId, workerId]);
+  });
+}
+
 export async function setCandidateResult(input: {
   candidateId: string;
   identityKey: string;

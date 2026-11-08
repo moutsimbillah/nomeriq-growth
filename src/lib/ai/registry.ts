@@ -3,6 +3,9 @@ import { getDb, type DbClient } from "@/lib/db/client";
 import { AppError } from "@/lib/utils";
 import { requestProviderChat, type ChatInput, type ChatAttemptFailure, type TransportResult } from "@/lib/ai/chat-transport";
 import { PROVIDER_CATALOG, PROVIDER_KINDS, type ProviderKind } from "@/lib/ai/provider-catalog";
+import { researchModelUsage } from "@/lib/deepseek/research-pricing";
+import { ResearchAccountingError } from "@/lib/deepseek/research-errors";
+import { recordResearchUsage } from "@/lib/services/research-usage";
 import { AI_TASKS, AI_TASK_LABELS, chatCapability, searchCapability, chatFallbacks, workingChatProvider, type AiTask } from "@/lib/ai/routing";
 export { AI_TASKS, AI_TASK_LABELS, chatCapability, searchCapability } from "@/lib/ai/routing";
 export type { AiTask } from "@/lib/ai/routing";
@@ -235,6 +238,8 @@ export interface ChatMessage {
   maxTokens?: number;
   /** Ask for strict JSON where the provider supports it. */
   json?: boolean;
+  captureUsage?: ChatInput["captureUsage"];
+  usageContext?: { jobId: string; operation: "draft" };
   timeoutMs?: ChatInput["timeoutMs"];
   transientRetries?: ChatInput["transientRetries"];
   diagnosticTask?: ChatInput["diagnosticTask"];
@@ -247,7 +252,7 @@ export interface ChatOutcome<T> {
 }
 
 export type ChatResult =
-  | { ok: true; text: string; provider: string; model: string; providerName?: string; providerId?: string }
+  | (Extract<TransportResult, { ok: true }> & { provider: string; providerName?: string; providerId?: string })
   | Extract<TransportResult, { ok: false }>;
 
 /**
@@ -308,7 +313,15 @@ export async function runChatTask(
   const failures: ChatAttemptFailure[] = [];
   for (const provider of selection.fallbackChain) {
     const started = Date.now();
-    const outcome = await chatWithProvider(provider, message);
+    const outcome = await chatWithProvider(provider, { ...message, captureUsage: Boolean(message.usageContext) || message.captureUsage });
+    if (message.usageContext) {
+      const preflight = !outcome.ok && ["missing_api_key", "key_unreadable", "provider_not_chat_capable"].includes(outcome.code);
+      try {
+        await recordResearchUsage({ ...message.usageContext, provider: provider.name,
+          ...(outcome.ok ? researchModelUsage(provider, outcome) : { model: provider.model, costUsd: preflight ? 0 : null }),
+          requestCount: preflight ? 0 : 1, status: outcome.ok ? "success" : "error" });
+      } catch { throw new ResearchAccountingError(); }
+    }
     if (outcome.ok) {
       return {
         ...outcome,

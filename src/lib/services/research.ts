@@ -7,6 +7,7 @@ import { getWorkspaceSettings } from "./settings";
 
 const JOB_SELECT = `
   SELECT j.*,
+    (SELECT count(*) FROM research_usage u WHERE u.job_id = j.id AND NOT u.cost_known) AS unknown_cost_calls,
     (SELECT count(*) FROM prospects p
       WHERE p.research_job_id = j.id AND p.qualification_status = 'verified'
         AND p.archived_at IS NULL
@@ -56,6 +57,7 @@ function mapJob(row: any): ResearchJob {
     lastError: row.last_error,
     budgetUsd: number(row.budget_usd, 5),
     spentUsd: number(row.spent_usd),
+    unknownCostCalls: number(row.unknown_cost_calls),
     concurrency: number(row.concurrency, 1),
     ticks: number(row.ticks),
     searchQueriesUsed: number(row.search_queries_used),

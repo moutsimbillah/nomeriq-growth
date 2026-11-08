@@ -142,6 +142,23 @@ it("resumes a job whose provider exists only as a provider-list entry", async ()
   expect((await getResearchJob(jobId))?.status).toBe("active");
 });
 
+it("custom DeepSeek/GLM pricing is unknown, not a start/resume blocker; resolution alone never starts a job", async () => {
+  vi.stubGlobal("fetch", vi.fn(() => { throw new Error("No network permitted in a gate test"); }));
+  providerId = await createResearchProvider({ name: "Custom research", provider: "custom", kinds: "both",
+    model: "glm-5.3-flash", baseUrl: "https://synthetic-gateway.test", apiKey: crypto.randomUUID(),
+    searchPath: "/v1/search", fetchPath: "/v1/scrape" });
+  await saveTaskSetting("lead_research", { providerId, model: null });
+  const jobId = await newJob();
+  expect((await getResearchConfiguration()).configured).toBe(true);
+  expect((await getResearchJob(jobId))?.status).toBe("paused");
+  expect((process.env.DEEPSEEK_API_KEY ?? "").trim()).toBe("");
+  expect((await (await getDb()).query("SELECT count(*)::int AS n FROM provider_credentials")).rows[0].n).toBe(0);
+  const response = await POST(request(jobId, { action: "resume", runNow: false }), context(jobId));
+  expect(response.status).toBe(200);
+  expect((await getResearchJob(jobId))?.status).toBe("active");
+  expect(fetch).not.toHaveBeenCalled();
+});
+
 it("starts a paused job through the same resolution, and never reports the retired error", async () => {
   await seedProviderListEntry();
   const jobId = await newJob();

@@ -268,10 +268,11 @@ export async function generateDraftForProspect(input: {
   const generated = await generateFirstContact(prospect, truth, settings, {
     provider: input.provider,
   });
-  if (generated.usage && prospect.researchJobId) {
+  if (generated.usage && prospect.researchJobId && !generated.usageRecorded) {
     await recordResearchUsage({
       jobId: prospect.researchJobId,
       operation: "draft",
+      provider: generated.provider ?? "deepseek",
       model: generated.usage.model,
       inputTokens: generated.usage.inputTokens,
       cachedInputTokens: generated.usage.cachedInputTokens,

@@ -1,5 +1,6 @@
 import { decryptSecret, encryptSecret } from "@/lib/auth/crypto";
 import { getDb } from "@/lib/db/client";
+import { extractChatUsage, type ChatTokenUsage } from "@/lib/ai/chat-usage";
 import { AppError, iso } from "@/lib/utils";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -110,6 +111,7 @@ export interface DeepSeekUsage {
   cachedInputTokens: number;
   outputTokens: number;
   costUsd: number;
+  reportedUsage?: ChatTokenUsage | null;
 }
 
 export interface DeepSeekChatResult<T> {
@@ -667,7 +669,7 @@ export async function deepseekFetchPage(
 
 /* ----------------------------------- Chat -------------------------------- */
 
-function parseJsonObject(text: string): unknown {
+export function parseJsonObject(text: string): unknown {
   const cleaned = text
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
@@ -729,6 +731,7 @@ export async function deepseekChatJson<T = unknown>(
       0,
   );
   const outputTokens = Number(usage.completion_tokens ?? 0);
+  const reported = extractChatUsage("deepseek", JSON.stringify(data));
   return {
     data: parseJsonObject(content) as T,
     raw: content,
@@ -743,6 +746,7 @@ export async function deepseekChatJson<T = unknown>(
         cachedInputTokens,
         outputTokens,
       }),
+      reportedUsage: reported,
     },
   };
 }

@@ -17,6 +17,8 @@ import {
  */
 export interface ResearchProvider {
   readonly model: string;
+  /** True when calls are persisted at their actual provider boundary (including failures). */
+  readonly recordsUsage?: boolean;
   /** Set by a failover pool after a call, so usage is attributed to whoever served it. */
   readonly lastUsedProvider?: string | null;
   /** Separate sources keep operation attribution after a later chat call changes lastUsedProvider. */
@@ -24,15 +26,23 @@ export interface ResearchProvider {
   search(input: {
     query: string;
     count: number;
-  }): Promise<{ results: DeepSeekSearchResult[]; costUsd: number }>;
+  }): Promise<{ results: DeepSeekSearchResult[]; costUsd: number | null }>;
   fetch(input: {
     url: string;
-  }): Promise<{ title: string; content: string; costUsd: number }>;
+  }): Promise<{ title: string; content: string; costUsd: number | null }>;
   chatJson<T>(input: {
     system: string;
     user: string;
     maxTokens?: number;
-  }): Promise<{ data: T; usage: DeepSeekUsage }>;
+  }): Promise<{ data: T; usage: ResearchModelUsage }>;
+}
+
+export interface ResearchModelUsage {
+  model: string | null;
+  inputTokens: number | null;
+  cachedInputTokens?: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
 }
 
 export class DeepSeekResearchProvider implements ResearchProvider {

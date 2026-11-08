@@ -35,6 +35,9 @@ export async function GET(
           targetCount: job.targetCount,
           candidatesDiscovered: job.candidatesDiscovered,
           spentUsd: job.spentUsd,
+          knownCostUsd: job.spentUsd,
+          costUsd: job.unknownCostCalls ? null : job.spentUsd,
+          unknownCostCalls: job.unknownCostCalls ?? 0,
           stopReason: job.stopReason,
         },
         items: await getResearchActivity(

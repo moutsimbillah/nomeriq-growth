@@ -81,18 +81,23 @@ it("separates an official DeepSeek chat model from a supported separate search s
 it.each([
   { provider: "brave", kinds: "search" },
   { provider: "openai", kinds: "both" },
-  { provider: "custom", kinds: "both", baseUrl: "https://synthetic.test", model: "deepseek-flash" },
-])("unsupported search source $provider fails closed (no fake DeepSeek adapter)", async extra => {
+])("a source without supported Search/Fetch endpoints still reports a real capability error: $provider", async extra => {
   const chat = await provider("Chat");
   const search = await provider("Unsupported", extra);
   await assign(chat, null, search);
-  expect(await getResearchConfiguration()).toMatchObject({ configured: false, error: expect.stringContaining("not implemented") });
+  expect(await getResearchConfiguration()).toMatchObject({ configured: false, error: expect.stringContaining("Search and Fetch endpoints") });
   expect((await testLeadResearchConnection()).ok).toBe(false);
   expect(fetch).not.toHaveBeenCalled();
 });
-it.each([{ provider: "anthropic", model: "claude-model" }, { model: "unpriced-model" }, { baseUrl: "https://gateway.test" }])("unknown research usage/prices are refused, never fabricated", async extra => {
-  const id = await provider("Unpriced", extra); await assign(id);
-  expect(await getResearchConfiguration()).toMatchObject({ configured: false, error: expect.stringMatching(/pricing|not implemented/) });
+// Founder: absent pricing must mean unknown cost, never refusal of a capable API.
+it.each([{ provider: "anthropic", model: "claude-model" }, { model: "unpriced-model" }, { baseUrl: "https://gateway.test" },
+  { provider: "custom", kinds: "both", baseUrl: "https://synthetic.test", model: "glm-5.3-flash" },
+])("unknown research prices allow the assigned model with a working separate source", async extra => {
+  const id = await provider("Unpriced", extra);
+  const search = await provider("Source", { kinds: "search" });
+  await assign(id, null, search);
+  expect(await getResearchConfiguration()).toMatchObject({ configured: true, selected: { id }, error: null,
+    warnings: [expect.stringContaining("Cost unknown")] });
   expect(fetch).not.toHaveBeenCalled();
 });
 it("explicit full Test uses the effective override for real chat plus search/fetch, without certifying the row-default model", async () => {

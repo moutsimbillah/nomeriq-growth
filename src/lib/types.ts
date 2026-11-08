@@ -231,7 +231,9 @@ export interface ResearchJob {
   stopReason: string | null;
   lastError: string | null;
   budgetUsd: number;
+  /** Known subtotal only; unknownCostCalls discloses additional unpriced operations. */
   spentUsd: number;
+  unknownCostCalls?: number;
   concurrency: number;
   /** How many bounded worker steps have run. A stalled job shows a still count. */
   ticks: number;
@@ -277,18 +279,21 @@ export interface ResearchUsageEntry {
   operation: "search" | "fetch" | "chat" | "draft";
   model: string | null;
   requestCount: number;
-  inputTokens: number;
-  outputTokens: number;
-  costUsd: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costUsd: number | null;
   status: "success" | "error";
   createdAt: string | null;
 }
 
 export interface ResearchUsageSummary {
-  costUsd: number;
+  costUsd: number | null;
+  knownCostUsd: number;
+  unknownCostCalls: number;
+  unknownTokenCalls: number;
   requests: number;
-  inputTokens: number;
-  outputTokens: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
   searches: number;
   fetches: number;
   modelCalls: number;
@@ -320,6 +325,7 @@ export interface ResearchTickResult {
   fetches: number;
   modelCalls: number;
   spentUsd: number;
+  unknownCostCalls?: number;
   stopReason: string | null;
   notes: string[];
 }

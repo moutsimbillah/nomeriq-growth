@@ -4,6 +4,10 @@ import { truncate, wordCount } from "@/lib/utils";
 import type { WorkspaceSettings } from "@/lib/services/settings";
 import { generatedBodyOnly, EMAIL_BODY_ONLY_RULE } from "@/lib/email/message-content";
 import { runChatTask } from "@/lib/ai/registry";
+import type { ResearchModelUsage } from "@/lib/deepseek/research-provider";
+import { isResearchAccountingError, ResearchAccountingError } from "@/lib/deepseek/research-errors";
+import { recordResearchUsage } from "@/lib/services/research-usage";
+import { researchModelUsage } from "@/lib/deepseek/research-pricing";
 import { buildLeadContext } from "@/lib/ai/lead-context";
 import { firstContactNeed, type FirstContactNeed } from "@/lib/ai/first-contact-need";
 import { getLeadModel } from "@/lib/services/lead-model";
@@ -20,7 +24,8 @@ export interface GeneratedDraft {
   body: string;
   model: string | null;
   usedAi: boolean;
-  usage?: DeepSeekUsage | null;
+  usage?: ResearchModelUsage | null;
+  usageRecorded?: boolean;
   /** The provider that actually wrote it, by its Settings name; null for the standard template. */
   provider?: string | null;
 }
@@ -364,7 +369,8 @@ export async function generateFirstContact(
 
   // Settings first (item 3): the provider and model chosen for "First-email drafting".
   try {
-    const viaSettings = await runChatTask("first_email", { system, user: settingsUser, maxTokens: 700, json: true });
+    const viaSettings = await runChatTask("first_email", { system, user: settingsUser, maxTokens: 700, json: true, captureUsage: true,
+      ...(prospect.researchJobId ? { usageContext: { jobId: prospect.researchJobId, operation: "draft" as const } } : {}) });
     if (viaSettings.ok) {
       const parsed = parseDraftJson(viaSettings.text);
       const body = generatedBodyOnly(parsed.body, [settings.senderSignature]);
@@ -374,13 +380,16 @@ export async function generateFirstContact(
           body,
           model: viaSettings.model,
           usedAi: true,
-          usage: null,
+          usageRecorded: Boolean(prospect.researchJobId),
+          usage: { model: viaSettings.model, inputTokens: viaSettings.usage?.inputTokens ?? null,
+            cachedInputTokens: viaSettings.usage?.cachedInputTokens ?? null, outputTokens: viaSettings.usage?.outputTokens ?? null, costUsd: null },
           provider: viaSettings.providerName ?? viaSettings.provider,
         };
       }
     }
   } catch (error) {
-    console.error("AI draft generation via Settings failed; trying the environment.", error);
+    if (isResearchAccountingError(error)) throw error;
+    console.error("AI draft generation via Settings failed; trying the environment.");
   }
 
   const provider = (
@@ -390,6 +399,14 @@ export async function generateFirstContact(
   ).toLowerCase();
   if (provider === "none") return fallback;
 
+  let legacyAttempted = false;
+  let legacyRecorded = false;
+  const recordLegacy = async (usage: ResearchModelUsage) => {
+    if (!prospect.researchJobId) return;
+    try { await recordResearchUsage({ ...usage, jobId: prospect.researchJobId, operation: "draft", provider }); }
+    catch { throw new ResearchAccountingError(); }
+    legacyRecorded = true;
+  };
   try {
     if (provider === "deepseek") {
       const resolved = options.deepseekConfig
@@ -399,10 +416,14 @@ export async function generateFirstContact(
         console.warn(resolved.error);
         return fallback;
       }
+      legacyAttempted = true;
       const ai = await deepseekChatJson<{ subject: string; body: string }>(
         resolved.config,
         { system, user, maxTokens: 700, temperature: 0.4 },
       );
+      const usage = researchModelUsage({ provider: "deepseek", baseUrl: resolved.config.baseUrl, model: resolved.config.model },
+        { model: ai.usage.model, usage: ai.usage.reportedUsage });
+      await recordLegacy(usage);
       if (
         typeof ai.data.subject !== "string" ||
         typeof ai.data.body !== "string"
@@ -411,16 +432,18 @@ export async function generateFirstContact(
       }
       const body = generatedBodyOnly(ai.data.body, [settings.senderSignature]);
       if (wordCount(body) < 20) {
-        return { ...fallback, usage: ai.usage };
+        return { ...fallback, usage, usageRecorded: legacyRecorded };
       }
       return {
         subject: ai.data.subject.trim().slice(0, 160),
         body,
         model: ai.usage.model,
         usedAi: true,
-        usage: ai.usage,
+        usage,
+        usageRecorded: legacyRecorded,
       };
     }
+    legacyAttempted = provider === "openai" || provider === "anthropic";
     const result =
       provider === "openai"
         ? await callOpenAI(system, user)
@@ -428,6 +451,8 @@ export async function generateFirstContact(
           ? await callAnthropic(system, user)
           : fallback;
     if (!("subject" in result)) return fallback;
+    const usage = { model: result.model, inputTokens: null, cachedInputTokens: null, outputTokens: null, costUsd: null };
+    await recordLegacy(usage);
     const body = generatedBodyOnly(result.body, [settings.senderSignature]);
     if (wordCount(body) < 20) return fallback;
     return {
@@ -435,10 +460,17 @@ export async function generateFirstContact(
       body,
       model: result.model,
       usedAi: true,
-      usage: null,
+      usage,
+      usageRecorded: legacyRecorded,
     };
   } catch (error) {
-    console.error("AI draft generation failed; using deterministic writer.", error);
+    if (isResearchAccountingError(error)) throw error;
+    if (legacyAttempted && !legacyRecorded && prospect.researchJobId) {
+      try { await recordResearchUsage({ jobId: prospect.researchJobId, operation: "draft", provider,
+        model: null, costUsd: null, status: "error" }); }
+      catch { throw new ResearchAccountingError(); }
+    }
+    console.error("AI draft generation failed; using deterministic writer.");
     return fallback;
   }
 }

@@ -79,7 +79,7 @@ it("Z.ai creation is disabled/unassigned by default and search capability is ref
   expect(network).not.toHaveBeenCalled();
 });
 
-it("Z.ai cannot widen the DeepSeek research adapter or its known-priced usage path", async () => {
+it("Z.ai research needs a real search source, but unknown pricing never blocks a capable model", async () => {
   const db = await getDb();
   const old = (await db.query("SELECT * FROM ai_task_settings WHERE task='lead_research'")).rows;
   const id = await createResearchProvider({ name: `GLM research refusal ${crypto.randomUUID()}`, provider: "zai", isEnabled: true, apiKey: crypto.randomUUID() }); providers.push(id);
@@ -87,10 +87,15 @@ it("Z.ai cannot widen the DeepSeek research adapter or its known-priced usage pa
     await db.query("UPDATE research_providers SET last_test_ok=true WHERE id=$1", [id]);
     await db.query("DELETE FROM ai_task_settings WHERE task='lead_research'");
     await db.query("INSERT INTO ai_task_settings(task,provider_id) VALUES('lead_research',$1)", [id]);
-    const network = vi.fn(() => { throw new Error("Unsupported research must not reach network"); }); vi.stubGlobal("fetch", network);
+    const network = vi.fn(() => { throw new Error("Configuration resolution must not reach network"); }); vi.stubGlobal("fetch", network);
     const result = await resolveLeadResearch();
     expect(result.configuration.configured).toBe(false);
-    expect(result.configuration.warnings.join(" ")).toContain("official DeepSeek");
+    expect(result.configuration.warnings.join(" ")).toContain("model-only");
+    const source = await createResearchProvider({ name: `Separate source ${crypto.randomUUID()}`, provider: "deepseek", kinds: "search", apiKey: crypto.randomUUID() }); providers.push(source);
+    await db.query("UPDATE ai_task_settings SET search_provider_id=$1 WHERE task='lead_research'", [source]);
+    const configured = await resolveLeadResearch();
+    expect(configured.configuration).toMatchObject({ configured: true, selected: { id }, search: { id: source }, error: null });
+    expect(configured.configuration.warnings.join(" ")).toContain("Cost unknown");
     expect(network).not.toHaveBeenCalled();
   } finally {
     await db.query("DELETE FROM ai_task_settings WHERE task='lead_research'");

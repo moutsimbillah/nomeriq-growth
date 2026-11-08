@@ -138,7 +138,8 @@ export default async function ResearchPage({
             Create a DeepSeek research target to let Growth find, verify and save
             qualified trading-signal providers on its own. Nothing is sent to those
             businesses — drafts wait for your review.
-            {engineSpend > 0 && ` Recorded DeepSeek spend so far: $${engineSpend.toFixed(4)}.`}
+            {engineSpend > 0 && ` Recorded known spend so far: $${engineSpend.toFixed(4)}.`}
+            {activeJobs.some(job => job.unknownCostCalls) && " Additional cost unknown."}
           </Notice>
         </section>
       )}
@@ -235,7 +236,7 @@ export default async function ResearchPage({
                               ["Verified", job.verifiedCount],
                               ["Candidates", job.candidatesDiscovered],
                               ["Duplicates", job.duplicatesRejected],
-                              ["Spend", `$${job.spentUsd.toFixed(4)}`],
+                              ["Spend", job.unknownCostCalls ? `Cost unknown ($${job.spentUsd.toFixed(4)} known)` : `$${job.spentUsd.toFixed(4)}`],
                             ]
                           : [
                               ["Target", job.targetCount],

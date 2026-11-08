@@ -10,22 +10,26 @@ export interface UsageInput {
   operation: ResearchOperation;
   model?: string | null;
   requestCount?: number;
-  inputTokens?: number;
-  cachedInputTokens?: number;
-  outputTokens?: number;
-  costUsd: number;
+  inputTokens?: number | null;
+  cachedInputTokens?: number | null;
+  outputTokens?: number | null;
+  costUsd: number | null;
   status?: "success" | "error";
   metadata?: Record<string, unknown>;
 }
 
 export async function recordResearchUsage(input: UsageInput): Promise<void> {
   const db = await getDb();
+  const costKnown = typeof input.costUsd === "number" && Number.isFinite(input.costUsd) && input.costUsd >= 0;
+  const cost = costKnown ? input.costUsd! : 0;
+  const tokensKnown = !["chat", "draft"].includes(input.operation) ||
+    [input.inputTokens, input.outputTokens].every(value => typeof value === "number" && Number.isSafeInteger(value) && value >= 0);
   await db.transaction(async (tx) => {
     await tx.query(
       `INSERT INTO research_usage
         (id, job_id, provider, operation, model, request_count, input_tokens,
-         cached_input_tokens, output_tokens, cost_usd, status, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)`,
+         cached_input_tokens, output_tokens, cost_usd, status, metadata, cost_known, tokens_known)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14)`,
       [
         crypto.randomUUID(),
         input.jobId ?? null,
@@ -36,16 +40,18 @@ export async function recordResearchUsage(input: UsageInput): Promise<void> {
         input.inputTokens ?? 0,
         input.cachedInputTokens ?? 0,
         input.outputTokens ?? 0,
-        Math.max(0, input.costUsd),
+        cost,
         input.status ?? "success",
         JSON.stringify(input.metadata ?? {}),
+        costKnown,
+        tokensKnown,
       ],
     );
     if (input.jobId) {
       await tx.query(
         `UPDATE research_jobs SET spent_usd = spent_usd + $1, updated_at = now()
          WHERE id = $2`,
-        [Math.max(0, input.costUsd), input.jobId],
+        [cost, input.jobId],
       );
     }
   });
@@ -56,7 +62,9 @@ export async function getResearchUsage(jobId: string) {
   const [totals, recent] = await Promise.all([
     db.query<any>(
       `SELECT
-        coalesce(sum(cost_usd), 0) AS cost_usd,
+        coalesce(sum(cost_usd) FILTER (WHERE cost_known), 0) AS cost_usd,
+        count(*) FILTER (WHERE NOT cost_known) AS unknown_cost_calls,
+        count(*) FILTER (WHERE NOT tokens_known) AS unknown_token_calls,
         coalesce(sum(request_count), 0) AS requests,
         coalesce(sum(input_tokens), 0) AS input_tokens,
         coalesce(sum(output_tokens), 0) AS output_tokens,
@@ -68,17 +76,22 @@ export async function getResearchUsage(jobId: string) {
     ),
     db.query<any>(
       `SELECT operation, model, request_count, input_tokens, output_tokens,
-        cost_usd, status, created_at
+        cost_usd, cost_known, tokens_known, status, created_at
        FROM research_usage WHERE job_id = $1 ORDER BY created_at DESC LIMIT 20`,
       [jobId],
     ),
   ]);
   const row = totals.rows[0] ?? {};
   return {
-    costUsd: number(row.cost_usd),
+    costUsd: number(row.unknown_cost_calls) ? null : number(row.cost_usd),
+    knownCostUsd: number(row.cost_usd),
+    unknownCostCalls: number(row.unknown_cost_calls),
+    unknownTokenCalls: number(row.unknown_token_calls),
     requests: number(row.requests),
-    inputTokens: number(row.input_tokens),
-    outputTokens: number(row.output_tokens),
+    inputTokens: number(row.unknown_token_calls) ? null : number(row.input_tokens),
+    outputTokens: number(row.unknown_token_calls) ? null : number(row.output_tokens),
+    knownInputTokens: number(row.input_tokens),
+    knownOutputTokens: number(row.output_tokens),
     searches: number(row.searches),
     fetches: number(row.fetches),
     modelCalls: number(row.model_calls),
@@ -86,9 +99,9 @@ export async function getResearchUsage(jobId: string) {
       operation: entry.operation,
       model: entry.model,
       requestCount: number(entry.request_count),
-      inputTokens: number(entry.input_tokens),
-      outputTokens: number(entry.output_tokens),
-      costUsd: number(entry.cost_usd),
+      inputTokens: entry.tokens_known === false ? null : number(entry.input_tokens),
+      outputTokens: entry.tokens_known === false ? null : number(entry.output_tokens),
+      costUsd: entry.cost_known === false ? null : number(entry.cost_usd),
       status: entry.status,
       createdAt: entry.created_at ? new Date(entry.created_at).toISOString() : null,
     })),
@@ -99,17 +112,22 @@ export async function getAllResearchUsage() {
   const db = await getDb();
   const result = await db.query<any>(
     `SELECT
-      coalesce(sum(cost_usd), 0) AS cost_usd,
+      coalesce(sum(cost_usd) FILTER (WHERE cost_known), 0) AS cost_usd,
+      count(*) FILTER (WHERE NOT cost_known) AS unknown_cost_calls,
+      count(*) FILTER (WHERE NOT cost_known AND created_at >= now() - interval '24 hours') AS unknown_cost_calls_24h,
       count(*) AS calls,
       count(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS calls_24h,
-      coalesce(sum(cost_usd) FILTER (WHERE created_at >= now() - interval '24 hours'), 0) AS cost_24h
+      coalesce(sum(cost_usd) FILTER (WHERE cost_known AND created_at >= now() - interval '24 hours'), 0) AS cost_24h
      FROM research_usage`,
   );
   const row = result.rows[0] ?? {};
   return {
-    costUsd: number(row.cost_usd),
+    costUsd: number(row.unknown_cost_calls) ? null : number(row.cost_usd),
+    knownCostUsd: number(row.cost_usd),
+    unknownCostCalls: number(row.unknown_cost_calls),
     calls: number(row.calls),
     calls24h: number(row.calls_24h),
-    cost24h: number(row.cost_24h),
+    cost24h: number(row.unknown_cost_calls_24h) ? null : number(row.cost_24h),
+    knownCost24h: number(row.cost_24h),
   };
 }

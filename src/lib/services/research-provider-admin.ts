@@ -420,7 +420,8 @@ export async function testResearchProvider(id: string, options: { model?: string
       outcome = chat;
       // Native search adapters for other vendors are part of the research-engine phase.
       // A model-only row is tested for chat, not rejected for lacking proprietary DeepSeek tools.
-      if (chat.ok && options.researchTools !== false && (row.provider === "deepseek" || (row.provider === "custom" && row.kinds === "both"))) {
+      if (chat.ok && options.researchTools !== false && row.kinds === "both" &&
+        (row.provider === "deepseek" || row.provider === "custom")) {
         const research = await testDeepSeekConnection(config);
         outcome = { ok: research.ok && research.fetchOk, message: `${chat.message} ${research.message}`, models: chat.models };
         discovered = { searchPath: research.searchPath, fetchPath: research.fetchPath };

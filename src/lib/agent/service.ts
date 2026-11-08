@@ -120,6 +120,9 @@ function describeResearchJobForAgent(job: ResearchJob) {
     searchQueriesUsed: job.searchQueriesUsed,
     budgetUsd: job.budgetUsd,
     spentUsd: job.spentUsd,
+    knownCostUsd: job.spentUsd,
+    costUsd: job.unknownCostCalls ? null : job.spentUsd,
+    unknownCostCalls: job.unknownCostCalls ?? 0,
     stopReason: job.stopReason,
     lastError: job.lastError,
     lastWorkerAt: job.lastWorkerAt,
@@ -253,7 +256,7 @@ async function executeAgentAction(
       result = {
         jobs: jobs.map(describeResearchJobForAgent),
         engineNote:
-          "Jobs with engine \"deepseek\" are researched by Growth itself on the server, without a browser or chat session. Their status, spend and stopReason are the real recorded values. Research assistants cannot start, pause, resume or cancel a job; the founder controls that in Growth.",
+          "Jobs with engine \"deepseek\" are researched by Growth itself on the server, without a browser or chat session. spentUsd/knownCostUsd are known subtotals only; costUsd is null when unknownCostCalls is positive. Never report that as free or zero total spend. Research assistants cannot start, pause, resume or cancel a job; the founder controls that in Growth.",
       };
       break;
     }

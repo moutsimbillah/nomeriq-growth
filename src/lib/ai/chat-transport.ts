@@ -1,4 +1,5 @@
 import { PROVIDER_CATALOG } from "@/lib/ai/provider-catalog";
+import { extractChatUsage, type ChatTokenUsage } from "@/lib/ai/chat-usage";
 
 export interface ChatProviderConfig {
   provider: string;
@@ -10,6 +11,10 @@ export interface ChatInput {
   user: string;
   maxTokens?: number;
   json?: boolean;
+  /** Research accounting requests reported counters; other callers keep their existing contract. */
+  captureUsage?: boolean;
+  /** Preserve the existing canonical DeepSeek research request; never applied to gateways. */
+  officialDeepSeekResearch?: boolean;
   /** Per HTTP attempt, including the entire response body. Defaults to 60 seconds. */
   timeoutMs?: number;
   /** Opt-in temporary-failure retries, clamped to 0–2; compatibility retries are separate. */
@@ -26,10 +31,10 @@ export interface ChatAttemptFailure {
   providerCode?: string;
 }
 export type TransportResult =
-  | { ok: true; text: string; model: string }
+  | { ok: true; text: string; model: string; usage?: ChatTokenUsage | null }
   | { ok: false; code: string; reason: string; status?: number | null; elapsedMs?: number; providerCode?: string; failures?: ChatAttemptFailure[] };
 
-const OPTIONAL_FIELDS = ["response_format", "max_tokens", "max_completion_tokens", "stream"] as const;
+const OPTIONAL_FIELDS = ["response_format", "max_tokens", "max_completion_tokens", "stream", "stream_options"] as const;
 const RATE_CODES = new Set(["rate_limit", "rate_limit_exceeded", "rate_limit_error", "too_many_requests", "resource_exhausted", "429", "1302"]);
 const CONTEXT_CODES = new Set(["context_length_exceeded", "context_window_exceeded", "input_too_long", "prompt_too_long", "request_too_large", "413"]);
 const QUOTA_CODES = new Set(["insufficient_quota", "quota_exceeded", "billing_error", "billing_hard_limit_reached", "insufficient_balance", "credit_balance_too_low", "1113"]);
@@ -186,6 +191,7 @@ export async function listProviderModels(config: ChatProviderConfig, key: string
 export async function requestProviderChat(config: ChatProviderConfig, key: string, input: ChatInput): Promise<TransportResult> {
   const base = baseFor(config);
   const maxTokens = input.maxTokens ?? 4096;
+  const officialResearch = input.officialDeepSeekResearch === true && config.provider === "deepseek" && base === "https://api.deepseek.com";
   let url: string;
   const compatible = !["anthropic", "gemini"].includes(config.provider);
   let body: Record<string, unknown>;
@@ -196,15 +202,17 @@ export async function requestProviderChat(config: ChatProviderConfig, key: strin
     url = `${base}/v1beta/models/${config.model}:generateContent`;
     body = { systemInstruction: { parts: [{ text: input.system }] }, contents: [{ role: "user", parts: [{ text: input.user }] }], generationConfig: { maxOutputTokens: maxTokens, ...(input.json ? { responseMimeType: "application/json" } : {}) } };
   } else {
-    url = config.provider === "zai" ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
+    url = config.provider === "zai" || officialResearch ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
     body = {
       model: config.model,
       messages: [{ role: "system", content: input.system }, { role: "user", content: input.user }],
       ...(config.provider === "openai" ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }),
       ...(config.provider === "zai" ? { thinking: { type: "enabled" }, reasoning_effort: "low" } : {}),
+      ...(officialResearch ? { thinking: { type: "disabled" }, temperature: 0.2 } : {}),
       ...(input.json ? { response_format: { type: "json_object" } } : {}),
       // Streaming is part of the standard Chat Completions protocol. Some gateways require it.
-      stream: true,
+      stream: !officialResearch,
+      ...(input.captureUsage && !officialResearch ? { stream_options: { include_usage: true } } : {}),
     };
   }
   const timeoutMs = Number.isFinite(input.timeoutMs) && input.timeoutMs! > 0 ? input.timeoutMs! : 60_000;
@@ -266,7 +274,8 @@ export async function requestProviderChat(config: ChatProviderConfig, key: strin
           code = "empty_response";
           return null;
         }
-        return { ok: true as const, text: parsed.text, model: parsed.model || config.model };
+        return { ok: true as const, text: parsed.text, model: parsed.model || config.model,
+          ...(input.captureUsage ? { usage: extractChatUsage(config.provider, raw) } : {}) };
       })()]);
       if (result) {
         diagnostic(attempt, status, "success", Date.now() - started);
@@ -288,11 +297,14 @@ export async function requestProviderChat(config: ChatProviderConfig, key: strin
       ...(providerCode ? { providerCode } : {}) };
     failures.push(failure);
     diagnostic(attempt, status, code, failure.elapsedMs);
-    if (compatibilityField && compatibilityRetries < 3) {
+    const wouldRemoveLastLimit = (compatibilityField === "max_tokens" && changed.has("max_completion_tokens")) ||
+      (compatibilityField === "max_completion_tokens" && changed.has("max_tokens"));
+    if (compatibilityField && compatibilityRetries < 3 && !wouldRemoveLastLimit) {
       compatibilityRetries++;
       changed.add(compatibilityField);
       body = { ...body };
       delete body[compatibilityField];
+      if (compatibilityField === "stream") delete body.stream_options;
       if (compatibilityField === "max_tokens" && !changed.has("max_completion_tokens")) body.max_completion_tokens = maxTokens;
       if (compatibilityField === "max_completion_tokens" && !changed.has("max_tokens")) body.max_tokens = maxTokens;
       continue;
