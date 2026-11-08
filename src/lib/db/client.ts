@@ -138,6 +138,11 @@ async function createClient(): Promise<DbClient> {
       idleTimeoutMillis: 20_000,
       connectionTimeoutMillis: 15_000,
       ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
+      // JIT off for every app connection. This workload is small OLTP queries, but the follow-up
+      // candidate query's cost estimate sits far above jit_above_cost, so Postgres JIT-compiled
+      // ~400 functions on every dashboard load: 3.3s of a 4.5s query, measured on live. Execution
+      // alone took 1.6s. Session-level only; no database or server setting changes.
+      options: "-c jit=off",
     });
     await pool.query("SELECT 1");
     return new PgClient(pool);
