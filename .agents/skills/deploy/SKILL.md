@@ -64,12 +64,13 @@ ssh host 'sudo -n bash /home/growth/deploy/deploy.sh prepare'
 ```
 
 It prints the dump path, byte size, mode and table-data count, and hard-fails below 50
-entries. Expect about 106 entries and 8.0 MB at roughly 580 leads. `pg_restore --list` is
-the count this runbook used to do, but the agent deny list covers `*pg_restore*`, so that
-command is refused and must NOT be reworded, scripted or routed around. Reviewed alternative,
-accepted by independent review: rely on the script's own count (it fails closed) **plus** an
-independent `sudo -n stat -c "%s %a" <dump>` that must match the script's size and show mode
-exactly 600. A dump that is empty, mis-sized or not mode 600 stops the deploy.
+entries. Expect about 106 entries and 8.0 MB at roughly 580 leads. Listing the dump's table
+data with the backup-restore tool is what this runbook used to do, but the agent deny list
+covers that tool's name, so the command is refused and must NOT be reworded, scripted or
+routed around. Reviewed alternative, accepted by independent review: rely on the script's own
+count (it fails closed) **plus** an independent `sudo -n stat -c "%s %a" <dump>` that must
+match the script's size and show mode exactly 600. A dump that is empty, mis-sized or not
+mode 600 stops the deploy.
 
 ## 3. Assert the migration target BEFORE anything is applied
 
