@@ -1,36 +1,161 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, LoaderCircle, Save, ShieldCheck } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  LoaderCircle,
+  Save,
+  ShieldCheck,
+  Upload,
+} from "lucide-react";
 import type { ProductTruth } from "@/lib/types";
+import {
+  changedProductTruthFields,
+  parseProductTruthImport,
+  PRODUCT_TRUTH_FIELD_LABELS,
+  PRODUCT_TRUTH_IMPORT_MAX_BYTES,
+  productTruthExportFileName,
+  productTruthExportJson,
+  productTruthSaveBody,
+  productTruthToFormState,
+  savedFormOf,
+  type ProductTruthContentField,
+  type ProductTruthFormState,
+  type ProductTruthImportMetadata,
+} from "@/lib/product-truth-transfer";
 import { apiRequest, InlineError, SubmitBar } from "./client-ui";
 import { Notice } from "./ui";
 
-function toLines(values: string[]) {
-  return values.join("\n");
+interface PendingImport {
+  fileName: string;
+  form: ProductTruthFormState;
+  metadata: ProductTruthImportMetadata;
+  changed: ProductTruthContentField[];
+  /** Fields with unsaved edits that the import would overwrite. */
+  overwritesUnsaved: ProductTruthContentField[];
+}
+
+function fieldList(fields: ProductTruthContentField[]) {
+  return fields.map((field) => PRODUCT_TRUTH_FIELD_LABELS[field]).join(", ");
 }
 
 export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
   const router = useRouter();
-  const [oneLiner, setOneLiner] = useState(truth.oneLiner);
-  const [offerSummary, setOfferSummary] = useState(truth.offerSummary);
-  const [howItWorks, setHowItWorks] = useState(truth.howItWorks);
-  const [pricingNotes, setPricingNotes] = useState(truth.pricingNotes);
-  const [integrations, setIntegrations] = useState(truth.integrations);
-  const [limitations, setLimitations] = useState(truth.limitations);
-  const [approvedClaims, setApprovedClaims] = useState(
-    toLines(truth.approvedClaims),
+  const [form, setForm] = useState<ProductTruthFormState>(() =>
+    productTruthToFormState(truth),
   );
-  const [prohibitedClaims, setProhibitedClaims] = useState(
-    toLines(truth.prohibitedClaims),
-  );
-  const [discoveryQuestions, setDiscoveryQuestions] = useState(
-    toLines(truth.discoveryQuestions ?? []),
-  );
+  const {
+    oneLiner,
+    offerSummary,
+    howItWorks,
+    pricingNotes,
+    integrations,
+    limitations,
+    approvedClaims,
+    prohibitedClaims,
+    discoveryQuestions,
+  } = form;
+  const setField = (field: ProductTruthContentField) => (value: string) =>
+    setForm((current) => ({ ...current, [field]: value }));
+  const setOneLiner = setField("oneLiner");
+  const setOfferSummary = setField("offerSummary");
+  const setHowItWorks = setField("howItWorks");
+  const setPricingNotes = setField("pricingNotes");
+  const setIntegrations = setField("integrations");
+  const setLimitations = setField("limitations");
+  const setApprovedClaims = setField("approvedClaims");
+  const setProhibitedClaims = setField("prohibitedClaims");
+  const setDiscoveryQuestions = setField("discoveryQuestions");
   const [pending, setPending] = useState<"draft" | "approve" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [importErrors, setImportErrors] = useState<string[] | null>(null);
+  const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  // What Save would change compared with the saved version shown in the header.
+  const unsavedFields = changedProductTruthFields(
+    savedFormOf(productTruthToFormState(truth)),
+    savedFormOf(form),
+  );
+  const savedLabel = `version ${truth.version} (${truth.status === "approved" ? "approved" : "draft, not approved"})`;
+
+  // Export the SAVED record exactly as Growth stores and reads it. No request is made.
+  function exportSaved() {
+    setError(null);
+    setImportErrors(null);
+    const blob = new Blob([productTruthExportJson(truth)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = productTruthExportFileName(truth);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    setNotice(
+      unsavedFields.length
+        ? `Exported saved ${savedLabel}. Your unsaved edits (${fieldList(unsavedFields)}) are not in this file — save first to include them.`
+        : `Exported saved ${savedLabel}.`,
+    );
+  }
+
+  // Read a file into a preview. Nothing is applied, saved or approved here; no request is made.
+  async function chooseImportFile(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.target;
+    const file = input.files?.[0];
+    // Reset so choosing the same file again (after fixing it) fires change again.
+    input.value = "";
+    if (!file) return;
+    setError(null);
+    setNotice(null);
+    setImportErrors(null);
+    setPendingImport(null);
+    if (file.size > PRODUCT_TRUTH_IMPORT_MAX_BYTES) {
+      setImportErrors([
+        `${file.name} is larger than ${Math.round(PRODUCT_TRUTH_IMPORT_MAX_BYTES / 1024)} KB.`,
+      ]);
+      return;
+    }
+    let text: string;
+    try {
+      text = await file.text();
+    } catch {
+      setImportErrors([`Could not read ${file.name}.`]);
+      return;
+    }
+    const result = parseProductTruthImport(text);
+    if (!result.ok) {
+      setImportErrors(result.errors);
+      return;
+    }
+    const imported = productTruthToFormState(result.content);
+    const changed = changedProductTruthFields(form, imported);
+    if (!changed.length) {
+      setNotice(`${file.name} matches the form already. Nothing changed.`);
+      return;
+    }
+    setPendingImport({
+      fileName: file.name,
+      form: imported,
+      metadata: result.metadata,
+      changed,
+      overwritesUnsaved: changed.filter((field) => unsavedFields.includes(field)),
+    });
+  }
+
+  function applyImport() {
+    if (!pendingImport) return;
+    setForm(pendingImport.form);
+    setNotice(
+      `Loaded ${pendingImport.changed.length} field${pendingImport.changed.length === 1 ? "" : "s"} from ${pendingImport.fileName} into the form. Nothing is saved yet: review, then choose Save draft version or Save & approve. The file's version, status and approval were not applied.`,
+    );
+    setPendingImport(null);
+  }
 
   async function save(approve: boolean) {
     setPending(approve ? "approve" : "draft");
@@ -39,18 +164,7 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
     try {
       await apiRequest("/api/product-truth", {
         method: "PUT",
-        body: {
-          oneLiner,
-          offerSummary,
-          howItWorks,
-          pricingNotes,
-          integrations,
-          limitations,
-          approvedClaims: approvedClaims.split("\n").map((line) => line.trim()).filter(Boolean),
-          prohibitedClaims: prohibitedClaims.split("\n").map((line) => line.trim()).filter(Boolean),
-          discoveryQuestions: discoveryQuestions.split("\n").map((line) => line.trim()).filter(Boolean),
-          approve,
-        },
+        body: productTruthSaveBody(form, approve),
       });
       setNotice(
         approve
@@ -100,6 +214,116 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
           personally review and send a reply, Growth applies only the essential
           recipient, suppression, authentication and delivery safeguards.
         </Notice>
+
+        <div
+          data-product-truth-transfer
+          className="rounded-lg border border-line px-3 py-3"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => fileInput.current?.click()}
+              disabled={!!pending}
+            >
+              <Upload size={13} /> Import JSON
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={exportSaved}
+              disabled={!!pending}
+            >
+              <Download size={13} /> Export saved JSON (v{truth.version})
+            </button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              aria-label="Product Truth JSON file to import"
+              data-product-truth-import-input
+              onChange={chooseImportFile}
+            />
+          </div>
+          <p className="field-hint">
+            Export downloads saved {savedLabel} in the exact format Growth
+            saves and reads. Import loads a file in that format into this form
+            only — nothing is saved or approved until you choose a save button.
+            {unsavedFields.length > 0 &&
+              ` The form has unsaved edits (${fieldList(unsavedFields)}); Export does not include them.`}
+          </p>
+        </div>
+
+        {importErrors && (
+          <div data-product-truth-import-errors>
+            <InlineError>
+              <div className="font-semibold">
+                Import refused — the form was not changed.
+              </div>
+              <ul className="mt-1 list-disc pl-4">
+                {importErrors.map((message) => (
+                  <li key={message}>{message}</li>
+                ))}
+              </ul>
+            </InlineError>
+          </div>
+        )}
+
+        {pendingImport && (
+          <div
+            data-product-truth-import-preview
+            className="rounded-lg border border-amber/25 bg-amber/[0.06] px-3 py-3 text-12 leading-5 text-ink"
+          >
+            <div className="font-semibold">
+              Replace form fields from {pendingImport.fileName}?
+            </div>
+            <p className="mt-1 text-muted">
+              Will replace: {fieldList(pendingImport.changed)}.
+            </p>
+            {pendingImport.overwritesUnsaved.length > 0 && (
+              <p className="mt-1 font-semibold text-rust">
+                This discards your unsaved edits to:{" "}
+                {fieldList(pendingImport.overwritesUnsaved)}.
+              </p>
+            )}
+            <p className="mt-1 text-muted">
+              {pendingImport.metadata.version !== undefined ||
+              pendingImport.metadata.status
+                ? `The file says ${[
+                    pendingImport.metadata.version !== undefined
+                      ? `version ${pendingImport.metadata.version}`
+                      : null,
+                    pendingImport.metadata.status === "approved"
+                      ? "approved"
+                      : pendingImport.metadata.status
+                        ? "not approved"
+                        : null,
+                  ]
+                    .filter(Boolean)
+                    .join(", ")}; that is ignored. `
+                : ""}
+              Nothing is saved or approved until you choose Save draft version
+              or Save &amp; approve.
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={applyImport}
+              >
+                Replace form fields
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setPendingImport(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         <div>
           <label className="label" htmlFor="one-liner">
@@ -239,7 +463,7 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
             type="button"
             className="btn-secondary"
             onClick={() => save(false)}
-            disabled={!!pending || !oneLiner.trim()}
+            disabled={!!pending || !!pendingImport || !oneLiner.trim()}
           >
             {pending === "draft" ? (
               <LoaderCircle size={13} className="spin" />
@@ -252,7 +476,7 @@ export function ProductTruthForm({ truth }: { truth: ProductTruth }) {
             type="button"
             className="btn-primary"
             onClick={() => save(true)}
-            disabled={!!pending || !oneLiner.trim()}
+            disabled={!!pending || !!pendingImport || !oneLiner.trim()}
           >
             {pending === "approve" ? (
               <LoaderCircle size={13} className="spin" />
