@@ -196,21 +196,34 @@ describe("limits are exactly the PUT limits, shared by import and the route", ()
   const L = PRODUCT_TRUTH_LIMITS;
   const atLimit = {
     oneLiner: "a".repeat(L.oneLiner),
-    offerSummary: "b".repeat(L.text), howItWorks: "c".repeat(L.text), pricingNotes: "d".repeat(L.text),
-    integrations: "e".repeat(L.text), limitations: "f".repeat(L.text),
+    offerSummary: "b".repeat(5000), howItWorks: "c".repeat(5000), pricingNotes: "d".repeat(5000),
+    integrations: "e".repeat(5000), limitations: "f".repeat(5000),
     approvedClaims: Array.from({ length: L.approvedClaims.items }, () => "g".repeat(L.approvedClaims.chars)),
     prohibitedClaims: Array.from({ length: L.prohibitedClaims.items }, () => "h".repeat(L.prohibitedClaims.chars)),
     discoveryQuestions: Array.from({ length: L.discoveryQuestions.items }, () => "i".repeat(L.discoveryQuestions.chars)),
   };
 
-  it("the limit values are unchanged", () => {
+  it("keeps one-liner and list limits without imposing a paragraph length limit", () => {
     expect(L).toEqual({
-      oneLiner: 500, text: 5000,
+      oneLiner: 500,
       approvedClaims: { items: 100, chars: 1000 },
       prohibitedClaims: { items: 100, chars: 500 },
       discoveryQuestions: { items: 50, chars: 1000 },
     });
   });
+
+  it.each(["offerSummary", "howItWorks", "pricingNotes", "integrations", "limitations"] as const)(
+    "%s longer than 5000 characters imports and passes the save schema without truncation",
+    (field) => {
+      const longText = "Long founder-maintained paragraph.\n".repeat(1000);
+      const record = { ...productTruthExportObject(saved), [field]: longText };
+      const result = parseProductTruthImport(JSON.stringify(record));
+      if (!result.ok) throw new Error(result.errors.join("; "));
+      expect(result.content[field]).toBe(longText);
+      const body = productTruthSaveBody(productTruthToFormState(result.content), false);
+      expect(productTruthSaveSchema.parse(body)[field]).toBe(longText);
+    },
+  );
 
   it("at the limits: import and PUT both accept", () => {
     expect(parseProductTruthImport(JSON.stringify(atLimit)).ok).toBe(true);
@@ -219,8 +232,6 @@ describe("limits are exactly the PUT limits, shared by import and the route", ()
 
   const over: [string, unknown, string][] = [
     ["oneLiner", "a".repeat(501), "One-line description (oneLiner) is longer than 500 characters."],
-    ["offerSummary", "b".repeat(5001), "What Nomeriq offers (offerSummary) is longer than 5000 characters."],
-    ["limitations", "f".repeat(5001), "Limitations and things not to claim (limitations) is longer than 5000 characters."],
     ["approvedClaims", Array.from({ length: 101 }, () => "g"), "Approved claims (approvedClaims) has more than 100 entries."],
     ["approvedClaims", ["g".repeat(1001)], "Approved claims (approvedClaims) entry 1 is longer than 1000 characters."],
     ["prohibitedClaims", ["h".repeat(501)], "Prohibited claims (prohibitedClaims) entry 1 is longer than 500 characters."],
@@ -341,7 +352,7 @@ describe("database round trip through the real save/read services", () => {
         howItWorks: "Step 1\nStep 2",
         pricingNotes: "Not approved — do not quote.",
         integrations: "Telegram\nDiscord",
-        limitations: "No guarantees.\nNo outcomes.",
+        limitations: "No guarantees.\nNo outcomes.\n".repeat(250).trim(),
         approvedClaims: ["Claim, with comma", "Claim \"quoted\""],
         prohibitedClaims: ["guaranteed"],
         discoveryQuestions: ["Question one?", "Question two?"],

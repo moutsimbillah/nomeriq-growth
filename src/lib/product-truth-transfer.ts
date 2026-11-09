@@ -15,13 +15,12 @@ import type { ProductTruth } from "@/lib/types";
 /** The current PUT limits. The route's schema is built from these, so import cannot drift. */
 export const PRODUCT_TRUTH_LIMITS = {
   oneLiner: 500,
-  text: 5000,
   approvedClaims: { items: 100, chars: 1000 },
   prohibitedClaims: { items: 100, chars: 500 },
   discoveryQuestions: { items: 50, chars: 1000 },
 } as const;
 
-/** Largest import file accepted (bytes). The biggest valid record is well under this. */
+/** Largest import file accepted (bytes); independent of individual paragraph lengths. */
 export const PRODUCT_TRUTH_IMPORT_MAX_BYTES = 1_048_576;
 
 export const PRODUCT_TRUTH_TEXT_FIELDS = [
@@ -73,11 +72,12 @@ const L = PRODUCT_TRUTH_LIMITS;
 /** The nine content fields with the exact PUT limits (discovery questions required here). */
 export const productTruthContentShape = {
   oneLiner: z.string().min(1).max(L.oneLiner),
-  offerSummary: z.string().max(L.text),
-  howItWorks: z.string().max(L.text),
-  pricingNotes: z.string().max(L.text),
-  integrations: z.string().max(L.text),
-  limitations: z.string().max(L.text),
+  // Founder-maintained paragraphs have no per-field character cap. File uploads remain size-bounded.
+  offerSummary: z.string(),
+  howItWorks: z.string(),
+  pricingNotes: z.string(),
+  integrations: z.string(),
+  limitations: z.string(),
   approvedClaims: z.array(z.string().max(L.approvedClaims.chars)).max(L.approvedClaims.items),
   prohibitedClaims: z.array(z.string().max(L.prohibitedClaims.chars)).max(L.prohibitedClaims.items),
   discoveryQuestions: z
