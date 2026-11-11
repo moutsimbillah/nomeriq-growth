@@ -41,6 +41,7 @@ import { classifyReply } from "@/lib/email/classify";
 import { unsubscribeByToken } from "@/lib/services/suppressions";
 import { runAgentAction, TOOL_DEFINITIONS } from "@/lib/agent/service";
 import { createApiKey, type ApiKeyIdentity } from "@/lib/agent/apiKeys";
+import { assessmentFor } from "./helpers/lead-assessment";
 
 const state: {
   userId: string;
@@ -99,7 +100,9 @@ async function createVerifiedProspect(input: {
       },
     ],
     researchJobId: state.jobId,
-    qualificationStatus: "verified",
+    // A modern assessment is what makes this a verified, draftable lead; a bare `verified` label
+    // without one now saves a candidate.
+    leadAssessment: assessmentFor(`https://${input.domain}/`),
     actorType: "seed",
     actorUserId: state.userId,
   });
@@ -277,34 +280,38 @@ describe("Nomeriq Growth end-to-end workflow", () => {
     expect(second.matchedOn).toContain("contact email");
   });
 
-  it("refuses a verified lead without a contact email or evidence", async () => {
-    await expect(
-      saveProspect({
-        businessName: "No Email Provider",
-        websiteUrl: "https://no-email.example.com",
-        categories: ["forex"],
-        signalDescription: "Signal provider without a public contact email.",
-        sources: [source("https://no-email.example.com/pricing")],
-        qualificationStatus: "verified",
-        emailSourceUrl: "https://no-email.example.com/contact",
-        actorType: "founder",
-        actorUserId: state.userId,
-      }),
-    ).rejects.toThrow(/contact email/i);
+  it("treats a bare verified label without an email or evidence as a candidate, never a refusal", async () => {
+    // The save service no longer refuses these: a caller's legacy label is not evidence, so the row
+    // is recorded truthfully as a candidate. Verification still has to be earned by an assessment.
+    const noEmail = await saveProspect({
+      businessName: "No Email Provider",
+      websiteUrl: "https://no-email.example.com",
+      categories: ["forex"],
+      signalDescription: "Signal provider without a public contact email.",
+      sources: [source("https://no-email.example.com/pricing")],
+      qualificationStatus: "verified",
+      emailSourceUrl: "https://no-email.example.com/contact",
+      actorType: "founder",
+      actorUserId: state.userId,
+    });
+    expect(noEmail.created).toBe(true);
+    expect(noEmail.prospect.qualificationStatus).toBe("candidate");
+    expect(noEmail.prospect.verifiedAt).toBeNull();
 
-    await expect(
-      saveProspect({
-        businessName: "No Source Provider",
-        websiteUrl: "https://no-source.example.org",
-        categories: ["crypto"],
-        signalDescription: "Signal provider without a source URL.",
-        email: "hello@no-source.example.org",
-        emailSourceUrl: "https://no-source.example.org/contact",
-        qualificationStatus: "verified",
-        actorType: "founder",
-        actorUserId: state.userId,
-      }),
-    ).rejects.toThrow(/evidence source/i);
+    const noSource = await saveProspect({
+      businessName: "No Source Provider",
+      websiteUrl: "https://no-source.example.org",
+      categories: ["crypto"],
+      signalDescription: "Signal provider without a source URL.",
+      email: "hello@no-source.example.org",
+      emailSourceUrl: "https://no-source.example.org/contact",
+      qualificationStatus: "verified",
+      actorType: "founder",
+      actorUserId: state.userId,
+    });
+    expect(noSource.created).toBe(true);
+    expect(noSource.prospect.qualificationStatus).toBe("candidate");
+    expect(noSource.prospect.verifiedAt).toBeNull();
   });
 
   it("preserves founder-edited drafts against AI overwrite", async () => {

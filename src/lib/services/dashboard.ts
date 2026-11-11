@@ -1,6 +1,7 @@
 import { getDb } from "@/lib/db/client";
 import { iso, number } from "@/lib/utils";
 import type { Classification, PipelineStatus } from "@/lib/types";
+import { qualifiedTargetPredicateSql } from "@/lib/leads/qualified-target";
 import { listConversations } from "./conversations";
 import { getFollowUpOverview } from "./followups";
 import { listResearchJobs, getResearchOverview } from "./research";
@@ -30,6 +31,7 @@ export async function getDashboardData() {
         (SELECT count(*) FROM prospects WHERE qualification_status = 'verified' AND archived_at IS NULL) AS verified,
         (SELECT count(*) FROM prospects WHERE qualification_status = 'verified' AND archived_at IS NULL
           AND EXISTS (SELECT 1 FROM prospect_emails e WHERE e.prospect_id = prospects.id)) AS verified_with_email,
+        (SELECT count(*) FROM prospects p WHERE ${qualifiedTargetPredicateSql("p")}) AS qualified_targets,
         (SELECT count(*) FROM drafts WHERE status IN ('draft', 'approved')) AS drafts_open,
         (SELECT count(*) FROM drafts WHERE status = 'approved') AS drafts_approved,
         (SELECT count(*) FROM conversations WHERE unread_count > 0) AS unread_conversations,
@@ -81,6 +83,8 @@ export async function getDashboardData() {
     metrics: {
       verified: number(countsRow.verified),
       verifiedWithEmail: number(countsRow.verified_with_email),
+      /** Counts toward a research target, under the shared qualified-target rule. */
+      qualifiedTargets: number(countsRow.qualified_targets),
       draftsOpen: number(countsRow.drafts_open),
       draftsApproved: number(countsRow.drafts_approved),
       unreadConversations: number(countsRow.unread_conversations),

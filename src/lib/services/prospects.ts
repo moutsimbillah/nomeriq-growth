@@ -34,8 +34,9 @@ import { leadModelConditions, leadPriorityOrderSql } from "@/lib/leads/query";
 import type { LeadFilters } from "@/lib/leads/leadFilters";
 import { leadIntakeSchema, type LeadIntake } from "@/lib/leads/intake";
 import type { LeadModel } from "@/lib/leads/model";
-import { saveLeadAssessment, saveAudienceObservation, saveContactRoute } from "./lead-model";
-import { businessDomain, sharedProfileKey, socialKeys as identitySocialKeys, isSharedIdentityHost, type SocialIdentity } from "@/lib/leads/identity";
+import { isQualifiedTargetModel } from "@/lib/leads/qualified-target";
+import { getLeadModel, saveLeadAssessment, saveAudienceObservation, saveContactRoute } from "./lead-model";
+import { businessDomain, sharedProfileKey, socialKeys as identitySocialKeys, type SocialIdentity } from "@/lib/leads/identity";
 import { refreshResearchJobStatus } from "./research";
 import { getWorkspaceSettings } from "./settings";
 
@@ -199,8 +200,9 @@ export async function saveProspect(
     throw new AppError("One or more trading categories are invalid.");
   }
 
-  const qualification = intake.leadAssessment ? "candidate" : input.qualificationStatus ?? "verified";
-  let savedQualification: "candidate" | "verified" | "rejected" = qualification;
+  // A caller's legacy label is never evidence. Insert as candidate; only the
+  // modern assessment below may promote a NEW record, in this transaction.
+  let savedQualification: "candidate" | "verified" | "rejected" = "candidate";
   let leadModel: LeadModel | undefined;
   // Every row records where it came from. An explicit tag wins; otherwise the actor type decides.
   const tags = tagsFromActorType(input.actorType);
@@ -209,35 +211,11 @@ export async function saveProspect(
     : null;
   const domainKey = businessDomain(websiteUrl);
   const email = input.email?.trim() ? normalizeEmail(input.email) : null;
-  if (intake.leadAssessment && email) {
+  if (email) {
     if (!isEmail(email)) throw new AppError("Only a valid, publicly published business email can be saved.");
-    httpUrl(input.emailSourceUrl,"Published email source URL");
+    input.emailSourceUrl = httpUrl(input.emailSourceUrl, "Published email source URL");
   }
   const socialAccounts = intake.audiences.map(a=>({platform:a.platform,url:a.accountUrl}));
-
-  if (qualification === "verified") {
-    if (!websiteUrl || isSharedIdentityHost(websiteUrl)) {
-      throw new AppError("A verified lead needs an official website.");
-    }
-    if (!email || !isEmail(email)) {
-      throw new AppError(
-        "A verified lead needs a source-confirmed public contact email.",
-      );
-    }
-    const emailSourceUrl = httpUrl(
-      input.emailSourceUrl,
-      "Email source URL",
-    );
-    if (!input.signalDescription?.trim()) {
-      throw new AppError("Describe the commercial signal service before saving.");
-    }
-    if (!(input.sources ?? []).length) {
-      throw new AppError(
-        "Add at least one public evidence source for the signal service.",
-      );
-    }
-    input.emailSourceUrl = emailSourceUrl;
-  }
 
   const duplicate = await checkDuplicate({
     businessName,
@@ -306,7 +284,7 @@ export async function saveProspect(
           JSON.stringify(input.categories),
           input.signalDescription?.trim() || null,
           input.pricingDetails?.trim() || null,
-          qualification,
+          "candidate",
           input.evidenceSummary?.trim() || null,
           input.researchNotes?.trim() || null,
           socialKeys.instagram_key,
@@ -321,8 +299,8 @@ export async function saveProspect(
           JSON.stringify(input.otherSocials ?? []),
           input.followerCount?.trim() || null,
           input.subscriberCount?.trim() || null,
-          qualification === "verified" ? now : null,
-          qualification === "verified" ? "verified" : "new",
+          null,
+          "new",
           input.researchJobId || null,
           input.actorType ?? "founder",
           input.actorUserId ?? null,
@@ -1073,6 +1051,27 @@ export async function updateProspect(
         await tx.query("LOCK TABLE prospects IN SHARE ROW EXCLUSIVE MODE");
         const raced = await checkDuplicate({ businessName: input.businessName ?? existing.businessName, websiteUrl: input.websiteUrl === undefined ? existing.websiteUrl : input.websiteUrl, aliases: existing.aliases, instagramUrl: input.instagramUrl === undefined ? existing.instagramUrl : input.instagramUrl, youtubeUrl: input.youtubeUrl === undefined ? existing.youtubeUrl : input.youtubeUrl, xUrl: input.xUrl === undefined ? existing.xUrl : input.xUrl, telegramUrl: input.telegramUrl === undefined ? existing.telegramUrl : input.telegramUrl }, tx, { ignoreTarget: id });
         if (raced.some(match => match.prospect.id !== id)) throw new AppError("Those changes match another existing business.", 409, "duplicate");
+      }
+      if (input.qualificationStatus === "verified") {
+        // Close the candidate -> edit -> verified bypass without reclassifying already-verified
+        // historical rows. The bar is the MODEL half of the shared qualified-target definition the
+        // research counts use: the lead model this record ALREADY had reads as eligible Tier 1 /
+        // Other. (The count's other conditions — a source-backed email, not archived/rejected/linked
+        // duplicate — are enforced by the count predicate itself; an archived lead has no page and
+        // 404s before reaching here.) It is checked before the edit, so changing a website or
+        // identity cannot quietly turn a non-counting record into a counted one — that needs a fresh
+        // assessment, which re-derives the tier from current evidence. An email-no-website or
+        // Category B record therefore stays a candidate here; only the assessment's own derivation
+        // in saveProspect may label it. Hold the lead lock while checking.
+        const current = (await tx.query<{ qualification_status: string }>(
+          "SELECT qualification_status FROM prospects WHERE id=$1 FOR UPDATE", [id],
+        )).rows[0];
+        if (current?.qualification_status !== "verified") {
+          const model = await getLeadModel(id, tx);
+          if (!model.assessmentId || !isQualifiedTargetModel(model)) {
+            throw new AppError("A modern eligible assessment is required before verifying this lead.", 400, "assessment_required");
+          }
+        }
       }
       await tx.query(
         `UPDATE prospects SET ${sets.join(", ")} WHERE id = $${params.length}`,

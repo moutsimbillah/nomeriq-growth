@@ -126,9 +126,9 @@ export default async function DashboardPage() {
 
       <section className="mt-5 grid grid-cols-2 gap-3 xl:grid-cols-4">
         <Metric
-          label="Verified leads"
-          value={metrics.verified}
-          hint={`${metrics.verifiedWithEmail} with a published email`}
+          label="Qualified targets"
+          value={metrics.qualifiedTargets}
+          hint={`${metrics.verified} verified records stored · ${metrics.verifiedWithEmail} with an email`}
           accent="lime"
           icon={<UsersRound size={12} />}
         />
@@ -189,7 +189,7 @@ export default async function DashboardPage() {
                 <div className="mt-6 grid grid-cols-2 gap-3 border-t border-white/10 pt-5 sm:grid-cols-4">
                   {[
                     ["Target", activeJob.targetCount],
-                    ["Verified", activeJob.verifiedCount],
+                    ["Qualified", activeJob.verifiedCount],
                     ["Drafts", activeJob.draftCount],
                     ["Remaining", activeJob.remaining],
                   ].map(([label, value]) => (
@@ -207,7 +207,7 @@ export default async function DashboardPage() {
                   <div className="mb-2 flex items-center justify-between text-12 text-white/38">
                     <span>{activeJob.regions}</span>
                     <span>
-                      {activeJob.verifiedCount}/{activeJob.targetCount} verified
+                      {activeJob.verifiedCount}/{activeJob.targetCount} qualified targets
                     </span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-white/10">

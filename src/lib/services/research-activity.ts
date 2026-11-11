@@ -84,7 +84,7 @@ function describeEvent(row: any): ResearchActivityItem {
         title: "Target reached — research complete.",
         detail:
           detail.verifiedCount !== undefined
-            ? `${detail.verifiedCount} of ${detail.target} verified leads.`
+            ? `${detail.verifiedCount} of ${detail.target} counted leads (eligible Tier 1 / Other).`
             : null,
       };
     case "job_cancelled":

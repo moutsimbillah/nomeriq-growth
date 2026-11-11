@@ -3,7 +3,7 @@ import { ASSISTANT_SKILL } from "./instructions";
 /** Tool/resource surfaces keep serving ASSISTANT_SKILL without download wrappers. */
 export const SKILL_NAME = "nomeriq-growth-portal";
 /** Bump when the shared skill changes materially. All platforms share this version. */
-export const SKILL_VERSION = "3.1";
+export const SKILL_VERSION = "3.2";
 
 export const SKILL_PLATFORMS = ["claude", "chatgpt", "gemini", "hermes"] as const;
 export type SkillPlatform = (typeof SKILL_PLATFORMS)[number];

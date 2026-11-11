@@ -36,7 +36,7 @@ export async function POST(request: Request) {
       sources: Array.isArray(body.sources) ? body.sources : [],
       aliases: Array.isArray(body.aliases) ? body.aliases : [],
       researchJobId: body.researchJobId || null,
-      qualificationStatus: body.qualificationStatus === "candidate" ? "candidate" : "verified",
+      qualificationStatus: "candidate",
       leadAssessment: body.leadAssessment,
       audiences: body.audiences,
       contactRoutes: body.contactRoutes,

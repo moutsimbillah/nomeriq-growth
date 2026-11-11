@@ -5,7 +5,7 @@ import { getDb,closeDb } from "@/lib/db/client";
 import { ensureBootstrapUser } from "@/lib/auth/session";
 import { ensureWorkspaceDefaults } from "@/lib/services/settings";
 import { createApiKey } from "@/lib/agent/apiKeys";
-import { saveProspect,type SaveProspectInput } from "@/lib/services/prospects";
+import { saveProspect,updateProspect,recordFounderEnteredEmail,type SaveProspectInput } from "@/lib/services/prospects";
 import { getLeadModel,setAssessmentOverride } from "@/lib/services/lead-model";
 import { assertLeadOutreachAllowed } from "@/lib/services/lead-outreach-guard";
 import { POST as portalPost } from "@/app/api/leads/route";
@@ -88,6 +88,77 @@ it("duplicate retries cannot replace original assessments or a founder override"
  await setAssessmentOverride(saved.prospect.id,{field:"product_fit",decision:"set",value:"high",reason:"Founder reviewed the opportunity",provenanceKey:crypto.randomUUID(),actorUserId:auth.id});
  const before=await getLeadModel(saved.prospect.id);input.leadAssessment!.productFit="low";
  const retry=await saveProspect(input);expect(retry).toMatchObject({created:false,duplicate:true});expect(await getLeadModel(saved.prospect.id)).toEqual(before);
+});
+it.each(["rest","mcp"] as const)("%s derives verification from a modern assessment, not the caller's candidate label",async kind=>{
+ const input=publicPayload(payload());
+ const response=await transport(kind,{...input,qualificationStatus:"candidate"});
+ expect(response.ok).toBe(true);ids.push(response.data.prospect.id);
+ expect(response.data.prospect.qualificationStatus).toBe("verified");
+ expect(response.data.leadModel).toMatchObject({eligibility:"eligible",tier:"other"});
+});
+it.each(["rest","mcp"] as const)("%s cannot create a verified lead by omitting the assessment or claiming verified",async kind=>{
+ for(const label of [undefined,"verified"]){
+  const input=publicPayload(payload());delete input.leadAssessment;
+  const response=await transport(kind,{...input,qualificationStatus:label});
+  expect(response.ok).toBe(true);ids.push(response.data.prospect.id);
+  expect(response.data.prospect).toMatchObject({qualificationStatus:"candidate",verifiedAt:null});
+  expect((await getLeadModel(response.data.prospect.id)).assessmentId).toBeNull();
+  expect(response.data.message).toContain("assessment");
+ }
+});
+it.each(["founder","deepseek","seed","api"] as const)("%s has no legacy verification exemption in the shared save service",async actorType=>{
+ const input=payload();delete input.leadAssessment;
+ const saved=await saveProspect({...input,actorType,qualificationStatus:"verified"});ids.push(saved.prospect.id);
+ expect(saved.prospect).toMatchObject({qualificationStatus:"candidate",verifiedAt:null});
+});
+it("the portal cannot turn a legacy verified label into verification without assessment",async()=>{
+ const input=publicPayload(payload());delete input.leadAssessment;
+ const response=await portalPost(new Request("http://localhost:3100/api/leads",{method:"POST",headers:{origin:"http://localhost:3100","content-type":"application/json"},body:JSON.stringify({...input,qualificationStatus:"verified"})}));
+ expect(response.status).toBe(200);const saved=(await response.json()).data;ids.push(saved.prospect.id);
+ expect(saved.prospect).toMatchObject({qualificationStatus:"candidate",verifiedAt:null});
+});
+it("an incomplete modern assessment cannot be promoted through the generic edit path",async()=>{
+ const input=payload();input.leadAssessment!.findings=input.leadAssessment!.findings!.filter(f=>f.area!=="activity");
+ const saved=await saveProspect({...input,qualificationStatus:"verified"});ids.push(saved.prospect.id);
+ expect(saved.prospect.qualificationStatus).toBe("candidate");
+ await expect(updateProspect(saved.prospect.id,{qualificationStatus:"verified"},auth.id)).rejects.toMatchObject({code:"assessment_required"});
+});
+it("candidate creation followed by an edit cannot bypass modern qualification",async()=>{
+ const input=payload();delete input.leadAssessment;
+ const saved=await saveProspect(input);ids.push(saved.prospect.id);
+ await expect(updateProspect(saved.prospect.id,{qualificationStatus:"verified"},auth.id)).rejects.toMatchObject({code:"assessment_required"});
+ const row=(await (await getDb()).query("SELECT qualification_status,verified_at FROM prospects WHERE id=$1",[saved.prospect.id])).rows[0];
+ expect(row).toEqual({qualification_status:"candidate",verified_at:null});
+});
+it("historical verified records and their evidence survive duplicate saves byte-for-byte",async()=>{
+ const input=payload();delete input.leadAssessment;
+ const saved=await saveProspect(input);ids.push(saved.prospect.id);const db=await getDb();
+ // Explicit historical fixture: no production bypass or migration rewrites old records.
+ await db.query("UPDATE prospects SET qualification_status='verified',verified_at='2026-01-01T00:00:00Z',status='verified' WHERE id=$1",[saved.prospect.id]);
+ const snapshot=async()=>Promise.all([db.query("SELECT row_to_json(p)::text AS value FROM prospects p WHERE id=$1",[saved.prospect.id]),db.query("SELECT row_to_json(e)::text AS value FROM prospect_emails e WHERE prospect_id=$1 ORDER BY id",[saved.prospect.id]),db.query("SELECT row_to_json(s)::text AS value FROM prospect_sources s WHERE prospect_id=$1 ORDER BY id",[saved.prospect.id])]).then(results=>results.map(r=>r.rows));
+ const before=await snapshot();
+ const retry=await saveProspect({...input,qualificationStatus:"verified"});
+ expect(retry).toMatchObject({created:false,duplicate:true,prospect:{qualificationStatus:"verified"}});
+ expect(await snapshot()).toEqual(before);
+ expect((await getLeadModel(saved.prospect.id)).assessmentId).toBeNull();
+});
+it.each(["email_only","category_b"] as const)("a %s record cannot be promoted to verified through the edit path without a fresh assessment",async kind=>{
+ const input=payload(kind);const saved=await saveProspect(input);ids.push(saved.prospect.id);
+ expect(saved.prospect.qualificationStatus).toBe("verified"); // the assessment's own eligible non-target tier
+ expect(saved.leadModel?.tier).toBe(kind==="email_only"?"email_no_website":"category_b");
+ // Put the row in the state the gate protects: not already carrying a verified decision.
+ await (await getDb()).query("UPDATE prospects SET qualification_status='candidate',verified_at=null,status='new' WHERE id=$1",[saved.prospect.id]);
+ const key=crypto.randomUUID().replaceAll("-","");
+ await recordFounderEnteredEmail(saved.prospect.id,`owner@${key}.example.test`);
+ await expect(updateProspect(saved.prospect.id,{websiteUrl:`https://${key}.example.test`,qualificationStatus:"verified"},auth.id)).rejects.toMatchObject({code:"assessment_required"});
+ const row=(await (await getDb()).query("SELECT qualification_status,website_url FROM prospects WHERE id=$1",[saved.prospect.id])).rows[0];
+ expect(row).toEqual({qualification_status:"candidate",website_url:saved.prospect.websiteUrl}); // refused edit wrote nothing
+});
+it("an already-qualified modern lead can still be marked verified through the edit path",async()=>{
+ const saved=await saveProspect(payload());ids.push(saved.prospect.id);
+ await (await getDb()).query("UPDATE prospects SET qualification_status='candidate',verified_at=null,status='new' WHERE id=$1",[saved.prospect.id]);
+ const updated=await updateProspect(saved.prospect.id,{qualificationStatus:"verified"},auth.id);
+ expect(updated.qualificationStatus).toBe("verified");
 });
 it.each(["rest","mcp"] as const)("%s refuses missing write scope and forged founder/history metadata",async kind=>{
  expect((await transport(kind,publicPayload(payload("category_b")),reader)).ok).not.toBe(true);

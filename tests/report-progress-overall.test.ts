@@ -5,6 +5,7 @@ import { closeDb, getDb } from "@/lib/db/client";
 import { runAgentAction } from "@/lib/agent/service";
 import { getOverallLeadTotals, getResearchOverview } from "@/lib/services/research";
 import { ensureWorkspaceDefaults } from "@/lib/services/settings";
+import { assessmentFor } from "./helpers/lead-assessment";
 
 /**
  * The per-job counters only know about leads a research job created. A lead saved directly by a
@@ -27,6 +28,7 @@ const PAYLOAD = {
   emailSourceType: "official_website",
   emailSourceUrl: "https://no-job.example/contact",
   qualificationStatus: "verified",
+  leadAssessment: assessmentFor("https://no-job.example"),
   sources: [{ url: "https://no-job.example/pricing", label: "Official pricing page" }],
 };
 
@@ -57,8 +59,10 @@ describe("report_progress totals outside any research job", () => {
 
     // From the saved rows.
     expect(overall.allLeads).toBe(1);
+    // A modern assessment is what makes this a verified record; the legacy label alone would not.
     expect(overall.verifiedLeads).toBe(1);
     expect(overall.verifiedWithEmail).toBe(1);
+    expect(overall.qualifiedTargetLeads).toBe(1);
     expect(overall.draftsSaved).toBe(1);
     expect(overall.notInAnyResearchJob).toBe(1);
 
@@ -70,16 +74,20 @@ describe("report_progress totals outside any research job", () => {
   it("is what report_progress returns", async () => {
     const result = await runAgentAction(KEY as never, "report_progress", {});
     const data = result.data as {
-      overall: { verifiedLeads: number; notInAnyResearchJob: number };
-      overview: { totalVerified: number };
+      overall: { verifiedLeads: number; qualifiedTargetLeads: number; notInAnyResearchJob: number };
+      overview: { totalVerified: number; totalEmailsStored: number };
       note: string;
     };
 
     expect(data.overall.verifiedLeads).toBe(1);
+    expect(data.overall.qualifiedTargetLeads).toBe(1);
     expect(data.overall.notInAnyResearchJob).toBe(1);
     expect(data.overview.totalVerified).toBe(0);
-    // The skill and the tool output both tell the assistant which figure to trust.
+    expect(data.overview.totalEmailsStored).toBe(0);
+    // Progress is named separately from the raw stored totals, so a caller cannot confuse them.
     expect(data.note).toContain("overall");
+    expect(data.note).toContain("qualifiedTargetLeads");
+    expect(data.note).toContain("not target progress");
   });
 
   it("drops the lead out of 'not in any job' once it is attached to one", async () => {

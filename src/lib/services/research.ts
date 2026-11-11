@@ -1,18 +1,22 @@
 import { getDb } from "@/lib/db/client";
 import { AppError, asStringArray, iso, number } from "@/lib/utils";
 import type { Category, ResearchJob, ResearchJobStatus } from "@/lib/types";
+import { qualifiedTargetCountSql, qualifiedTargetPredicateSql } from "@/lib/leads/qualified-target";
 import { getWorkspaceSettings } from "./settings";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+/**
+ * `verified_count` is the job's progress toward its target and is the ONLY figure completion
+ * reads: the shared qualified-target predicate (effective Tier 1 / Other, eligible). It counts
+ * prospects rows through EXISTS, so repeated saves, several emails or several assessments of one
+ * lead count once. `email_count` stays a raw total (verified job leads with any stored email,
+ * whatever their tier) and is never used as target progress.
+ */
 const JOB_SELECT = `
   SELECT j.*,
     (SELECT count(*) FROM research_usage u WHERE u.job_id = j.id AND NOT u.cost_known) AS unknown_cost_calls,
-    (SELECT count(*) FROM prospects p
-      WHERE p.research_job_id = j.id AND p.qualification_status = 'verified'
-        AND p.archived_at IS NULL
-        AND EXISTS (SELECT 1 FROM prospect_emails e WHERE e.prospect_id = p.id)
-    ) AS verified_count,
+    ${qualifiedTargetCountSql("j.id")} AS verified_count,
     (SELECT count(*) FROM prospects p
       WHERE p.research_job_id = j.id AND p.qualification_status = 'verified'
         AND p.archived_at IS NULL
@@ -225,28 +229,32 @@ export async function recordResearchEvent(
 }
 
 /**
- * Marks a job complete once its verified count reaches the target. Guarded on
- * the current status so concurrent workers cannot double-complete a job or
- * reopen a cancelled one.
+ * Marks a job complete once its qualified-target count reaches the target. The count is
+ * re-evaluated inside the guarded UPDATE with the same predicate the progress figure uses, so a
+ * stale read cannot complete a job, and only an `active` job can move: paused, cancelled,
+ * completed and archived jobs keep their status.
  */
 export async function refreshResearchJobStatus(jobId: string): Promise<void> {
-  const job = await getResearchJob(jobId);
-  if (!job) return;
-  if (job.verifiedCount >= job.targetCount && job.status === "active") {
-    const db = await getDb();
-    const result = await db.query(
-      `UPDATE research_jobs
-       SET status = 'completed', completed_at = now(), stopped_at = now(),
-         stop_reason = 'Target reached.', updated_at = now()
-       WHERE id = $1 AND status = 'active'`,
-      [jobId],
-    );
-    if (result.rowCount) {
-      await recordResearchEvent(jobId, "job_completed", {
-        detail: { verifiedCount: job.verifiedCount, target: job.targetCount },
-        actorType: "deepseek",
-      });
-    }
+  const db = await getDb();
+  const result = await db.query<{ target_count: number; verified_count: string | number }>(
+    `WITH counted AS (
+       SELECT j.id, ${qualifiedTargetCountSql("j.id")} AS verified_count
+       FROM research_jobs j WHERE j.id = $1
+     )
+     UPDATE research_jobs r
+     SET status = 'completed', completed_at = now(), stopped_at = now(),
+       stop_reason = 'Target reached.', updated_at = now()
+     FROM counted c
+     WHERE r.id = c.id AND r.status = 'active' AND c.verified_count >= r.target_count
+     RETURNING r.target_count, c.verified_count`,
+    [jobId],
+  );
+  const completed = result.rows[0];
+  if (completed) {
+    await recordResearchEvent(jobId, "job_completed", {
+      detail: { verifiedCount: Number(completed.verified_count), target: Number(completed.target_count) },
+      actorType: "deepseek",
+    });
   }
 }
 
@@ -274,7 +282,10 @@ export async function recordDraftSaved(
 
 export async function getResearchOverview(): Promise<{
   activeJobs: number;
+  /** Effective eligible Tier 1 / Other leads across jobs — the only target-progress figure. */
   totalVerified: number;
+  /** Raw stored total: verified-status leads with any email, whatever their tier. Not progress. */
+  totalEmailsStored: number;
   totalDrafts: number;
   totalDuplicates: number;
   targetRemaining: number;
@@ -283,6 +294,7 @@ export async function getResearchOverview(): Promise<{
   return {
     activeJobs: jobs.filter((job) => job.status === "active").length,
     totalVerified: jobs.reduce((sum, job) => sum + job.verifiedCount, 0),
+    totalEmailsStored: jobs.reduce((sum, job) => sum + job.emailCount, 0),
     totalDrafts: jobs.reduce((sum, job) => sum + job.draftCount, 0),
     totalDuplicates: jobs.reduce((sum, job) => sum + job.duplicatesRejected, 0),
     targetRemaining: jobs
@@ -302,6 +314,8 @@ export async function getOverallLeadTotals(): Promise<{
   allLeads: number;
   verifiedLeads: number;
   verifiedWithEmail: number;
+  /** Leads that count toward targets (shared qualified-target predicate), across all jobs. */
+  qualifiedTargetLeads: number;
   draftsSaved: number;
   duplicatesRejected: number;
   notInAnyResearchJob: number;
@@ -311,6 +325,7 @@ export async function getOverallLeadTotals(): Promise<{
     all_leads: number;
     verified_leads: number;
     verified_with_email: number;
+    qualified_target_leads: number;
     drafts_saved: number;
     duplicates_rejected: number;
     not_in_any_job: number;
@@ -322,6 +337,7 @@ export async function getOverallLeadTotals(): Promise<{
        (SELECT count(*)::int FROM prospects
           WHERE qualification_status = 'verified' AND archived_at IS NULL
             AND EXISTS (SELECT 1 FROM prospect_emails e WHERE e.prospect_id = prospects.id)) AS verified_with_email,
+       (SELECT count(*)::int FROM prospects p WHERE ${qualifiedTargetPredicateSql("p")}) AS qualified_target_leads,
        (SELECT count(*)::int FROM drafts) AS drafts_saved,
        (SELECT count(*)::int FROM research_events WHERE event_type = 'duplicate_rejected') AS duplicates_rejected,
        (SELECT count(*)::int FROM prospects
@@ -332,6 +348,7 @@ export async function getOverallLeadTotals(): Promise<{
     allLeads: Number(row.all_leads),
     verifiedLeads: Number(row.verified_leads),
     verifiedWithEmail: Number(row.verified_with_email),
+    qualifiedTargetLeads: Number(row.qualified_target_leads),
     draftsSaved: Number(row.drafts_saved),
     duplicatesRejected: Number(row.duplicates_rejected),
     notInAnyResearchJob: Number(row.not_in_any_job),

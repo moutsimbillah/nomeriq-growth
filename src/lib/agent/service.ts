@@ -102,6 +102,12 @@ const getResearchJobSchema = z.object({
  * Shape one research job for assistants. Engine fields are included so an
  * assistant can see real spend and the real reason a job stopped instead of
  * guessing from chat memory.
+ *
+ * Compatibility: `newVerifiedLeads` and `publishedContactEmails` are kept as deprecated aliases so
+ * an older client does not break on a missing field. They are aliases of the CORRECTED figures —
+ * `newVerifiedLeads` mirrors `qualifiedTargetLeads` (eligible Tier 1 / Other, once per prospect) and
+ * `publishedContactEmails` mirrors `verifiedRecordsWithEmail` (raw stored total, not progress).
+ * They never restore the old "any verified row with an email counts" logic.
  */
 function describeResearchJobForAgent(job: ResearchJob) {
   return {
@@ -110,7 +116,17 @@ function describeResearchJobForAgent(job: ResearchJob) {
     status: job.status,
     engine: job.engine,
     target: job.targetCount,
+    /** Authoritative target progress: effective eligible Tier 1 / Other, one row per prospect. */
+    qualifiedTargetLeads: job.verifiedCount,
+    /** @deprecated Alias of `qualifiedTargetLeads` with the same corrected meaning. Prefer it. */
     newVerifiedLeads: job.verifiedCount,
+    /** Raw stored total for verified-status leads with any email, whatever their tier. Never progress. */
+    verifiedRecordsWithEmail: job.emailCount,
+    /**
+     * @deprecated Alias of `verifiedRecordsWithEmail` with the same raw meaning: stored email rows.
+     * Note it also counts an address the founder typed, which is not a published email — never
+     * report this as qualified progress.
+     */
     publishedContactEmails: job.emailCount,
     draftsSaved: job.draftCount,
     duplicatesRejected: job.duplicatesRejected,
@@ -281,7 +297,7 @@ async function executeAgentAction(
         overview,
         jobs: jobs.map(describeResearchJobForAgent),
         note:
-          "These counts come from the database. `overall` covers every saved lead, including leads that belong to no research job; `overview` and `jobs` only count leads a job created. Read `overall` when no job exists, and report it alongside the per-job figures. Report the numbers even when they fall short of the target, and include the recorded reason a job is not running.",
+          "These counts come from the database. `overall` covers every saved lead, including leads that belong to no research job; `overview` and `jobs` only count leads a job created, and `overview.totalVerified` is the qualified count summed over the jobs that are not archived, so it can differ from `overall`. Read `overall` when no job exists, and report it alongside the per-job figures. Target progress is `overall.qualifiedTargetLeads` and each entry of `jobs[].qualifiedTargetLeads`: effective eligible Tier 1 / Other, counted once per prospect. `verifiedRecordsWithEmail`, `overview.totalEmailsStored`, `overall.verifiedLeads` and `overall.verifiedWithEmail` are raw stored totals, not target progress, and a stored email may be one the founder typed rather than a published one. The deprecated `newVerifiedLeads` and `publishedContactEmails` fields are aliases of the corrected `qualifiedTargetLeads` and `verifiedRecordsWithEmail` values, so an older client keeps working without reviving the old counting rule. Report the numbers even when they fall short of the target, and include the recorded reason a job is not running.",
       };
       break;
     }
@@ -356,7 +372,7 @@ async function executeAgentAction(
         ...data,
         categories: data.categories as Category[],
         researchJobId: data.researchJobId || null,
-        qualificationStatus: data.qualificationStatus ?? "verified",
+        qualificationStatus: data.qualificationStatus ?? "candidate",
         actorType: actorTypeFor(key),
         actorKeyId: actorKeyUuid(key),
         sourceClient: sanitizeClientName(key.name),
@@ -621,14 +637,14 @@ export const TOOL_DEFINITIONS = [
   {
     name: "list_research_jobs",
     description:
-      "List persistent research targets with real database-derived counts, engine, spend and stop reason. DeepSeek jobs run server-side; only the founder starts or stops them.",
+      "List persistent research targets with real database-derived counts, engine, spend and stop reason. `qualifiedTargetLeads` is target progress: effective eligible Tier 1 / Other, one per prospect. `verifiedRecordsWithEmail` is a raw stored total, not progress. Compatibility aliases carry the same corrected values: `newVerifiedLeads` = `qualifiedTargetLeads` (deprecated), `publishedContactEmails` = `verifiedRecordsWithEmail` (deprecated). DeepSeek jobs run server-side; only the founder starts or stops them.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     readOnly: true,
   },
   {
     name: "get_research_job",
     description:
-      "Read one research target, including whether the autonomous DeepSeek engine owns it, its real spend and the recorded reason it stopped.",
+      "Read one research target, including whether the autonomous DeepSeek engine owns it, its real spend, qualified-target progress and the recorded reason it stopped. Target progress is `qualifiedTargetLeads`; the deprecated `newVerifiedLeads` and `publishedContactEmails` aliases mirror the corrected `qualifiedTargetLeads` and raw `verifiedRecordsWithEmail` values, and never restore the older email-count logic.",
     inputSchema: {
       type: "object",
       properties: { jobId: { type: "string" } },
@@ -640,7 +656,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: "report_progress",
     description:
-      "Report target, new verified leads, published emails, drafts, duplicates rejected, remaining and recorded stop reason from the database.",
+      "Report the target and qualified-target progress, plus raw verified-record and stored-email totals, drafts, duplicates rejected, remaining and recorded stop reason from the database. Only effective eligible Tier 1 / Other leads count toward a target; email-no-website, Category B, excluded, founder-rejected, unassessed, archived and linked-duplicate records do not. A raw stored email total may include an address the founder typed, so never present it as qualified progress. Deprecated aliases keep their old names with the corrected values: `newVerifiedLeads` mirrors `qualifiedTargetLeads`, `publishedContactEmails` mirrors `verifiedRecordsWithEmail`.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     readOnly: true,
   },
@@ -731,7 +747,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: "save_prospect",
     description:
-      "Save an evidence-backed signal seller, an alternative-contact research record or an excluded business with its reason. Tier and fit are derived from sourced leadAssessment, audiences and contactRoutes. No email is required for Category B/excluded records. Existing duplicates are returned unchanged; this tool cannot send, override founder decisions or run jobs.",
+      "Save an evidence-backed signal seller, an alternative-contact research record or an excluded business with its reason. A modern leadAssessment is required for verification; without it the record remains a candidate even if qualificationStatus says verified. Tier and fit are derived from sourced leadAssessment, audiences and contactRoutes; only the resulting eligible Tier 1 / Other Signal Provider tiers count toward a target, while email-no-website, Category B, excluded and unassessed records are kept but do not count. No email is required for Category B/excluded records. Existing duplicates are returned unchanged; this tool cannot send, override founder decisions or run jobs.",
     inputSchema: {
       type: "object",
       properties: {
@@ -883,7 +899,7 @@ export async function runMcpTool(
 export function progressSummaryForJob(jobId: string) {
   return getResearchJob(jobId).then((job) =>
     job
-      ? `${job.verifiedCount}/${job.targetCount} verified, ${job.draftCount} drafts, ${job.duplicatesRejected} duplicates rejected`
+      ? `${job.verifiedCount}/${job.targetCount} qualified targets, ${job.emailCount} stored emails (not progress), ${job.draftCount} drafts, ${job.duplicatesRejected} duplicates rejected`
       : "Research job not found",
   );
 }

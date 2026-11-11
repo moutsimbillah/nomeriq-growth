@@ -45,6 +45,7 @@ import {
   Card,
   CategoryPill,
   DataRow,
+  Notice,
   PageHeader,
   SectionHeading,
 } from "@/components/ui";
@@ -132,10 +133,13 @@ function DuplicateLeadView({
 
 export default async function LeadDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const { id } = await params;
+  const { saved } = await searchParams;
   const prospect = await getProspect(id);
   if (!prospect) {
     const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -238,6 +242,17 @@ export default async function LeadDetailPage({
 
   return (
     <div className="animate-fade-up">
+      {saved === "candidate" && (
+        <div className="mb-4" data-saved-outcome="candidate">
+          <Notice
+            tone="info"
+            title="Saved as a candidate."
+          >
+            No assessment was supplied, so this lead is not verified and does not count toward a
+            research target yet. Sources and an evidence-backed assessment are still needed.
+          </Notice>
+        </div>
+      )}
       <div className="mb-5 flex items-center gap-2 text-12 text-faint">
         <Link href="/leads" className="inline-flex items-center gap-1 hover:text-ink">
           <ArrowLeft size={11} /> All leads

@@ -1,18 +1,15 @@
 import { expect, it } from "vitest";
-import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { transformSync } from "esbuild";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { LeadQualificationView } from "@/components/lead-qualification";
+import { compileTsx, evaluate } from "./helpers/tsx-loader";
 
 // Compile the real TSX: Next preserves JSX, while this test needs executable React elements.
-const compiled = transformSync(readFileSync("src/components/lead-qualification.tsx", "utf8"), {
-  loader: "tsx", format: "cjs", jsx: "automatic",
-}).code;
-const compiledModule = { exports: {} as Record<string, (...args: any[]) => any> };
-new Function("require", "module", "exports", compiled)(createRequire(import.meta.url), compiledModule, compiledModule.exports);
-const components = compiledModule.exports;
+const components = evaluate<Record<string, (...args: any[]) => any>>(
+  compileTsx("src/components/lead-qualification.tsx"),
+  createRequire(import.meta.url),
+);
 const render = (name: string, props: object) => renderToStaticMarkup(createElement(components[name], props));
 const model: LeadQualificationView = {
   tier: null, productFit: "unknown", platformMaturity: "unknown", mobileAppStatus: "unknown",

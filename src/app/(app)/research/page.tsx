@@ -60,7 +60,7 @@ export default async function ResearchPage({
   const recentRuns = engineJob ? await listResearchRuns(engineJob.id, 5) : [];
 
   const brief = primaryJob
-    ? `Research job: ${primaryJob.name}\nJob ID: ${primaryJob.id}\nTarget: ${primaryJob.targetCount} verified commercial trading-signal providers\nAlready verified: ${primaryJob.verifiedCount}\nDrafts saved: ${primaryJob.draftCount}\nRemaining: ${primaryJob.remaining}\nMarkets: ${primaryJob.categories.join(", ")}\nRegions: ${primaryJob.regions}\n\nBefore doing anything, call get_instructions and read_product_truth through Nomeriq Growth. Then continue this exact target from the remaining count. For every candidate, verify paid signals in forex, metals, crypto, indices, or commodities; find an official website and a publicly published business email with its source URL; call check_duplicate against the entire Growth database; then save_prospect and save_draft. Never guess an email, never duplicate an existing business, and never send email.`
+    ? `Research job: ${primaryJob.name}\nJob ID: ${primaryJob.id}\nTarget: ${primaryJob.targetCount} qualified commercial trading-signal providers (eligible Tier 1 / Other Signal Provider with a published email and no duplicate)\nAlready counted: ${primaryJob.verifiedCount}\nDrafts saved: ${primaryJob.draftCount}\nRemaining: ${primaryJob.remaining}\nMarkets: ${primaryJob.categories.join(", ")}\nRegions: ${primaryJob.regions}\n\nBefore doing anything, call get_instructions and read_product_truth through Nomeriq Growth. Then continue this exact target from the remaining count. For every candidate, verify paid signals in forex, metals, crypto, indices, or commodities; find an official website and a publicly published business email with its source URL; call check_duplicate against the entire Growth database; then save_prospect and save_draft. Never guess an email, never duplicate an existing business, and never send email.`
     : "";
 
   return (
@@ -158,7 +158,7 @@ export default async function ResearchPage({
           <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {[
               { label: "Open target", value: totalTarget, icon: Target },
-              { label: "Verified", value: totalVerified, icon: UsersRound },
+              { label: "Qualified targets", value: totalVerified, icon: UsersRound },
               { label: "Drafts saved", value: totalDrafts, icon: FileText },
               {
                 label: "Remaining",
@@ -233,15 +233,15 @@ export default async function ResearchPage({
                         job.engine === "deepseek"
                           ? [
                               ["Target", job.targetCount],
-                              ["Verified", job.verifiedCount],
+                              ["Qualified", job.verifiedCount],
                               ["Candidates", job.candidatesDiscovered],
                               ["Duplicates", job.duplicatesRejected],
                               ["Spend", job.unknownCostCalls ? `Cost unknown ($${job.spentUsd.toFixed(4)} known)` : `$${job.spentUsd.toFixed(4)}`],
                             ]
                           : [
                               ["Target", job.targetCount],
-                              ["Verified", job.verifiedCount],
-                              ["Emails", job.emailCount],
+                              ["Qualified", job.verifiedCount],
+                              ["Emails stored", job.emailCount],
                               ["Drafts", job.draftCount],
                               ["Duplicates", job.duplicatesRejected],
                             ]
@@ -305,6 +305,7 @@ export default async function ResearchPage({
                         "Indicators, bots, copy-trading only",
                         "News sites or general communities",
                         "Guessed emails or inactive businesses",
+                        "Email-no-website, Category B, excluded and unassessed records",
                       ].map((item) => (
                         <li key={item} className="flex gap-2">
                           <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-rust" />

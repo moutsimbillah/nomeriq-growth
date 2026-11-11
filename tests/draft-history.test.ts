@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { closeDb, getDb } from "@/lib/db/client";
 import { runAgentAction } from "@/lib/agent/service";
 import { ensureWorkspaceDefaults } from "@/lib/services/settings";
+import { assessmentFor } from "./helpers/lead-assessment";
 
 /**
  * Replacing a draft must never destroy text. The version history is draft_revisions: the version
@@ -33,7 +34,7 @@ async function leadWithProspect(name: string, domain: string) {
     email: `contact@${domain}`,
     emailSourceType: "official_website",
     emailSourceUrl: `https://${domain}/contact`,
-    qualificationStatus: "verified",
+    leadAssessment: assessmentFor(`https://${domain}`),
     sources: [{ url: `https://${domain}/pricing`, label: "Official pricing page" }],
   });
   return (saved.data as { prospect: { id: string } }).prospect.id;

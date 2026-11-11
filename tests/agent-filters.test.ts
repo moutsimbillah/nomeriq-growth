@@ -43,6 +43,7 @@ afterAll(async () => {
 
 beforeAll(async () => {
   await ensureWorkspaceDefaults();
+  // No assessment: each of these saves is a candidate, which is all this file needs to filter on.
   await runAgentAction(OAUTH_CLAUDE as never, "save_prospect", payload("Claude Found Co", "claude-found.example"));
   await runAgentAction(OAUTH_FORGED as never, "save_prospect", payload("Other Found Co", "other-found.example"));
   await saveProspect({
@@ -76,8 +77,10 @@ describe("filtering by agent and channel", () => {
 
   it("combines with the existing filters", async () => {
     expect((await listProspects({ channel: "mcp_oauth" })).length).toBe(2);
-    expect((await listProspects({ channel: "mcp_oauth", qualification: "candidate" })).length).toBe(0);
+    // No assessment was supplied for any of these saves, so every one is a candidate.
+    expect((await listProspects({ channel: "mcp_oauth", qualification: "candidate" })).length).toBe(2);
     expect((await listProspects({ channel: "founder", qualification: "candidate" })).length).toBe(1);
+    expect((await listProspects({ channel: "mcp_oauth", qualification: "verified" })).length).toBe(0);
     expect((await listProspects({ agent: "claude", channel: "api_key" })).length).toBe(0);
     expect((await listProspects({ agent: "claude", query: "claude found" })).length).toBe(1);
   });
@@ -104,8 +107,8 @@ describe("counts per option", () => {
     expect(byEngine.channels).toEqual({ mcp_oauth: 2, founder: 1, engine: 1 });
 
     const candidates = await getProspectOriginFacets({ qualification: "candidate" });
-    expect(candidates.agents).toEqual({ founder: 1 });
-    expect(candidates.channels).toEqual({ founder: 1 });
+    expect(candidates.agents).toEqual({ claude: 1, other: 1, founder: 1, deepseek: 1 });
+    expect(candidates.channels).toEqual({ mcp_oauth: 2, founder: 1, engine: 1 });
   });
 
   it("treats a lead with no recorded origin as unknown, in the count and in the filter", async () => {

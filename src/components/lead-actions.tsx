@@ -40,6 +40,59 @@ import { Notice } from "./ui";
 
 const inputClass = "input";
 
+export type ManualLeadFields = {
+  businessName: string;
+  websiteUrl: string;
+  country: string;
+  categories: Category[];
+  email: string;
+  emailSourceUrl: string;
+  signalDescription: string;
+  pricingDetails: string;
+  evidenceSummary: string;
+  sourceUrl: string;
+  sourceLabel: string;
+  signalNotes: string;
+  researchJobId: string;
+  instagramUrl: string;
+  youtubeUrl: string;
+  xUrl: string;
+  telegramUrl: string;
+};
+
+/**
+ * The request body for a manually added lead. A founder typing details is not an assessment:
+ * the lead is saved as a candidate pending assessment, never claimed verified, and no
+ * assessment, audience or contact-route evidence is invented here.
+ */
+export function manualCandidateLeadBody(fields: ManualLeadFields) {
+  return {
+    businessName: fields.businessName,
+    websiteUrl: fields.websiteUrl,
+    country: fields.country,
+    categories: fields.categories,
+    email: fields.email,
+    emailSourceUrl: fields.emailSourceUrl,
+    signalDescription: fields.signalDescription,
+    pricingDetails: fields.pricingDetails,
+    evidenceSummary: fields.evidenceSummary,
+    sources: [
+      {
+        url: fields.sourceUrl || fields.emailSourceUrl,
+        label: fields.sourceLabel,
+        notes: fields.signalNotes,
+      },
+    ],
+    researchJobId: fields.researchJobId || null,
+    instagramUrl: fields.instagramUrl,
+    youtubeUrl: fields.youtubeUrl,
+    xUrl: fields.xUrl,
+    telegramUrl: fields.telegramUrl,
+    aliases: [],
+    qualificationStatus: "candidate" as const,
+  };
+}
+
 export function AddLeadButton({
   jobs,
   defaultJobId,
@@ -90,7 +143,7 @@ export function AddLeadButton({
     setDuplicate(null);
     try {
       const result = await apiRequest("/api/leads", {
-        body: {
+        body: manualCandidateLeadBody({
           businessName,
           websiteUrl,
           country,
@@ -100,21 +153,15 @@ export function AddLeadButton({
           signalDescription,
           pricingDetails,
           evidenceSummary,
-          sources: [
-            {
-              url: sourceUrl || emailSourceUrl,
-              label: sourceLabel,
-              notes: signalNotes,
-            },
-          ],
-          researchJobId: researchJobId || null,
+          sourceUrl,
+          sourceLabel,
+          signalNotes,
+          researchJobId,
           instagramUrl,
           youtubeUrl,
           xUrl,
           telegramUrl,
-          aliases: [],
-          qualificationStatus: "verified",
-        },
+        }),
       });
       if (result.duplicate) {
         setDuplicate({
@@ -127,7 +174,7 @@ export function AddLeadButton({
         return;
       }
       setOpen(false);
-      router.push(`/leads/${result.prospect.id}`);
+      router.push(`/leads/${result.prospect.id}?saved=candidate`);
       router.refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not save lead.");
@@ -140,13 +187,13 @@ export function AddLeadButton({
     <>
       <button type="button" className="btn-secondary" onClick={() => setOpen(true)}>
         <Plus size={14} />
-        Add verified lead
+        Add candidate lead
       </button>
       <Modal
         open={open}
         onClose={() => setOpen(false)}
-        title="Add a verified commercial signal provider"
-        description="Only save a business whose paid signal service and public email are confirmed by a source. Growth will reject duplicates."
+        title="Add a candidate lead (pending assessment)"
+        description="Saved as a candidate pending assessment, not as verified. Enter only what a public source shows. Growth will reject duplicates."
         width="lg"
       >
         {duplicate ? (
@@ -265,7 +312,7 @@ export function AddLeadButton({
                   className={inputClass}
                   value={country}
                   onChange={(event) => setCountry(event.target.value)}
-                  placeholder="Verified country, or leave unknown"
+                  placeholder="Country a source shows, or leave unknown"
                 />
               </div>
               <div>
@@ -375,7 +422,7 @@ export function AddLeadButton({
                 disabled={pending || categories.length === 0}
               >
                 {pending ? <LoaderCircle size={14} className="spin" /> : <ShieldAlert size={14} />}
-                {pending ? "Checking identity…" : "Save verified lead"}
+                {pending ? "Checking identity…" : "Save candidate lead"}
               </button>
             </SubmitBar>
           </form>

@@ -11,6 +11,7 @@ import {
   logAgentAction,
 } from "@/lib/agent/apiKeys";
 import { ensureWorkspaceDefaults } from "@/lib/services/settings";
+import { assessmentFor } from "./helpers/lead-assessment";
 
 /**
  * Every tool call leaves one audit entry saying what happened: ok, denied, invalid or internal, with
@@ -30,7 +31,7 @@ function payload(name: string, domain: string) {
     email: `contact@${domain}`,
     emailSourceType: "official_website",
     emailSourceUrl: `https://${domain}/contact`,
-    qualificationStatus: "verified",
+    leadAssessment: assessmentFor(`https://${domain}`),
     sources: [{ url: `https://${domain}/pricing`, label: "Official pricing page" }],
   };
 }

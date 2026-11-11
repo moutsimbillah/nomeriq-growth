@@ -2,9 +2,9 @@ import React from "react";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { transformSync } from "esbuild";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { compileTsx } from "./helpers/tsx-loader";
 
 import * as transfer from "@/lib/product-truth-transfer";
 import {
@@ -274,7 +274,7 @@ describe("form lines", () => {
 
 describe("ProductTruthForm Import/Export controls", () => {
   function loadForm() {
-    const code = transformSync(read("src/components/product-truth-form.tsx"), { loader: "tsx", format: "cjs", jsx: "automatic" }).code;
+    const code = compileTsx("src/components/product-truth-form.tsx");
     const nativeRequire = createRequire(import.meta.url);
     const apiRequest = vi.fn(() => { throw new Error("Unexpected request"); });
     const load = (id: string) => {

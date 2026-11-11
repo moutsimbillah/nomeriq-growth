@@ -277,7 +277,7 @@ export function ResearchEnginePanel({
 
       <div className="mt-5 grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-4">
         {[
-          { label: "Verified", value: current.verifiedCount, icon: Gauge },
+          { label: "Qualified", value: current.verifiedCount, icon: Gauge },
           { label: "Candidates", value: current.candidatesDiscovered, icon: Search },
           { label: "Duplicates", value: current.duplicatesRejected, icon: Ban },
           { label: "Failed checks", value: current.failedVerifications, icon: RefreshCw },
@@ -300,8 +300,8 @@ export function ResearchEnginePanel({
         <ProgressBar value={current.verifiedCount} max={current.targetCount} />
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-12 text-faint">
           <span>
-            {current.verifiedCount} of {current.targetCount} verified ·{" "}
-            {current.candidatesPending} pending · {current.candidatesQualified} qualified
+            {current.verifiedCount} of {current.targetCount} qualified targets ·{" "}
+            {current.candidatesPending} pending · {current.candidatesQualified} candidates qualified
           </span>
           <span>{current.remaining} remaining</span>
         </div>

@@ -1,15 +1,14 @@
 import React from "react";
-import fs from "node:fs";
 import { createRequire } from "node:module";
-import { transformSync } from "esbuild";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ResearchConfiguration } from "@/lib/services/research-routing";
 import type { ResearchJob } from "@/lib/types";
+import { compileTsx } from "./helpers/tsx-loader";
 // The app preserves JSX for Next; compile these real components for SSR without changing the
 // repo-wide Vitest transform. Only framework/navigation and presentation children are replaced.
 function component(file: string, name: string) {
-  const code = transformSync(fs.readFileSync(file, "utf8"), { loader: "tsx", format: "cjs", jsx: "automatic" }).code;
+  const code = compileTsx(file);
   const nativeRequire = createRequire(import.meta.url);
   const load = (id: string) => {
     if (id === "next/navigation") return { useRouter: () => ({ refresh: vi.fn() }) };

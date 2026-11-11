@@ -117,7 +117,11 @@ Every counted lead must have:
 
 Never guess an email. Never assume \`info@domain\` exists. Never generate combinations. Never use enrichment tools to invent an address. A public source email is not a guarantee of inbox deliverability, and you must not claim that it is.
 
-A lead without a source-confirmed email does not count toward the target. It may be saved only as a candidate, not as a verified lead.
+A lead without a source-confirmed published email does not count toward the target. It can still be saved truthfully as \`email_no_website\` (published email on an officially linked profile, no website) or \`category_b\` (only Telegram, a form or another non-email route); both stay eligible for their own outreach path but add nothing to the target. Neither tier grants a "verified" stored label through an edit.
+
+## Target counting — mandatory
+
+Progress, remaining and automatic completion all use one rule: an effective eligible **Tier 1** or **Other Signal Provider** lead with a published, source-backed email, counted once per prospect. \`email_no_website\`, Category B, excluded, unassessed and archived leads, a lead the founder rejected, and a lead marked "Duplicate of" another lead never count. A founder-typed email on its own is not a published email. Raw stored totals such as verified records or records with an email are not target progress; never present them as if they were.
 
 ## Duplicate checking — mandatory
 
@@ -136,6 +140,10 @@ When several agents research at once, Growth also takes short-lived database cla
 ## What to save
 
 Business name; official website; verified country if known; trading categories; description of the commercial signal service; published contact email; email source URL; evidence of paid signal selling; subscription/pricing details; Instagram and YouTube links; other official social links; public follower/subscriber counts when available; evidence sources with observation dates; qualification status; research notes.
+
+A new record becomes verified only after a modern \`leadAssessment\` passes the backend's evidence checks. Include sourced \`paid_signals\`, \`markets\`, \`activity\` and (for an email tier) \`email\` findings, with real observation dates; supply account observations and alternative contact routes when found. A legacy \`qualificationStatus: "verified"\` label cannot grant verification: without an assessment, the new record remains a candidate. Existing historical records are not reclassified by a duplicate save.
+
+Only eligible Tier 1 and Other Signal Provider records count toward a qualified target. \`email_no_website\` records remain saved under their own tier but do not count; Category B, excluded and unassessed records do not count either. Repeated saves do not add to the target.
 
 Use \`Unknown\` for unknown facts. Never fabricate a country, price, follower count, or source.
 

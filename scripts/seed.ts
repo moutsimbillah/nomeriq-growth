@@ -13,6 +13,39 @@ config({ path: ".env.local" });
 const OBSERVED_AT = "2026-11-03T00:00:00.000Z";
 
 /**
+ * A recorded, source-linked assessment for a seeded provider. The seed may only claim what its own
+ * public sources show, and the backend re-checks every finding's source against the lead's site
+ * before it can derive a tier. `emailSourceUrl` is the seed's recorded page that publishes the
+ * address, so the email finding points at real evidence rather than at an invented verification.
+ * No platform-maturity, fit or audience claim is invented here.
+ */
+function seededAssessment(website: string, emailSourceUrl: string) {
+  const site = website.replace(/\/$/, "");
+  const fact = (area: "paid_signals" | "markets" | "identity" | "activity" | "email", sourceUrl: string) => ({
+    area,
+    summary: `Seed's recorded public evidence: ${area.replace("_", " ")}.`,
+    sourceUrl,
+    observedAt: OBSERVED_AT,
+    verdict: "present" as const,
+  });
+  return {
+    assessedAt: OBSERVED_AT,
+    eligibility: "eligible" as const,
+    productFit: "unknown" as const,
+    platformMaturity: "unknown" as const,
+    mobileAppStatus: "unknown" as const,
+    fitReasoning: "Seeded local sample: the public pages show a paid signal service; the subscriber platform was not investigated in depth.",
+    findings: [
+      fact("paid_signals", `${site}/`),
+      fact("markets", `${site}/`),
+      fact("identity", `${site}/`),
+      fact("activity", `${site}/`),
+      fact("email", emailSourceUrl),
+    ],
+  };
+}
+
+/**
  * SEED_SCOPE=founder creates the founder and the workspace settings and stops there, so a
  * production database gets an account to sign in with and no sample data whatsoever.
  * Anything else is the full local slice, samples included.
@@ -172,12 +205,12 @@ export async function main(scope: SeedScope = resolveSeedScope(process.env.SEED_
       ],
       aliases: ["FXPremiere.com", "FxPremiere Group"],
       researchJobId: job.id,
-      qualificationStatus: "verified",
+      leadAssessment: seededAssessment("https://www.fxpremiere.com/", "https://www.fxpremiere.com/terms-of-service/"),
       actorType: "seed",
       actorUserId: userId,
     });
     if (saved.created) {
-      console.log(`Seeded verified prospect: ${saved.prospect.businessName}`);
+      console.log(`Seeded assessed prospect: ${saved.prospect.businessName}`);
     }
   }
 
@@ -228,12 +261,12 @@ export async function main(scope: SeedScope = resolveSeedScope(process.env.SEED_
       ],
       aliases: ["P4Provider", "P4 Provider Trading"],
       researchJobId: job.id,
-      qualificationStatus: "verified",
+      leadAssessment: seededAssessment("https://p4provider.com/", "https://p4provider.com/contact"),
       actorType: "seed",
       actorUserId: userId,
     });
     if (saved.created) {
-      console.log(`Seeded verified prospect: ${saved.prospect.businessName}`);
+      console.log(`Seeded assessed prospect: ${saved.prospect.businessName}`);
     }
   }
 

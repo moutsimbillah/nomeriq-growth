@@ -33,6 +33,7 @@ import { saveProspect } from "@/lib/services/prospects";
 import { approveDraft, generateDraftForProspect, getDraft, saveDraft } from "@/lib/services/drafts";
 import { processQueuedSends, sendDraft } from "@/lib/services/email-sending";
 import type { Category } from "@/lib/types";
+import { assessmentFor } from "./helpers/lead-assessment";
 
 const state = {
   userId: "",
@@ -79,7 +80,7 @@ function payload(name: string, domain: string, email: string) {
     email,
     emailSourceType: "official_website" as const,
     emailSourceUrl: `https://${domain}/contact`,
-    qualificationStatus: "verified" as const,
+    leadAssessment: assessmentFor(`https://${domain}`),
     evidenceSummary: "A paid signal service with a published contact address.",
     sources: [{ url: `https://${domain}/pricing`, label: "Official pricing page" }],
   };
@@ -88,7 +89,7 @@ function payload(name: string, domain: string, email: string) {
 async function freshDraft(name: string, domain: string, email: string): Promise<string> {
   const saved = await saveProspect({
     ...payload(name, domain, email),
-    actorType: "seed",
+    actorType: "seed" as const,
     actorUserId: state.userId,
   });
   const draft = await generateDraftForProspect({
@@ -142,6 +143,9 @@ afterAll(async () => {
   await db.query(`DELETE FROM conversations WHERE prospect_id = $1`, [state.prospectId]);
   await db.query(`DELETE FROM outbound_sends WHERE prospect_id = $1`, [state.prospectId]);
   await db.query(`DELETE FROM drafts WHERE prospect_id = $1`, [state.prospectId]);
+  for (const table of ["prospect_assessment_overrides", "prospect_assessments", "prospect_audience_observations", "prospect_contact_route_observations", "prospect_aliases"]) {
+    await db.query(`DELETE FROM ${table} WHERE prospect_id = $1`, [state.prospectId]);
+  }
   await db.query(`DELETE FROM prospect_emails WHERE prospect_id = $1`, [state.prospectId]);
   await db.query(`DELETE FROM prospect_sources WHERE prospect_id = $1`, [state.prospectId]);
   await db.query(`DELETE FROM prospects WHERE id = $1`, [state.prospectId]);

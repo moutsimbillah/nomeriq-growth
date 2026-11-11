@@ -506,8 +506,8 @@ async function main() {
   assert(reported.engine === "deepseek", `job reports its engine: ${reported.engine}`);
   assert(reported.spentUsd > 0, `job reports real spend: $${reported.spentUsd}`);
   assert(
-    reported.newVerifiedLeads === reported.target,
-    `job reports honest counts: ${reported.newVerifiedLeads}/${reported.target}`,
+    reported.qualifiedTargetLeads === reported.target,
+    `job reports honest counts: ${reported.qualifiedTargetLeads}/${reported.target}`,
   );
   const progress = await agent("report_progress");
   assert(progress.status === 200, "report_progress readable through the shared API");
