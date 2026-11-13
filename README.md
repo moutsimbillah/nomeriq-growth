@@ -1,46 +1,74 @@
 # Nomeriq Growth
 
-An independent, founder-controlled B2B sales portal for Nomeriq. It exists to run one loop exceptionally well:
+**Open-source, AI-assisted B2B prospect research and outreach software, licensed under the GNU Affero General Public License v3.0 (AGPLv3).**
 
-**Find commercial trading-signal providers → verify the signal business and public email → reject duplicates → save evidence → write a personalized first email → founder review → send → receive and thread replies → respond or follow up → track the outcome → repeat.**
+Nomeriq Growth is a self-hostable, founder-controlled platform for researching potential business customers, checking public evidence, preventing duplicate leads, preparing personalized outreach for human review, managing email conversations, and tracking sales opportunities. The workflow can serve as a starting point for independent founders, small and medium-sized teams, and larger organizations willing to configure or extend it for their needs.
 
-This is a standalone application with its own Git repository, database, authentication, encrypted mailbox credentials and deployment. It has no dependency on the main Nomeriq application, production database, AWS workers or auth system. If Nomeriq is offline, Growth is unaffected.
+The implemented workflow is:
+
+**Find commercial trading-signal providers → verify the signal business and published contact email → reject duplicates → save evidence → draft a personalized first email → founder review → send → thread replies → respond or follow up → track outcomes → repeat.**
+
+The application is independent of the main Nomeriq platform: it has its own Git repository, database, authentication, encrypted mailbox credentials, and deployment. It does not rely on the main Nomeriq application's production database, AWS workers, or authentication system. It supports **OpenAI, Anthropic Claude, DeepSeek, and custom AI APIs**, as well as **ChatGPT, Claude, and Hermes agent integrations via MCP and shared skills**. API connections and agent integrations are separate features, described below.
 
 ![Dashboard](artifacts/screenshots/02-dashboard.png)
+
+## Open-source scope
+
+- **Run and extend it:** Source code is available under the [AGPLv3 license](LICENSE). You can deploy and customize it subject to that license's conditions.
+- **Current implementation:** Research, verification, drafting, conversations, follow-ups, and campaigns are implemented for the maintainer's trading-signals prospecting workflow. The repository is not presented as a ready-made multi-tenant enterprise CRM or a built-in calendar meeting-booking service.
+- **Other industries:** Adapt the market-specific research queries, eligibility/verification rules, seeded examples, Product Truth, and outreach content; then rerun the tests and verify behavior against real public evidence before using it for a different market.
+- **Your own instance:** Configure your own database, secrets, domain, email service, sender identity, AI providers, and compliance settings. Do not reuse the maintainer's credentials, contacts, or production service endpoints.
+- **Early public release:** Adoption, production-scale performance, and compatibility across unrelated industries have not yet been established by independent deployments.
 
 ## What is working
 
 - **Dashboard** with live lead, draft, reply, opportunity and mailbox counts.
-- **Autonomous DeepSeek research engine**: click *Find 100 New Leads* and Growth itself runs Search, Fetch, verification, deduplication, saving and drafting on the server — independent of any browser tab or chat session. It is durable (all progress in PostgreSQL), budget-capped, resumable after a restart, and never restarts a completed target from zero.
-- **Research targets** persisted in PostgreSQL, with database-derived progress and a resumable brief for ChatGPT or Claude.
+- **Autonomous research engine**: run background prospect discovery, evidence checks, deduplication, saving and drafting from the application. The documented DeepSeek adapter uses Search and Fetch; other configured AI providers may have different capabilities and tool requirements. Research state is stored in PostgreSQL, with budget controls and resumable jobs.
+- **Research targets** persisted in PostgreSQL, with database-derived progress and a resumable brief for connected agents such as ChatGPT, Claude, or Hermes.
 - **Global deduplication** on domain, business name/aliases, contact email, Instagram, YouTube, X and Telegram. Unique indexes enforce identity even if an assistant skips the pre-check, and short-lived database claims let several workers research at once without duplicating a business. Generic inboxes (`info@`, `support@`, …) are valid contact addresses but never a deduplication key on their own.
 - **Evidence-first leads**: a verified lead cannot be saved without an official website, a published contact email, the exact email source URL and at least one public evidence source.
 - **Product Truth** controlled by the founder, with claim warnings on AI drafts and a deliberate no-ceremony path for founder-written replies.
-- **Personalized first-contact drafts** from OpenAI/Anthropic when configured, or a deterministic founder-style writer without an API key. Drafts are always saved for review.
+- **Personalized first-contact drafts** with configured AI model APIs (OpenAI, Claude, DeepSeek or a compatible custom provider, where supported by the selected workflow), or a deterministic founder-style writer without an API key. Drafts are saved for human review.
 - **Email delivery** through IONOS SMTP (or another SMTP/IMAP provider) with encrypted credentials, rate caps, idempotency, opt-out footers and an explicit sandbox mode.
 - **IMAP synchronization** for Inbox and Sent, thread association by headers/exact email, external sent-mail capture, unmatched inbound visibility and mailbox-history warnings.
 - **Simple reply workflow**: open thread → read → write or generate a suggestion → send. No extra internal approval step for a personally reviewed reply.
 - **Follow-ups** prepared from unanswered threads, stopped by replies, opt-outs and suppression, and never sent automatically.
 - **Campaigns** from approved first-contact drafts, with explicit founder authorization, progress, pause/resume and duplicate-send prevention.
-- **ChatGPT + Claude + DeepSeek integration** through a shared, scoped MCP endpoint and an equivalent REST/OpenAPI API. Research keys have no send permission.
+- **Agent integrations for ChatGPT, Claude and Hermes**, using scoped Growth MCP tools and shared skill instructions; REST/OpenAPI access is also documented for compatible clients. Research keys have no send permission.
 - **Suppression**, archive controls, JSON backup export, audit logging, security headers, CSRF/origin checks and encrypted credentials.
+
+## AI providers and agent integrations
+
+Nomeriq Growth supports two distinct ways to work with AI:
+
+| Connection | Supported options | Purpose |
+| --- | --- | --- |
+| **Model/API providers** | **OpenAI API**, **Anthropic Claude API**, **DeepSeek API**, and **custom API endpoints** | Supply models and, where the configured provider supports them, tools for AI-assisted research, assessment, and outreach drafting. |
+| **Connected AI assistants** | **ChatGPT**, **Claude**, and **Hermes Agent** | Work with the Growth database and workflows through its permission-scoped **MCP tools** and **shared skills/instructions**. The REST/OpenAPI interface offers another client integration path. |
+
+**These are not interchangeable connections.** For example, configuring an OpenAI API key inside Growth is different from connecting ChatGPT as an agent client. The same distinction applies to the Claude API versus Claude as an assistant. Hermes is an external agent integration, not another built-in model API provider.
+
+- Each model API or custom endpoint requires its own configuration and credentials. Provider support does **not** imply identical models, Search/Fetch features, tool-calling behavior, pricing, or availability. Test the particular provider and workflow before running a paid research job.
+- A custom API must implement the interface required by its selected workflow. A general chat-completion endpoint alone might not provide web research or fetching tools.
+- MCP clients and skill instructions use the app's configured tool scopes. Research and drafting access does **not** grant permission to send email, alter settings, or control research jobs through tools that are not exposed.
+- The detailed steps below document the earlier **DeepSeek Search/Fetch workflow** and the shared MCP/REST interface; other provider-specific setup may differ by deployment/version.
 
 ## Local workspace
 
-The app runs at **http://localhost:3100**.
+The app runs at **http://localhost:3100** by default.
 
-The founder account is created by `npm run db:seed` from `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env.local` (see `.env.example`). Set your own values before seeding, and never publish credentials in the README or anywhere in the repo.
+The initial administrator (called the "founder" in this workflow) is created by `npm run db:seed` from `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env.local` (see `.env.example`). Set your own values before seeding, and never publish credentials in the README or anywhere in the repo.
 
-The local database is seeded with two genuinely researched, publicly verified providers:
+The documented local seed uses two publicly researched trading-signal providers as **examples for the existing vertical**:
 
 | Lead | Markets | Public email | Evidence |
 | --- | --- | --- | --- |
 | [FXPremiere](https://www.fxpremiere.com/) | Forex, gold/metals, crypto, indices | `daniel@fxpremiere.com` | [Official terms/contact footer](https://www.fxpremiere.com/terms-of-service/), [paid plans](https://www.fxpremiere.com/) |
 | [P4 Provider](https://p4provider.com/) | Forex, crypto | `contact@p4provider.com` | [Official pricing](https://p4provider.com/pricing), [contact page](https://p4provider.com/contact) |
 
-Both were observed on 3 November 2026. Their paid signal services and public emails are recorded with source URLs. No email was sent to either business. A duplicate FXPremiere attempt is recorded as rejected, proving the database-backed duplicate path.
+These sources and publicly listed contact details were observed on 3 November 2026; they are historical test examples, not a claim that the businesses' details remain current. No email was sent to either business during the documented verification. A duplicate FXPremiere attempt was recorded as rejected, exercising the database-backed duplicate path. Users of a new instance should verify public contact details and compliance requirements independently.
 
-The research target is **2 / 100** because the system does not fabricate the other 98 providers. ChatGPT and Claude can continue that same target through MCP without restarting discovery.
+In the documented local seed, the research target begins at **2 / 100**; this is seed/test state, **not a live usage metric** or a claim about the current hosted instance. The system does not fabricate the other 98 providers. Connected agents such as ChatGPT, Claude, or Hermes can continue a configured research target through the exposed scoped tools, subject to the installed integration and its permissions.
 
 The checked-in local database also contains a clearly labelled **sandbox** thread and campaign created during verification. Sandbox messages never leave Growth.
 
@@ -97,11 +125,13 @@ The app's visible daily cap and minimum interval are **app-configured safety lim
 
 Initial IMAP sync covers the last 30 days and imports at most 40 messages per folder per run. The UI warns while mailbox history is incomplete. Subsequent runs continue forward from the last UID and UIDVALIDITY is tracked.
 
-## Autonomous DeepSeek research engine
+## Autonomous research engine — DeepSeek configuration example
+
+The platform supports multiple model API providers as described above. This section retains the detailed, previously documented **DeepSeek Search/Fetch** setup; do not assume the same provider-specific endpoints or tool support apply to OpenAI, Claude, or a custom API.
 
 Growth can research leads by itself. Nothing depends on a browser tab, a chat session or a connected assistant: every piece of state is a PostgreSQL row, so a timeout, a redeploy or a crash simply means the next run continues where the last one stopped.
 
-### Configure it
+### Configure the DeepSeek adapter
 
 1. **Settings → DeepSeek**: paste the API key, confirm the base URL (`https://api.deepseek.com`) and model (`deepseek-flash`), then use **Test connection**.
    The key is stored encrypted with `APP_ENCRYPTION_KEY` and is **never** returned to the browser. Alternatively set `DEEPSEEK_API_KEY` on the server; a key saved in Settings overrides the environment.
@@ -153,20 +183,22 @@ The route fails closed if `CRON_SECRET` is unset or the database is unreachable,
 
 If a target is not reached, Growth reports the real count and the recorded `stopReason` (budget exhausted, query plan exhausted, verifications failing). It never pads a count with weak leads and never claims a stopped job is still running.
 
-## ChatGPT and Claude
+## ChatGPT, Claude and Hermes — MCP and shared skills
 
-Create separate keys in **Settings → AI integrations**.
+Create separate, appropriately scoped keys in **Settings → AI integrations** for each connected assistant.
 
-- **MCP endpoint:** `https://leads.nomeriq.com/api/mcp`
-- **REST base:** `https://leads.nomeriq.com/api/agent/v1`
-- **OpenAPI schema for ChatGPT Actions:** `https://leads.nomeriq.com/api/agent/openapi`
+For your own deployment, substitute **your deployed domain** for the URLs below (the maintainer's current deployment uses `leads.nomeriq.com`):
+
+- **MCP endpoint:** `https://YOUR-DOMAIN/api/mcp`
+- **REST base:** `https://YOUR-DOMAIN/api/agent/v1`
+- **OpenAPI schema for ChatGPT Actions:** `https://YOUR-DOMAIN/api/agent/openapi`
 - **Shared skill:** served by the `get_instructions` tool and downloadable from Settings
 
-Claude can use a custom connector with the MCP URL and `Authorization: Bearer <key>`. ChatGPT can use a Custom GPT Action by importing the OpenAPI schema and setting bearer authentication. Both read and write the same PostgreSQL records; neither has a second prospect database and neither has a send tool.
+Claude can use a custom connector with the MCP URL and `Authorization: Bearer <key>`. ChatGPT can use the REST/OpenAPI interface through a Custom GPT Action or a supported MCP integration. Hermes Agent can use the scoped MCP endpoint and its shared Growth skill/instructions through a compatible Hermes MCP configuration. All three work against the same Growth database; the integrations do not create separate prospect databases. Available actions depend on the granted tool scopes, and none of these integrations is granted an email-send tool by this documented interface.
 
 Available tools: `get_instructions`, `read_product_truth`, `list_research_jobs`, `get_research_job`, `report_progress`, `search_prospects`, `get_prospect`, `check_duplicate`, `save_prospect`, `save_draft`, `list_conversations`, `get_conversation`, `suggest_reply`, `suggest_follow_up`, `get_conversation_context`.
 
-There is intentionally **no** send, delete, settings, permission, Product Truth mutation, suppression-removal or **job-control** tool. An assistant can read a DeepSeek job's real status, spend and stop reason, but only the founder can start, pause, resume or cancel it.
+There is intentionally **no** send, delete, settings, permission, Product Truth mutation, suppression-removal or **job-control** tool in the documented integration. An assistant can read a research job's recorded status, spend and stop reason, but only an authorized application user can start, pause, resume or cancel it. **Installing a skill does not bypass these permissions.**
 
 ## Tests
 
@@ -242,10 +274,10 @@ Short version:
 1. Create a Supabase PostgreSQL project.
 2. Set `DATABASE_URL` and the required secrets locally, run `npm run db:migrate` against Supabase.
 3. Import this repository into Vercel.
-4. Set `APP_URL`, `DATABASE_URL`, `SESSION_SECRET`, `APP_ENCRYPTION_KEY`, `CRON_SECRET`, `EMAIL_DELIVERY_MODE=sandbox`, `AUTO_MIGRATE=false`, and `DEEPSEEK_API_KEY` if the engine should run in production.
-5. Deploy and attach `leads.nomeriq.com`.
-6. Sign in, change the founder password, connect IONOS, approve Product Truth, then enable live sending deliberately.
-7. Confirm the `/api/cron/research` schedule appears in Vercel and starts the DeepSeek target you configured.
+4. Set `APP_URL`, `DATABASE_URL`, `SESSION_SECRET`, `APP_ENCRYPTION_KEY`, `CRON_SECRET`, `EMAIL_DELIVERY_MODE=sandbox`, and `AUTO_MIGRATE=false`. Configure credentials for the AI provider(s) you actually intend to use (`DEEPSEEK_API_KEY` is the documented DeepSeek example).
+5. Deploy and attach **your own application domain** (`leads.nomeriq.com` is the maintainer's example, not a required domain).
+6. Sign in, change the initial administrator password, configure your chosen SMTP/IMAP provider (IONOS is the documented example), approve Product Truth, then enable live sending deliberately.
+7. Confirm the `/api/cron/research` schedule appears in Vercel and advances the research target configured for your deployment.
 
 ## Security and compliance
 
@@ -253,7 +285,7 @@ See [SECURITY.md](SECURITY.md). Important boundaries:
 
 - Growth never treats a website or inbound email as instructions to an AI with side effects.
 - All mailbox credentials are encrypted at rest; they are never returned by an API.
-- The DeepSeek API key is server-only. It is encrypted at rest, is never included in a page payload or API response, and only `keyConfigured: true/false` is exposed to the browser.
+- The documented DeepSeek API key is server-only and encrypted at rest; the application does not return its raw value to the browser. Apply equivalent secret-handling checks to OpenAI, Claude, and custom provider credentials in your chosen deployment.
 - Mutating cookie-authenticated routes require a same-origin request.
 - Sending requires a verified recipient, an approved draft or explicit reply action, a healthy account, a non-suppressed address and an idempotent send record.
 - Commercial footers include the sender identity, postal address (blocked live if missing) and a unique unsubscribe link.
@@ -264,11 +296,11 @@ See [SECURITY.md](SECURITY.md). Important boundaries:
 ## Deliberate limits
 
 - The 100-lead target is a real target, not a fabricated count. The engine provably reaches the brief's 10-lead bar in the test suite and the target count scales from there; the local database additionally holds two hand-researched providers. Running to 100 against the live web needs live search spend.
-- Live DeepSeek calls could not be exercised in the build environment because no `DEEPSEEK_API_KEY` was available. The engine is verified offline through an injected provider (20 tests, including the 10-lead acceptance bar) and end to end against a local DeepSeek HTTP stub using the real adapter (`scripts/e2e-engine.mjs`). Point it at a real key and the request shape is the only unverified variable.
+- The historical test results below describe the original DeepSeek adapter. Live DeepSeek calls could not be exercised in that build environment because no `DEEPSEEK_API_KEY` was available; tests used an injected provider and a local DeepSeek HTTP stub. Those results do **not** by themselves verify live OpenAI, Claude, or custom API behavior; test each configured provider separately.
 - Live IONOS SMTP/IMAP cannot be verified without your real credentials; the adapters are implemented and the sandbox workflow is tested end to end.
 - IMAP attachment storage is capped; large attachments are recorded as metadata but not downloadable.
-- The engine is not a browser-driving agent. It researches through DeepSeek's official Search and Fetch tools; sites that require a logged-in browser session or heavy JavaScript rendering may not yield a published email.
-- DeepSeek Search and Fetch are billed per successful request. Set a budget you are willing to spend; the engine pauses at the cap rather than overrunning it.
+- The documented DeepSeek workflow is not a browser-driving agent. It uses its Search and Fetch tools; other providers require equivalent capabilities for autonomous web research. Sites requiring a logged-in browser or heavy JavaScript rendering may not yield a published email.
+- API pricing and metering vary by AI provider. The documented DeepSeek Search/Fetch requests have their own billing rules. Set budgets and verify usage accounting for the particular provider and endpoint before running research.
 - Product Truth is seeded as **needs review**. The founder must approve actual capabilities, pricing and limitations before those can be used in outreach.
 - The login rate limiter is in-process. For multi-instance production, put a platform-level rate limit/WAF in front of `/api/auth/login`.
 
@@ -279,13 +311,23 @@ src/app/(app)/          dashboard, research, leads, email, Product Truth, settin
 src/app/api/            auth, leads, drafts, conversations, campaigns, MCP, agent API
 src/app/api/cron/       research worker + follow-up draft preparation
 src/app/api/research/   research jobs, engine control, status
-src/lib/deepseek/       official Search/Fetch/chat adapters, verification and evidence rules
+src/lib/deepseek/       documented DeepSeek Search/Fetch/chat adapter and evidence rules
 src/lib/db/             Postgres/PGlite adapter and migrations runner
 src/db/migrations/      complete SQL schema + Supabase deny-by-default migration
 src/lib/services/       workflow services, research engine, worker, candidate claims
 src/lib/email/          SMTP/IMAP adapters, sync, classification
 src/lib/ai/             draft/reply writers and claim validation
-src/lib/agent/          shared MCP/REST tools and one skill document
+src/lib/agent/          shared scoped MCP/REST tools and agent skill instructions
 tests/                  workflow + autonomous engine suites
 scripts/                e2e engine harness
 ```
+
+## Contributing
+
+Issues, bug reports, security-conscious improvements, documentation updates, and pull requests are welcome. Please describe the problem and proposed change, run `npm run typecheck`, `npm test`, and `npm run build` when applicable, and do not include private business data, credentials, or unsolicited messages in test fixtures. Security vulnerabilities should be reported using the instructions in [SECURITY.md](SECURITY.md) rather than posted publicly.
+
+## License
+
+Copyright (c) 2026 Muhammad Moutsim Billah.
+
+Nomeriq Growth is distributed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See the [LICENSE](LICENSE) file for the full terms. In general, AGPLv3 permits use, modification, and commercial deployment, while imposing source-availability and other obligations, including for modified versions made available to users over a network. Third-party components retain their respective licenses.
