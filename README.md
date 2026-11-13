@@ -10,8 +10,6 @@ The implemented workflow is:
 
 The application is independent of the main Nomeriq platform: it has its own Git repository, database, authentication, encrypted mailbox credentials, and deployment. It does not rely on the main Nomeriq application's production database, AWS workers, or authentication system. It supports **OpenAI, Anthropic Claude, DeepSeek, and custom AI APIs**, as well as **ChatGPT, Claude, and Hermes agent integrations via MCP and shared skills**. API connections and agent integrations are separate features, described below.
 
-![Dashboard](artifacts/screenshots/02-dashboard.png)
-
 ## Open-source scope
 
 - **Run and extend it:** Source code is available under the [AGPLv3 license](LICENSE). You can deploy and customize it subject to that license's conditions.
