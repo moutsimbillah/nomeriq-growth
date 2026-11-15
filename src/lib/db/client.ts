@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { Pool, type PoolClient } from "pg";
+import { currentDbContext } from "./context";
 
 export interface QueryResult<T> {
   rows: T[];
@@ -206,6 +207,8 @@ async function applyMigrations(client: DbClient): Promise<void> {
 }
 
 export async function getDb(): Promise<DbClient> {
+  const scoped = currentDbContext();
+  if (scoped) return scoped;
   if (!dbGlobal.client) {
     dbGlobal.client = createClient().catch((error) => {
       dbGlobal.client = undefined;

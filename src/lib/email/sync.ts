@@ -1,6 +1,8 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser, type ParsedMail } from "mailparser";
 import { getDb } from "@/lib/db/client";
+import type { DbClient } from "@/lib/db/client";
+import { withDbContext } from "@/lib/db/context";
 import { decryptSecret } from "@/lib/auth/crypto";
 import {
   AppError,
@@ -19,10 +21,11 @@ import { recordOfferRejection } from "@/lib/services/lead-rejections";
 import { translateOnArrival } from "@/lib/services/message-translations";
 import { recordBounceIfAny } from "./bounce-handling";
 import { mayAssociateMessage } from "@/lib/services/message-linking";
-import { listUncopiedSentMessages, saveSentCopyForMessage } from "./sent-copy";
+import { listUncopiedSentMessages, persistSentCopyOutcome, saveSentCopy } from "./sent-copy";
 import { recomputeConversationChronology } from "./conversation-chronology";
 import { getParsedBounceInput, isAutoReply, parseBounceReports } from "./bounces";
 import { matchRecoveryOwner, recoverySqlLookups } from "./recovery-matching";
+import { finishMailboxRun, startMailboxRun, renewMailboxRun, withMailboxRun, type MailboxRun } from "./sync-journal";
 
 export interface SyncOptions {
   mode?: "incremental" | "backfill";
@@ -31,6 +34,10 @@ export interface SyncOptions {
   recoveryFolder?: "Sent Items" | "INBOX";
   linkCertainAddresses?: boolean;
   processHistoricalBounces?: boolean;
+  /** Internal private-run context; not accepted from public/manual callers. */
+  executionContext?: { run: MailboxRun; mode: "scheduled" | "manual" };
+  /** Internal post-commit handoff; never accepted by HTTP request schemas. */
+  onTranslationReady?: (messageId: string) => void;
 }
 
 const RECOVERY_PAGE_SIZE = 100;
@@ -364,7 +371,7 @@ async function applyOutboundEffect(
  * Exported so the duplicate-and-fill behaviour can be tested without an IMAP server: it takes a parsed
  * message and does the database work, which is the part that can be wrong.
  */
-export async function storeParsedMessage(input: {
+async function storeParsedMessageInternal(input: {
   parsed: ParsedMail;
   account: EmailAccountRecord;
   direction: "inbound" | "outbound";
@@ -639,8 +646,12 @@ export async function storeParsedMessage(input: {
         date.toISOString(),
         messageDbId,
       );
-      // Fire-and-forget: never blocks or fails message ingest.
-      void translateOnArrival(messageDbId);
+      // Scheduled ingestion is deliberately journaled and read-only outside the DB;
+      // translation remains a manual feature and must not inherit a released tx.
+      if (options.executionContext?.mode !== "scheduled") {
+        if (options.onTranslationReady) options.onTranslationReady(messageDbId);
+        else void translateOnArrival(messageDbId);
+      }
     } else {
       await applyOutboundEffect(
         owner.conversationId,
@@ -658,6 +669,28 @@ export async function storeParsedMessage(input: {
   };
 }
 
+export async function storeParsedMessage(input: {
+  parsed: ParsedMail;
+  account: EmailAccountRecord;
+  direction: "inbound" | "outbound";
+  folderPath: string;
+  folderLabel: "INBOX" | "Sent";
+  uid: number;
+  uidValidity: number;
+  isSeen: boolean;
+  internalDate: Date | null;
+}, options: SyncOptions = {}): Promise<Awaited<ReturnType<typeof storeParsedMessageInternal>>> {
+  if (!options.executionContext) return storeParsedMessageInternal(input, options);
+  const db = await getDb();
+  await renewMailboxRun(db, options.executionContext.run);
+  const deferred: string[] = [];
+  const stored = await withMailboxRun(db, options.executionContext.run, () =>
+    storeParsedMessageInternal(input, { ...options, onTranslationReady: id => deferred.push(id) }));
+  // No background provider/cache work can inherit the now-committed transaction client.
+  for (const id of deferred) void withDbContext(db, () => translateOnArrival(id)).catch(() => undefined);
+  return stored;
+}
+
 async function saveSyncState(input: {
   accountId: string;
   folder: string;
@@ -665,9 +698,9 @@ async function saveSyncState(input: {
   lastUid: number;
   historyComplete: boolean;
   error: string | null;
-}): Promise<void> {
+}, executionContext?: SyncOptions["executionContext"]): Promise<void> {
   const db = await getDb();
-  await db.query(
+  const write = (tx: DbClient) => tx.query(
     `INSERT INTO mailbox_sync_state
       (id, account_id, folder, uidvalidity, last_uid, last_synced_at,
        history_complete, error, updated_at)
@@ -697,6 +730,28 @@ async function saveSyncState(input: {
       input.error,
     ],
   );
+  if (executionContext) await withMailboxRun(db, executionContext.run, write);
+  else await write(db);
+}
+
+async function recordAccountSyncFailure(accountId: string, cause: unknown, executionContext?: SyncOptions["executionContext"]): Promise<void> {
+  const message = cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "Mailbox sync failed.";
+  const db = await getDb();
+  const write = (tx: DbClient) => tx.query(
+    `UPDATE email_accounts SET last_error = $2, updated_at = now() WHERE id = $1`,
+    [accountId, truncate(message, 500)],
+  );
+  if (executionContext) await withMailboxRun(db, executionContext.run, write);
+  else await write(db);
+}
+
+function incrementalUids(found: number[] | false | undefined, minimum = 1): number[] {
+  if (found === false) return [];
+  if (!Array.isArray(found) || found.some(uid => !Number.isSafeInteger(uid) || uid <= 0)) {
+    throw new Error("Mailbox returned invalid search UIDs.");
+  }
+  // IMAP's n:* range can include the last UID when n is beyond the mailbox's end.
+  return [...new Set(found)].filter(uid => uid >= minimum).sort((a, b) => a - b);
 }
 
 /** One bounded page per physical folder. Its independent checkpoint never advances the live cursor. */
@@ -778,13 +833,17 @@ async function recoverMailbox(
       error = cause instanceof Error ? cause.message : "Recovery folder failed";
       result.errors.push(`${folder.path}: ${error}`);
     }
-    if (uidValidity > 0) await db.query(`INSERT INTO mailbox_sync_state
+    if (uidValidity > 0) {
+      const checkpoint = (tx: DbClient) => tx.query(`INSERT INTO mailbox_sync_state
       (id, account_id, folder, uidvalidity, last_uid, last_synced_at, history_complete, error)
       VALUES ($1,$2,$3,$4,$5,now(),$6,$7)
       ON CONFLICT (account_id, folder) DO UPDATE SET uidvalidity = excluded.uidvalidity,
       last_uid = excluded.last_uid, last_synced_at = now(), history_complete = excluded.history_complete,
       error = excluded.error, updated_at = now()`,
       [crypto.randomUUID(), account.id, key, uidValidity, lastUid, complete, error]);
+      if (options.executionContext) await withMailboxRun(db, options.executionContext.run, checkpoint);
+      else await checkpoint(db);
+    }
     if (!complete) result.historyIncomplete = true;
     result.folders.push({ folder: folder.path, imported, scanned });
     result.progress!.push({ folder: folder.path, uidValidity, lastUid, remaining, complete });
@@ -795,6 +854,13 @@ async function recoverMailbox(
 }
 
 export async function syncEmailAccount(accountId: string, options: SyncOptions = {}): Promise<SyncResult> {
+  if (options.executionContext) {
+    if (options.executionContext.run.accountId !== accountId) throw new AppError("Mailbox run account mismatch.", 409, "sync_fence_rejected");
+    if (options.executionContext.mode !== options.executionContext.run.mode) throw new AppError("Mailbox run mode mismatch.", 409, "sync_fence_rejected");
+    if (options.executionContext.mode === "scheduled" && (options.mode === "backfill" || options.recoveryFolder || options.linkCertainAddresses || options.processHistoricalBounces)) {
+      throw new AppError("Scheduled mailbox runs are incremental only.", 400, "scheduled_incremental_only");
+    }
+  }
   if (options.recoveryFolder !== undefined) {
     if (options.mode !== "backfill") throw new AppError("Recovery folder requires explicit backfill mode.", 400, "backfill_required");
     if (options.recoveryFolder !== "Sent Items" && options.recoveryFolder !== "INBOX") {
@@ -815,6 +881,7 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
     throw new AppError("This mailbox is already syncing.", 409, "sync_in_progress");
   }
   syncing.add(accountId);
+  let ownedManualRun: MailboxRun | undefined;
   try {
     const account = await getEmailAccountRecord(accountId);
     if (!account) throw new AppError("Email account not found.", 404);
@@ -832,6 +899,17 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
     }
     if (account.status === "disabled") {
       throw new AppError("This email account is disabled.", 409);
+    }
+    if (!options.executionContext) {
+      const db = await getDb();
+      try {
+        const run = await startMailboxRun(db, { accountId, mode: "manual", leaseOwner: crypto.randomUUID() });
+        ownedManualRun = run;
+        options = { ...options, executionContext: { run, mode: "manual" } };
+      } catch {
+        // A refused lease must not fall through to an unleased diagnostic/account update.
+        throw new AppError("This mailbox is unavailable or already syncing.", 409, "sync_in_progress");
+      }
     }
 
     const result: SyncResult = {
@@ -859,31 +937,31 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
       socketTimeout: 60_000,
       tls: { minVersion: "TLSv1.2" },
     });
+    const renew = async () => {
+      if (options.executionContext) await renewMailboxRun(await getDb(), options.executionContext.run);
+    };
 
     try {
+      await renew();
       await client.connect();
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "IMAP connection failed.";
-      if (options.mode !== "backfill") await saveSyncState({
-        accountId,
-        folder: "INBOX",
-        uidValidity: 0,
-        lastUid: 0,
-        historyComplete: false,
-        error: message,
-      }).catch(() => undefined);
+      await recordAccountSyncFailure(accountId, message, options.executionContext).catch(() => undefined);
       throw new AppError(
-        `Could not connect to IMAP. Check Settings and try again. ${message.slice(0, 250)}`,
+        "Could not connect to IMAP. Check Settings and try again.",
         502,
         "imap_connect_failed",
       );
     }
 
     try {
+      await renew();
       const mailboxes = await client.list();
       if (options.mode === "backfill") {
-        return await recoverMailbox(client, account, mailboxes, options, result);
+        const recovered = await recoverMailbox(client, account, mailboxes, options, result);
+        if (ownedManualRun) await finishMailboxRun(await getDb(), ownedManualRun, recovered.errors.length ? "failed" : "completed", recovered.errors.length ? "backfill_failed" : undefined);
+        return recovered;
       }
       const sentBox =
         mailboxes.find((mailbox) => /\\Sent/i.test(mailbox.specialUse ?? "")) ||
@@ -907,15 +985,23 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
         let uidValidity = 0;
         let lastUid = 0;
         let historyComplete = false;
+        let checkpointReady = false;
         try {
+          await renew();
           const mailbox = await client.mailboxOpen(folder.path, { readOnly: true });
           uidValidity = Number(mailbox.uidValidity);
+          if (!Number.isSafeInteger(uidValidity) || uidValidity <= 0) {
+            throw new Error("Mailbox returned invalid UIDVALIDITY.");
+          }
           const db = await getDb();
           const stateResult = await db.query<any>(
             `SELECT * FROM mailbox_sync_state WHERE account_id = $1 AND folder = $2`,
             [accountId, folder.label],
           );
           const state = stateResult.rows[0];
+          const sameValidity = state && Number(state.uidvalidity) === uidValidity;
+          lastUid = sameValidity ? Number(state.last_uid) : 0;
+          historyComplete = sameValidity && Boolean(state.history_complete);
           const reset =
             !state ||
             Number(state.uidvalidity) !== uidValidity ||
@@ -924,8 +1010,9 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
           let uids: number[] = [];
           if (reset) {
             const since = new Date(Date.now() - INITIAL_DAYS * 86_400_000);
+            await renew();
             const found = await client.search({ since }, { uid: true });
-            uids = Array.isArray(found) ? found : [];
+            uids = incrementalUids(found);
             if (uids.length > MAX_PER_FOLDER) {
               uids = uids.slice(-MAX_PER_FOLDER);
               historyComplete = false;
@@ -935,11 +1022,12 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
             }
           } else {
             const fromUid = Number(state.last_uid) + 1;
+            await renew();
             const found = await client.search(
               { uid: `${fromUid}:*` },
               { uid: true },
             );
-            uids = Array.isArray(found) ? found : [];
+            uids = incrementalUids(found, fromUid);
             historyComplete = Boolean(state.history_complete);
             if (uids.length > MAX_PER_FOLDER) {
               uids = uids.slice(0, MAX_PER_FOLDER);
@@ -947,9 +1035,12 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
             }
           }
 
+          checkpointReady = true;
           for (const uid of uids) {
             scanned += 1;
             try {
+              await renew();
+              let fetched = false;
               for await (const message of client.fetch(
                 String(uid),
                 {
@@ -960,7 +1051,9 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
                 },
                 { uid: true },
               )) {
-                if (!message.source) continue;
+                if (message.uid !== uid || !message.source) {
+                  throw new Error(`UID ${uid} source unavailable.`);
+                }
                 const parsed = await simpleParser(message.source);
                 const stored = await storeParsedMessage({
                   parsed,
@@ -974,7 +1067,7 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
                   internalDate: message.internalDate
                     ? new Date(message.internalDate)
                     : null,
-                });
+                }, options);
                 if (stored.inserted) {
                   folderImported += 1;
                   result.imported += 1;
@@ -982,38 +1075,43 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
                   result.skipped += 1;
                 }
                 if (stored.filled) result.filled = (result.filled ?? 0) + 1;
-                lastUid = Math.max(lastUid, uid);
+                fetched = true;
               }
+              if (!fetched) throw new Error(`UID ${uid} was not fetched.`);
+              lastUid = uid;
             } catch (error) {
               result.errors.push(
                 `${folder.label} UID ${uid}: ${error instanceof Error ? error.message : "could not parse message"}`,
               );
+              historyComplete = false;
+              break;
             }
           }
 
-          if (!lastUid && state?.last_uid) lastUid = Number(state.last_uid);
-          await saveSyncState({
+          if (checkpointReady) await saveSyncState({
             accountId,
             folder: folder.label,
             uidValidity,
             lastUid,
             historyComplete,
-            error: null,
-          });
+            error: result.errors.some((entry) => entry.startsWith(`${folder.label} UID `))
+              ? result.errors[result.errors.length - 1] ?? "Folder sync failed."
+              : null,
+          }, options.executionContext);
           if (!historyComplete) result.historyIncomplete = true;
         } catch (error) {
           const message =
             error instanceof Error ? error.message : "Folder sync failed.";
           result.errors.push(`${folder.label}: ${message}`);
           result.historyIncomplete = true;
-          await saveSyncState({
+          if (checkpointReady) await saveSyncState({
             accountId,
             folder: folder.label,
             uidValidity,
             lastUid,
             historyComplete: false,
             error: message,
-          }).catch(() => undefined);
+          }, options.executionContext).catch(() => undefined);
         }
         result.folders.push({
           folder: folder.label,
@@ -1022,17 +1120,23 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
         });
       }
 
-      const db = await getDb();
-      await db.query(
-        // A successful sync says the mailbox is reachable, which is not the same as "allowed to
-        // send": a profile paused by its bounce rate stays paused until the founder lifts it.
-        `UPDATE email_accounts SET last_sync_at = now(), last_checked_at = now(),
-          status = CASE WHEN status = 'paused_bounce' THEN status ELSE 'connected' END,
-          last_error = CASE WHEN status = 'paused_bounce' THEN last_error ELSE null END,
-          updated_at = now()
-         WHERE id = $1`,
-        [accountId],
-      );
+      if (result.errors.length === 0) {
+        const db = await getDb();
+        const updateFreshness = (tx: DbClient) => tx.query(
+          // A successful sync says the mailbox is reachable, which is not the same as "allowed to
+          // send": a profile paused by its bounce rate stays paused until the founder lifts it.
+          `UPDATE email_accounts SET last_sync_at = now(), last_checked_at = now(),
+            status = CASE WHEN status = 'paused_bounce' THEN status ELSE 'connected' END,
+            last_error = CASE WHEN status = 'paused_bounce' THEN last_error ELSE null END,
+            updated_at = now()
+           WHERE id = $1`,
+          [accountId],
+        );
+        if (options.executionContext) await withMailboxRun(db, options.executionContext.run, updateFreshness);
+        else await updateFreshness(db);
+      } else {
+        await recordAccountSyncFailure(accountId, result.errors.join("; "), options.executionContext);
+      }
     } finally {
       await client.logout().catch(() => undefined);
     }
@@ -1040,18 +1144,23 @@ export async function syncEmailAccount(accountId: string, options: SyncOptions =
     // so they are attempted and reported rather than allowed to fail the run.
     // Recovery/linking is never enabled by deploying code or running the ordinary scheduler.
     result.rematched = null;
-    result.sentCopies = await backfillSentCopies(account.id).catch(() => null);
+    result.sentCopies = options.executionContext?.mode === "scheduled"
+      ? null
+      : await backfillSentCopies(account.id, 10, options.executionContext).catch(() => null);
     // New, attributable reports perform their own rate check. A no-op/replay sync must not pause.
     result.pausedByBounceRate = false;
 
+    if (ownedManualRun) await finishMailboxRun(await getDb(), ownedManualRun, result.errors.length ? "failed" : "completed", result.errors[0]);
+
     return result;
   } catch (error) {
-    if (error instanceof AppError) throw error;
-    throw new AppError(
-      error instanceof Error ? error.message : "Mailbox sync failed.",
-      502,
-      "sync_failed",
-    );
+    if (error instanceof AppError) {
+      if (ownedManualRun) await finishMailboxRun(await getDb(), ownedManualRun, "failed", error.code ?? "sync_failed").catch(() => undefined);
+      throw error;
+    }
+    await recordAccountSyncFailure(accountId, error, options.executionContext).catch(() => undefined);
+    if (ownedManualRun) await finishMailboxRun(await getDb(), ownedManualRun, "failed", "sync_failed").catch(() => undefined);
+    throw new AppError("Mailbox sync failed. Check the mailbox settings and try again.", 502, "sync_failed");
   } finally {
     syncing.delete(accountId);
   }
@@ -1153,7 +1262,11 @@ export async function rematchUnmatchedInbound(
 export async function backfillSentCopies(
   accountId: string,
   limit = 10,
+  executionContext?: SyncOptions["executionContext"],
 ): Promise<{ attempted: number; saved: number; alreadyPresent: number }> {
+  if (!executionContext || executionContext.mode !== "manual" || executionContext.run.mode !== "manual" || executionContext.run.accountId !== accountId) {
+    throw new Error("manual_sent_copy_context_invalid");
+  }
   const account = await getEmailAccountRecord(accountId);
   if (!account || account.provider === "sandbox") {
     return { attempted: 0, saved: 0, alreadyPresent: 0 };
@@ -1169,7 +1282,7 @@ export async function backfillSentCopies(
     );
     const message = body.rows[0];
     if (!message) continue;
-    const outcome = await saveSentCopyForMessage(account, row.id, {
+    const input = {
       messageId: row.messageId,
       to: row.to,
       subject: message.subject ?? row.subject,
@@ -1177,7 +1290,18 @@ export async function backfillSentCopies(
       html: message.body_html ?? "",
       fromName: account.fromName,
       fromEmail: account.emailAddress,
-    });
+    };
+    await renewMailboxRun(db, executionContext.run);
+    await withMailboxRun(db, executionContext.run, (tx) => tx.query(
+        `INSERT INTO audit_log(id,actor_type,action,entity_type,entity_id,metadata)
+         VALUES($1,'system','mailbox_sent_copy_append_intent','mailbox_sync_run',$2,$3::jsonb)`,
+        [crypto.randomUUID(), executionContext.run.id, JSON.stringify({ messageDbId: row.id, messageId: row.messageId })],
+    ));
+    const outcome = await saveSentCopy(account, input);
+    if (outcome.saved) {
+      await renewMailboxRun(db, executionContext.run);
+      await withMailboxRun(db, executionContext.run, (tx) => persistSentCopyOutcome(tx, row.id, outcome));
+    }
     if (outcome.saved && outcome.alreadyPresent) alreadyPresent += 1;
     else if (outcome.saved) saved += 1;
   }

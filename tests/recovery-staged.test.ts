@@ -3,6 +3,7 @@ import { getDb } from "@/lib/db/client";
 import { hashPassword } from "@/lib/auth/password";
 import { syncEmailAccount, type SyncOptions } from "@/lib/email/sync";
 import { getFolderInbox } from "@/lib/services/inbox";
+import { cleanupMailboxRuns } from "./helpers/mailbox-run-cleanup";
 
 const fake = vi.hoisted(() => ({
   account: {} as Record<string, unknown>, folder: "", failUid: 0, validity: 31,
@@ -61,7 +62,8 @@ beforeAll(async () => {
   vi.stubGlobal("fetch", fake.network);
   const db = await getDb();
   await db.query(`INSERT INTO users(id,email,normalized_email,name,password_hash,role) VALUES($1,$2,$2,'Staged fixture',$3,'founder')`, [userId, `${marker}@example.test`, hashPassword(crypto.randomUUID())]);
-  await db.query(`INSERT INTO email_accounts(id,name,provider,email_address,normalized_email,from_name,created_by) VALUES($1,'Staged fixture','sandbox','founder@staged.example','founder@staged.example','Founder',$2)`, [accountId, userId]);
+  // The mocked IMAP transport represents a connected real profile, so persist the same state for its lease.
+  await db.query(`INSERT INTO email_accounts(id,name,provider,email_address,normalized_email,from_name,status,created_by) VALUES($1,'Staged fixture','ionos','founder@staged.example','founder@staged.example','Founder','connected',$2)`, [accountId, userId]);
   fake.account = { id: accountId, provider: "ionos", status: "connected", emailAddress: "founder@staged.example", fromName: "Founder", imapHost: "invalid.example.test", imapPort: 993, imapSecure: true, username: crypto.randomUUID(), passwordEncrypted: crypto.randomUUID() };
   for (const [index, lead] of leads.entries()) {
     await db.query(`INSERT INTO prospects(id,business_name,name_key,created_by_type) VALUES($1,$2,$3,'founder')`, [lead.id, index === 0 ? "OnwardBTC" : `Staged ${index}`, `${marker}-${index}`]);
@@ -83,6 +85,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   const db = await getDb();
+  await cleanupMailboxRuns(db, [accountId]);
   await db.query(`DELETE FROM messages WHERE account_id=$1`, [accountId]);
   await db.query(`DELETE FROM prospects WHERE id=ANY($1::uuid[])`, [leads.map(lead => lead.id)]);
   await db.query(`DELETE FROM email_accounts WHERE id=$1`, [accountId]);

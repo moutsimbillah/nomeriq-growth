@@ -1,6 +1,7 @@
 import { ImapFlow } from "imapflow";
 import nodemailer from "nodemailer";
 import { getDb } from "@/lib/db/client";
+import type { DbClient } from "@/lib/db/client";
 import { decryptSecret } from "@/lib/auth/crypto";
 import type { EmailAccountRecord } from "./accounts";
 
@@ -88,6 +89,18 @@ const NOT_SAVED = (note: string): SentCopyResult => ({
   note,
 });
 
+export async function persistSentCopyOutcome(
+  db: DbClient,
+  messageDbId: string,
+  result: SentCopyResult,
+): Promise<void> {
+  if (!result.saved) return;
+  await db.query(
+    `UPDATE messages SET sent_copy_saved_at = now() WHERE id = $1 AND sent_copy_saved_at IS NULL`,
+    [messageDbId],
+  );
+}
+
 /**
  * Save the copy, or confirm one is already there.
  *
@@ -156,15 +169,12 @@ export async function saveSentCopyForMessage(
   account: EmailAccountRecord,
   messageDbId: string,
   input: SentCopyInput,
+  db?: DbClient,
 ): Promise<SentCopyResult> {
   try {
     const result = await saveSentCopy(account, input);
     if (result.saved) {
-      const db = await getDb();
-      await db.query(
-        `UPDATE messages SET sent_copy_saved_at = now() WHERE id = $1 AND sent_copy_saved_at IS NULL`,
-        [messageDbId],
-      );
+      await persistSentCopyOutcome(db ?? await getDb(), messageDbId, result);
     }
     return result;
   } catch {

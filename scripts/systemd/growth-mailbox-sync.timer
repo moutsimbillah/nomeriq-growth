@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Growth mailbox sync every 15 minutes
+
+[Timer]
+OnActiveSec=15min
+OnUnitInactiveSec=15min
+AccuracySec=1min
+Unit=growth-mailbox-sync.service
+
+[Install]
+WantedBy=timers.target

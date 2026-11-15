@@ -24,6 +24,7 @@ import { recordResearchUsage } from "./research-usage";
 import { mapDraft } from "./mappers";
 import { assertLeadOutreachAllowed } from "./lead-outreach-guard";
 import { assertNoDuplicateContact, lockSendReservations } from "./duplicate-contact";
+import { priorContactExists } from "./prior-contact";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -261,6 +262,13 @@ export async function generateDraftForProspect(input: {
       "draft_locked",
     );
   }
+  if (await priorContactExists(prospect.id)) {
+    throw new AppError(
+      "This prospect has already been contacted. A new first-contact draft cannot be prepared.",
+      409,
+      "already_contacted",
+    );
+  }
 
   const [truth, settings] = await Promise.all([
     getProductTruth(),
@@ -446,6 +454,13 @@ export async function savePreparedFirstContactDraft(input: {
     });
     await stampSourceClient(existing.id, input.sourceClient, input.sourceAgent, input.sourceChannel);
     return { draft, preserved: false };
+  }
+  if (await priorContactExists(prospect.id)) {
+    throw new AppError(
+      "This prospect has already been contacted. A new first-contact draft cannot be prepared.",
+      409,
+      "already_contacted",
+    );
   }
   const subject = input.subject.trim();
   const presentation = await getEmailPresentation({ prospectId: prospect.id });

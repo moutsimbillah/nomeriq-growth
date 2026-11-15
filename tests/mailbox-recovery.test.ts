@@ -5,6 +5,7 @@ import { hashPassword } from "@/lib/auth/password";
 import { storeParsedMessage, syncEmailAccount, type SyncOptions } from "@/lib/email/sync";
 import { recomputeConversationChronology } from "@/lib/email/conversation-chronology";
 import { getFolderInbox } from "@/lib/services/inbox";
+import { cleanupMailboxRuns } from "./helpers/mailbox-run-cleanup";
 
 const fake = vi.hoisted(() => ({
   account: {} as Record<string, unknown>, folder: "", failUid: 0, uidValidity: 17,
@@ -57,10 +58,11 @@ async function direct(raw: string, uid: number, direction: "inbound" | "outbound
 
 beforeAll(async () => {
   const db = await getDb();
+  await cleanupMailboxRuns(db, [accountId]);
   await db.query(`INSERT INTO users(id,email,normalized_email,name,password_hash,role)
     VALUES ($1,$2,$2,'Recovery fixture',$3,'founder')`, [userId, `${marker}@example.test`, hashPassword(crypto.randomUUID())]);
-  await db.query(`INSERT INTO email_accounts(id,name,provider,email_address,normalized_email,from_name,created_by)
-    VALUES ($1,'Recovery fixture','sandbox',$3,$3,'Founder',$2)`, [accountId, userId, `${marker}@recovery.example`]);
+  await db.query(`INSERT INTO email_accounts(id,name,provider,email_address,normalized_email,from_name,imap_host,status,created_by)
+    VALUES ($1,'Recovery fixture','ionos',$3,$3,'Founder','synthetic.example','connected',$2)`, [accountId, userId, `${marker}@recovery.example`]);
   for (const [id, name] of [[prospectId, "OnwardBTC"], [otherProspect, "Other fixture"]]) {
     await db.query(`INSERT INTO prospects(id,business_name,name_key,created_by_type) VALUES ($1,$2,$3,'founder')`, [id, name, `${marker}-${name}`]);
   }
@@ -86,9 +88,10 @@ beforeAll(async () => {
     .replace("Re: OnwardBTC discussion", "Unrelated newer mail"));
   fake.mail = new Map([["INBOX", new Map()], ["Sent Items", sent], ["Sent Archive", new Map([[1, mime(1, "2026-10-17T19:25:00-04:00")]])]]);
 });
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+afterEach(async () => { vi.useRealTimers(); vi.unstubAllGlobals(); await cleanupMailboxRuns(await getDb(), [accountId]); });
 afterAll(async () => {
   const db = await getDb();
+  await cleanupMailboxRuns(db, [accountId]);
   await db.query(`DELETE FROM messages WHERE account_id = $1`, [accountId]);
   await db.query(`DELETE FROM prospects WHERE id = ANY($1::uuid[])`, [[prospectId, otherProspect]]);
   await db.query(`DELETE FROM email_accounts WHERE id = $1`, [accountId]);
