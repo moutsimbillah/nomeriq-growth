@@ -93,6 +93,19 @@ never applies migration SQL.
    again: a subsequent installation requires a separately reviewed newer release. Unpublished staging
    directories remain inert and retained as failure evidence; this action does not delete them.
 
+## Recovery after an incomplete install
+
+If `install` exits nonzero after publishing the runtime, stop there. Do not retry `install`, run
+`run-once`, enable the timer, or manually recreate either unit. The incomplete install-state marker
+intentionally blocks those paths. Use the same release's reviewed quarantine step:
+
+`sudo -n bash /home/ubuntu/growth-mailbox-install/<release-sha>/install-mailbox-sync.sh quarantine <release-sha>`
+
+Quarantine takes a fresh verified backup, acquires the writer lock, disables/stops only units that
+actually exist, and preserves the runtime and any present unit files. Missing or partial units are
+recorded as such; conflicting bytes or failed checks stop the operation without deleting artifacts.
+If quarantine exits nonzero, leave the files untouched and stop for a new reviewed recovery decision.
+
 If an initial or later writer run fails after producing a `run-id`, never enable or re-enable the
 timer. Keep the root runtime installed long enough to use its protected wrapper. If the timer may be
 enabled, first run the reviewed installer's `disable <release-sha>` step and read back **disabled** /

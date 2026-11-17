@@ -7,6 +7,7 @@ const source = readFileSync("scripts/install-mailbox-sync.sh", "utf8");
 const sha = "c55480ce357c490c404074b495e3a77d2515465c";
 const scratch = process.env.TMPDIR;
 if (!scratch) throw new Error("profile scratch required");
+const deploymentDoc = readFileSync("docs/MAILBOX-AUTOSYNC-DEPLOYMENT.md", "utf8");
 
 function fixture() {
   const dir = mkdtempSync(join(scratch!, "mailbox-ops-control-"));
@@ -77,6 +78,11 @@ describe("actual mailbox installer orchestration on mapped disposable paths", ()
     expect(r.status).not.toBe(0); expect(f.events()).toEqual(["backup"]);
     expect(r.output).not.toContain("UNEXPECTED_INSTALL"); expect(existsSync(join(f.dir, "runtime"))).toBe(false);
   });
+  it("documents quarantine as the only safe retry after a published install failure", () => {
+    expect(deploymentDoc).toContain("If `install` exits nonzero after publishing the runtime");
+    expect(deploymentDoc).toContain("install-mailbox-sync.sh quarantine <release-sha>");
+    expect(deploymentDoc).toContain("Do not retry `install`");
+  });
   it("refuses an unmanaged unit before taking a backup or overwriting bytes", () => {
     const f = fixture();
     writeFileSync(join(f.dir, "units/growth-mailbox-sync.service"), "unmanaged-original");
@@ -142,7 +148,7 @@ describe("actual mailbox installer orchestration on mapped disposable paths", ()
     expect(readFileSync(join(f.dir, "runtime/.install-state"), "utf8")).toContain("phase=service-installed");
   });
 
-  it("quarantines a partial publish with a missing timer and resumes without overwrite", () => {
+  it("quarantines a partial publish without requiring both unit files, then resumes without overwrite", () => {
     const f = fixture(); f.seed();
     const timer = join(f.dir, "units/growth-mailbox-sync.timer");
     const service = join(f.dir, "units/growth-mailbox-sync.service");
@@ -151,6 +157,8 @@ describe("actual mailbox installer orchestration on mapped disposable paths", ()
     execFileSync("node", ["-e", "require('node:fs').unlinkSync(process.argv[1])", timer]);
     const first = f.run(`${fakeService()}; install(){ while (( $# > 2 )); do shift; done; command mkdir -p "$@"; }; quarantine ${sha}`);
     expect(first.status, first.output).toBe(0);
+    expect(f.events().some((event) => event.includes("stop growth-mailbox-sync.service"))).toBe(true);
+    expect(f.events().some((event) => event.includes("disable growth-mailbox-sync.timer"))).toBe(false);
     const saved = join(f.dir, `quarantine/${sha}`);
     expect(readFileSync(join(saved, "growth-mailbox-sync.service"), "utf8")).toBe(originalService);
     expect(existsSync(join(saved, "growth-mailbox-sync.timer"))).toBe(false);

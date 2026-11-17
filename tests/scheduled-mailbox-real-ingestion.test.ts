@@ -12,13 +12,13 @@ let restoreBackupFacts: () => void;
 beforeEach(() => { restoreBackupFacts = mockScheduledBackupFacts(); });
 afterEach(() => restoreBackupFacts());
 
-const fake = vi.hoisted(() => ({ account: {} as Record<string, unknown>, folder: "", failUid: 0, fetched: [] as number[], mail: new Map<string, Map<number, string>>(), pending: [] as { id: string; messageId: string; to: string; subject: string }[], translate: vi.fn(), append: vi.fn(), saveCopy: vi.fn() }));
-vi.mock("@/lib/email/accounts", () => ({ getEmailAccountRecord: async () => fake.account }));
+const fake = vi.hoisted(() => ({ account: {} as Record<string, unknown>, accountReads: 0, sentMessageReads: 0, folder: "", failUid: 0, fetched: [] as number[], mail: new Map<string, Map<number, string>>(), pending: [] as { id: string; messageId: string; to: string; subject: string }[], translate: vi.fn(), append: vi.fn(), saveCopy: vi.fn() }));
+vi.mock("@/lib/email/accounts", () => ({ getEmailAccountRecord: async () => { fake.accountReads++; return fake.account; } }));
 vi.mock("@/lib/auth/crypto", () => ({ decryptSecret: () => crypto.randomUUID() }));
 vi.mock("@/lib/services/message-translations", () => ({ translateOnArrival: fake.translate }));
 vi.mock("@/lib/email/sent-copy", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/email/sent-copy")>(),
-  listUncopiedSentMessages: async () => fake.pending,
+  listUncopiedSentMessages: async () => { fake.sentMessageReads++; return fake.pending; },
   saveSentCopy: fake.saveCopy,
   saveSentCopyForMessage: fake.append,
 }));
@@ -47,7 +47,7 @@ beforeAll(async () => { const db = await getDb();
   await db.query(`INSERT INTO workspace_settings(id) VALUES('default') ON CONFLICT (id) DO NOTHING`);
   fake.account = { id: accountId, provider: "ionos", status: "connected", emailAddress: `founder@scheduled-${marker}.example`, fromName: "Founder", imapHost: "synthetic.example", imapPort: 993, imapSecure: true, username: crypto.randomUUID(), passwordEncrypted: crypto.randomUUID() };
 });
-beforeEach(async () => { const db = await getDb(); await db.query(`DELETE FROM messages WHERE account_id=$1 AND uid IS NOT NULL`, [accountId]); await db.query(`DELETE FROM mailbox_sync_state WHERE account_id=$1`, [accountId]); await db.query(`UPDATE email_accounts SET last_sync_at=NULL,last_error=NULL WHERE id=$1`, [accountId]); await db.query(`UPDATE drafts SET status='approved' WHERE id=$1`, [draftId]); fake.failUid = 0; fake.fetched = []; fake.translate.mockReset(); fake.append.mockReset(); fake.translate.mockImplementation(() => { throw new Error("scheduled sync must not translate"); }); fake.append.mockImplementation(() => { throw new Error("scheduled sync must not append Sent copies"); }); fake.mail = new Map([["INBOX", new Map([[1, mime(1)], [2, mime(2)]])], ["Sent Items", new Map()]]); fake.pending = []; fake.saveCopy.mockReset(); fake.saveCopy.mockImplementation(async () => ({ saved: true, alreadyPresent: false, folder: "Sent Items", note: "saved" })); });
+beforeEach(async () => { const db = await getDb(); await db.query(`DELETE FROM messages WHERE account_id=$1 AND uid IS NOT NULL`, [accountId]); await db.query(`DELETE FROM mailbox_sync_state WHERE account_id=$1`, [accountId]); await db.query(`UPDATE email_accounts SET last_sync_at=NULL,last_error=NULL WHERE id=$1`, [accountId]); await db.query(`UPDATE drafts SET status='approved' WHERE id=$1`, [draftId]); fake.accountReads = 0; fake.sentMessageReads = 0; fake.failUid = 0; fake.fetched = []; fake.translate.mockReset(); fake.append.mockReset(); fake.translate.mockImplementation(() => { throw new Error("scheduled sync must not translate"); }); fake.append.mockImplementation(() => { throw new Error("scheduled sync must not append Sent copies"); }); fake.mail = new Map([["INBOX", new Map([[1, mime(1)], [2, mime(2)]])], ["Sent Items", new Map()]]); fake.pending = []; fake.saveCopy.mockReset(); fake.saveCopy.mockImplementation(async () => ({ saved: true, alreadyPresent: false, folder: "Sent Items", note: "saved" })); });
 afterEach(async () => { await cleanupMailboxRuns(await getDb(), [accountId]); });
 afterAll(async () => { const db = await getDb(); await cleanupMailboxRuns(db, [accountId]); await db.query(`DELETE FROM messages WHERE account_id=$1`, [accountId]); await db.query(`DELETE FROM drafts WHERE id=$1`, [draftId]); await db.query(`DELETE FROM conversations WHERE id=$1`, [conversationId]); await db.query(`DELETE FROM prospects WHERE id=$1`, [prospectId]); await db.query(`DELETE FROM email_accounts WHERE id=$1`, [accountId]); await db.query(`DELETE FROM users WHERE id=$1`, [userId]); });
 
@@ -105,12 +105,19 @@ describe("real scheduled mailbox ingestion", () => {
     await expect(undoMailboxRun(db, run.id, userId)).rejects.toThrow("external Sent-copy effect intent");
     expect((await db.query("SELECT status FROM mailbox_sync_runs WHERE id=$1", [run.id])).rows[0].status).toBe("completed");
   });
-  it("refuses omitted, scheduled or mismatched-account Sent-copy contexts before any network work", async () => {
+  it("refuses omitted, scheduled or mismatched-account Sent-copy contexts before account/DB or network work", async () => {
+    const db = await getDb();
+    const seed = (await db.query<{ id: string; message_id: string; sent_copy_saved_at: unknown }>("SELECT id,message_id,sent_copy_saved_at FROM messages WHERE account_id=$1 AND direction='outbound' LIMIT 1", [accountId])).rows[0];
+    fake.pending = [{ id: seed.id, messageId: seed.message_id, to: `contact@scheduled-${marker}.example`, subject: "Initial outreach" }];
+    const markerBefore = seed.sent_copy_saved_at;
     const run = { id: crypto.randomUUID(), accountId, mode: "scheduled" as const, fence: 1, leaseOwner: crypto.randomUUID() };
     await expect(backfillSentCopies(accountId)).rejects.toThrow("manual_sent_copy_context_invalid");
     await expect(backfillSentCopies(accountId, 10, { run, mode: "scheduled" })).rejects.toThrow("manual_sent_copy_context_invalid");
     await expect(backfillSentCopies(accountId, 10, { run: { ...run, mode: "manual", accountId: crypto.randomUUID() }, mode: "manual" })).rejects.toThrow("manual_sent_copy_context_invalid");
+    expect(fake.accountReads).toBe(0);
+    expect(fake.sentMessageReads).toBe(0);
     expect(fake.saveCopy).not.toHaveBeenCalled();
+    expect((await db.query("SELECT sent_copy_saved_at FROM messages WHERE id=$1", [seed.id])).rows[0].sent_copy_saved_at).toEqual(markerBefore);
   });
   it("refuses terminal manual-run contexts before append intent, network or marker persistence", async () => {
     const db = await getDb();
