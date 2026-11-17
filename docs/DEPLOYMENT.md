@@ -270,13 +270,18 @@ ran it from a bare shell, so migrations 019-022 went into a throwaway embedded d
 code that expected them. Load the environment, and never run it from a bare shell:
 
 ```bash
-sudo -u growth bash -c "set -a; . /home/growth/.growth.env; set +a; cd /home/growth/app && AUTO_MIGRATE=false npm run db:migrate"
+sudo -n -u growth bash -c "set -a; . /home/growth/.growth.env; set +a; cd /home/growth/app && npm run db:migrate"
 ```
+
+`scripts/migrate.ts` explicitly sets `AUTO_MIGRATE=true`; the shell-level value is not a safety gate for this
+one-shot migration command. The preflight below must prove the intended PostgreSQL target and exact
+pre-migration ledger before running it. The runner loads `.env.local` without overriding environment
+values already supplied by `.growth.env`.
 
 Assert the target BEFORE it applies anything, and abort otherwise:
 
 ```bash
-sudo -u growth bash -c 'set -a; . /home/growth/.growth.env; set +a; python3 -c "import os,sys,urllib.parse; u=urllib.parse.urlparse(os.environ[\"DATABASE_URL\"]); print(\"  target:\", u.hostname, u.path); sys.exit(1) if (u.path.strip(chr(47)) != \"growth\" or u.hostname not in (\"127.0.0.1\",\"localhost\")) else None"'
+sudo -n -u growth bash -c 'set -a; . /home/growth/.growth.env; set +a; python3 -c "import os,sys,urllib.parse; u=urllib.parse.urlparse(os.environ[\"DATABASE_URL\"]); print(\"  target:\", u.hostname, u.path); sys.exit(1) if (u.path.strip(chr(47)) != \"growth\" or u.hostname not in (\"127.0.0.1\",\"localhost\")) else None"'
 ```
 
 Then confirm the run reports a Postgres target on `growth`. If it says PGlite, nothing was applied and the
@@ -361,9 +366,16 @@ For a deploy that includes a migration, the order with this revision is:
 2. Run `deploy.sh prepare`; verify the dump and expected checkout, and verify the existing `.next`
    build identifier and running process start time are unchanged.
 3. Use the existing target assertion and env-loaded `npm run db:migrate` command in **Applying
-   migrations to production** above. The runner applies each file and its ledger insert in one
-   transaction; do not hand-write the ledger. Require only migration 030 newly applied, then verify
-   its five tables/RLS/indexes and the 30-row ledger with a separate read-only call.
+   migrations to production** above. Immediately before it runs, require the live ledger to contain
+   exactly the 34 files through `034_strict_prospect_identity.sql`, with `035_mailbox_sync_journal.sql`
+   and its three tables absent. The runner applies each file and its ledger insert in one transaction;
+   do not hand-write the ledger. For this release, require only migration 035 newly applied, the
+   ledger to move from 34 to 35 rows, and its `applied_at` to be no earlier than the recorded runner
+   start. The runner prints all ledger rows first and the `Target` line last, so read back the full
+   35-row output and require `Target: remote PostgreSQL / Supabase`. Independently verify the three
+   new tables (`mailbox_sync_leases`, `mailbox_sync_runs`, `mailbox_sync_journal`), sequence, indexes,
+   row-level security, capture function and expected triggers, plus unchanged pre-existing business
+   counts. Stop if any migration other than 035 is pending or any assertion differs.
 4. Only after those checks, run `deploy.sh build` followed by `deploy.sh restart`, verify the exact
    commit, health, service, timers and baseline counts. Do not invoke sync, send or research as a probe.
 
