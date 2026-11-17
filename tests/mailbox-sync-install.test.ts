@@ -96,6 +96,22 @@ describe("mailbox operational package", () => {
     } finally { rmSync(f.dir, { recursive: true, force: true }); }
   });
 
+  it("fails closed when backup-file enumeration emits a partial listing then fails", () => {
+    const f = storageFixture();
+    const now = Math.floor(Date.parse("2026-11-17T12:00:00Z") / 1000);
+    const expired = join(f.dir, "deploy-20261018T115959Z.dump");
+    writeFileSync(expired, "fixture");
+    try {
+      const partialFind = `find(){ printf '%s\\0' "$BACKUP_DIR/deploy-20261018T115956Z.dump"; return 73; }; `;
+      const prune = f.run(`${partialFind} prune_expired_backups ${now}`);
+      expect(prune.status).not.toBe(0);
+      expect(existsSync(expired)).toBe(true);
+      const count = f.run(`${partialFind} backup_count`);
+      expect(count.status).not.toBe(0);
+      expect(existsSync(expired)).toBe(true);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
   it("fails closed on future or incorrectly protected matching dumps", () => {
     const f = storageFixture();
     const now = Math.floor(Date.parse("2026-11-17T12:00:00Z") / 1000);

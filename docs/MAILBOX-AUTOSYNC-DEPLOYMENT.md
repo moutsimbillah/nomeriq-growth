@@ -14,8 +14,8 @@ removal of timestamped database dumps older than 30 days; no other backup files 
   `/var/backups/growth`, exact 30-day UTC timestamp retention (only regular `deploy-*.dump`
   files owned by `growth:growth`, mode `600`, link count 1, and strictly older than the cutoff
   are removed), at least **2,097,152 KiB** free, at most **3,200** timestamped dumps, and refusal
-  if the current timestamped dump target already exists. Invalid dates or unsafe matching files
-  stop the sync; files inside the 30-day window and unrelated files are preserved.
+  if the current timestamped dump target already exists. Any inventory failure, invalid date or
+  unsafe matching file stops the sync; files inside the 30-day window and unrelated files are preserved.
 - `scripts/systemd/growth-mailbox-sync.service` — root oneshot, storage check before the reviewed
   root wrapper, 300-second timeout, control-group kill, existing `growth-cron-alert.service` on
   failure.

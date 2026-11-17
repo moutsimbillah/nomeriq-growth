@@ -36,12 +36,22 @@ backup_epoch_from_name() {
   [[ "$canonical" == "$stamp" && "$epoch" =~ ^[0-9]+$ ]] || return 1
   printf '%s\n' "$epoch"
 }
+list_timestamped_backup_paths() {
+  local output_name=$1 fd pid map_status=0 find_status=0
+  [[ "$output_name" =~ ^[a-z_][a-z0-9_]*$ ]] || return 1
+  exec {fd}< <(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -name 'deploy-*.dump' -print0) || return 1
+  pid=$!
+  mapfile -d '' -t "$output_name" <&"$fd" || map_status=$?
+  exec {fd}<&- || return 1
+  wait "$pid" || find_status=$?
+  (( map_status == 0 && find_status == 0 ))
+}
 prune_expired_backups() {
   local now=${1:-} cutoff f base metadata epoch removed=0
   local -a files=() expired=()
   [[ "$now" =~ ^[0-9]+$ ]] || now=$(date +%s) || return 1
   cutoff=$((now - RETENTION_SECONDS))
-  mapfile -d '' -t files < <(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -name 'deploy-*.dump' -print0)
+  list_timestamped_backup_paths files || return 1
   for f in "${files[@]}"; do
     base=${f##*/}
     [[ "$base" =~ ^deploy-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || continue
@@ -60,12 +70,14 @@ prune_expired_backups() {
 }
 backup_count() {
   local n=0 f base
-  while IFS= read -r -d '' f; do
+  local -a files=()
+  list_timestamped_backup_paths files || return 1
+  for f in "${files[@]}"; do
     base=${f##*/}
     [[ "$base" =~ ^deploy-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || continue
     n=$((n + 1))
     [[ "$n" -le "$MAX_BACKUPS" ]] || { printf '%s\n' "$n"; return 0; }
-  done < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name 'deploy-*.dump' -print0)
+  done
   printf '%s\n' "$n"
 }
 main() {
@@ -79,7 +91,7 @@ main() {
   now=$(date +%s) || { fail clock_unavailable; return 1; }
   pruned=$(prune_expired_backups "$now") || { fail retention_cleanup; return 1; }
   free=$(df -Pk "$BACKUP_DIR" | awk 'NR==2 {print $4}')
-  count=$(backup_count)
+  count=$(backup_count) || { fail retention_cleanup; return 1; }
   check_facts "$free" "$count" || { [[ "$free" =~ ^[0-9]+$ && "$free" -lt "$MIN_FREE_KIB" ]] && fail disk_headroom || fail backup_count; return 1; }
   target="$BACKUP_DIR/deploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
   [[ ! -e "$target" && ! -L "$target" ]] || { fail backup_target_exists; return 1; }
