@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { beforeEach, afterEach } from "vitest";
 import { mockScheduledBackupFacts } from "./helpers/scheduled-backup-facts";
-import { parseScheduledReceipt, runScheduledMailboxSync, type ScheduledSyncDeps } from "@/lib/email/scheduled-sync";
+import { parseScheduledReceipt, runScheduledMailboxSync, undoScheduledMailboxRun, type ScheduledSyncDeps } from "@/lib/email/scheduled-sync";
 
 const receiptNow = new Date();
 let restoreFacts: () => void;
@@ -42,6 +42,51 @@ describe("private scheduled mailbox CLI integration", () => {
     expect(initialize).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed undo IDs before checking backup files or opening the database", async () => {
+    const initialize = vi.fn();
+    const lstat = vi.fn();
+    await expect(undoScheduledMailboxRun("not-a-run-id", receipt, deps({
+      lstat,
+      initializeDb: initialize as ScheduledSyncDeps["initializeDb"],
+    }))).rejects.toThrow("run_id_invalid");
+    expect(lstat).not.toHaveBeenCalled();
+    expect(initialize).not.toHaveBeenCalled();
+  });
+
+  it("verifies the fresh backup before database initialization for undo", async () => {
+    const initialize = vi.fn();
+    const runId = crypto.randomUUID();
+    await expect(undoScheduledMailboxRun(runId, receipt, deps({
+      lstat: async () => { throw new Error("backup file absent"); },
+      initializeDb: initialize as ScheduledSyncDeps["initializeDb"],
+    }))).rejects.toThrow("backup file absent");
+    expect(initialize).not.toHaveBeenCalled();
+  });
+
+  it("requires a quiescent timer and service before verifying backup or opening the database", async () => {
+    const initialize = vi.fn();
+    const lstat = vi.fn();
+    const assertUndoQuiescent = vi.fn(async () => { throw new Error("undo_requires_quiescence"); });
+    await expect(undoScheduledMailboxRun(crypto.randomUUID(), receipt, deps({
+      assertUndoQuiescent,
+      lstat,
+      initializeDb: initialize as ScheduledSyncDeps["initializeDb"],
+    }))).rejects.toThrow("undo_requires_quiescence");
+    expect(assertUndoQuiescent).toHaveBeenCalledOnce();
+    expect(lstat).not.toHaveBeenCalled();
+    expect(initialize).not.toHaveBeenCalled();
+  });
+
+  it("refuses manual-run targets before attempting any journal undo", async () => {
+    const runId = crypto.randomUUID();
+    const query = vi.fn(async () => ({ rows: [{ account_id: "acct-1", mode: "manual", status: "completed", created_by: "founder-1", role: "founder" }], rowCount: 1 }));
+    const transaction = vi.fn();
+    const db = { query, transaction, exec: vi.fn(), close: vi.fn() } as never;
+    await expect(undoScheduledMailboxRun(runId, receipt, deps({ initializeDb: async () => db }))).rejects.toThrow("undo_target_rejected");
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(transaction).not.toHaveBeenCalled();
+  });
+
   it("rejects a producer listing whose count is not the exact receipt", async () => {
     const initialize = vi.fn();
     await expect(runScheduledMailboxSync(receipt, deps({
@@ -53,6 +98,7 @@ describe("private scheduled mailbox CLI integration", () => {
 
   it("dispatches one scheduled incremental account and reads back completion", async () => {
     let status = "running";
+    const announced: string[] = [];
     const db = {
       query: vi.fn(async (sql: string) => {
         if (sql.includes("information_schema")) return { rows: [{ exists: true }], rowCount: 1 };
@@ -67,7 +113,9 @@ describe("private scheduled mailbox CLI integration", () => {
     const result = await runScheduledMailboxSync(receipt, deps({
       initializeDb: async () => db,
       startRun: async () => ({ id: "run-1", accountId: "acct-1", mode: "scheduled", fence: 1, leaseOwner: "owner-1" }),
+      onRunStarted: (runId) => { announced.push(runId); },
       syncAccount: async (_accountId, options) => {
+        expect(announced).toEqual(["run-1"]);
         expect(options?.mode).toBe("incremental");
         expect(options?.executionContext?.mode).toBe("scheduled");
         return { accountId: "acct-1", imported: 2, skipped: 1, errors: [], historyIncomplete: false, folders: [] };
@@ -75,5 +123,6 @@ describe("private scheduled mailbox CLI integration", () => {
       finishRun: async () => { status = "completed"; },
     }));
     expect(result).toMatchObject({ accountId: "acct-1", runId: "run-1", imported: 2, skipped: 1, folders: 2 });
+    expect(announced).toEqual(["run-1"]);
   });
 });

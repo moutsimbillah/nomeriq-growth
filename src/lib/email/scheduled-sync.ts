@@ -7,7 +7,7 @@ import { execFile as nodeExecFile } from "node:child_process";
 import { promisify } from "node:util";
 import { config as loadDotenv } from "dotenv";
 import { getDb, type DbClient } from "@/lib/db/client";
-import { finishMailboxRun, startMailboxRun, type BackupReceipt } from "./sync-journal";
+import { finishMailboxRun, startMailboxRun, undoMailboxRun, type BackupReceipt } from "./sync-journal";
 import { issueVerifiedBackupReceipt } from "./verified-scheduled-backup";
 import { syncEmailAccount, type SyncResult } from "./sync";
 
@@ -32,6 +32,8 @@ export type ScheduledSyncDeps = {
   appRoot: string;
   currentUid?: () => number | undefined;
   loadEnvironment?: () => void | Promise<void>;
+  assertUndoQuiescent?: () => Promise<void>;
+  onRunStarted?: (runId: string) => void;
   startRun?: typeof startMailboxRun;
   syncAccount?: typeof syncEmailAccount;
   finishRun?: typeof finishMailboxRun;
@@ -45,6 +47,12 @@ export type ScheduledSyncOutcome = {
   folders: number;
   historyIncomplete: boolean;
 };
+
+export type ScheduledUndoOutcome = { runId: string; status: "undone" | "already_undone" | "conflict"; journalRows: number };
+
+export class ScheduledSyncFailure extends Error {
+  constructor(readonly runId: string) { super("scheduled_sync_failed"); }
+}
 
 function safeErrorCode(error: unknown): string {
   if (error && typeof error === "object" && "code" in error && typeof error.code === "string") return error.code.slice(0, 64);
@@ -91,6 +99,10 @@ async function verifyBackup(receipt: BackupReceipt, deps: ScheduledSyncDeps): Pr
   return receipt;
 }
 
+async function verifiedBackupReceipt(receipt: BackupReceipt, deps: ScheduledSyncDeps): Promise<BackupReceipt> {
+  return issueVerifiedBackupReceipt(await verifyBackup(parseScheduledReceipt(JSON.stringify(receipt)), deps));
+}
+
 async function ensureWorkspaceDefaults(db: DbClient): Promise<void> {
   if (!(await db.query("SELECT id FROM workspace_settings WHERE id='default'")).rows.length) {
     throw new Error("workspace_setup_required");
@@ -106,7 +118,7 @@ async function readRunState(db: DbClient, runId: string, accountId: string): Pro
 
 export async function runScheduledMailboxSync(receipt: BackupReceipt, deps: ScheduledSyncDeps): Promise<ScheduledSyncOutcome> {
   if (deps.platform !== "linux") throw new Error("platform_guard");
-  const verified = await issueVerifiedBackupReceipt(await verifyBackup(parseScheduledReceipt(JSON.stringify(receipt)), deps));
+  const verified = await verifiedBackupReceipt(receipt, deps);
   const db = await deps.initializeDb();
   await ensureWorkspaceDefaults(db);
   const schema = await db.query<{ exists: boolean }>("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='email_accounts' AND column_name='status') AS exists");
@@ -117,6 +129,7 @@ export async function runScheduledMailboxSync(receipt: BackupReceipt, deps: Sche
   const run = await (deps.startRun ?? startMailboxRun)(db, { accountId: account.id, mode: "scheduled", leaseOwner: crypto.randomUUID(), backupReceipt: verified });
   let result: SyncResult | undefined;
   try {
+    deps.onRunStarted?.(run.id);
     result = await (deps.syncAccount ?? syncEmailAccount)(account.id, { mode: "incremental", executionContext: { run, mode: "scheduled" } });
     if (result.errors.length > 0) throw new Error("scheduled_sync_partial");
     await (deps.finishRun ?? finishMailboxRun)(db, run, "completed");
@@ -126,8 +139,41 @@ export async function runScheduledMailboxSync(receipt: BackupReceipt, deps: Sche
     return { accountId: account.id, runId: run.id, imported: result.imported, skipped: result.skipped, folders: state.checkpoints, historyIncomplete: result.historyIncomplete };
   } catch (error) {
     await (deps.finishRun ?? finishMailboxRun)(db, run, "failed", "scheduled_sync_failed").catch(() => undefined);
-    throw new Error("scheduled_sync_failed");
+    throw new ScheduledSyncFailure(run.id);
   }
+}
+
+const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+export async function undoScheduledMailboxRun(runId: string, receipt: BackupReceipt, deps: ScheduledSyncDeps): Promise<ScheduledUndoOutcome> {
+  if (deps.platform !== "linux") throw new Error("platform_guard");
+  if (!RUN_ID.test(runId)) throw new Error("run_id_invalid");
+  await deps.assertUndoQuiescent?.();
+  const verified = await verifiedBackupReceipt(receipt, deps);
+  const db = await deps.initializeDb();
+  const target = await db.query<{ account_id: string; mode: string; status: string; created_by: string | null; role: string | null }>(
+    `SELECT r.account_id,r.mode,r.status,a.created_by,u.role FROM mailbox_sync_runs r
+     JOIN email_accounts a ON a.id=r.account_id LEFT JOIN users u ON u.id=a.created_by WHERE r.id=$1`, [runId]);
+  const row = target.rows[0];
+  if (!row || row.mode !== "scheduled") throw new Error("undo_target_rejected");
+  const journal = await db.query<{ count: string }>("SELECT count(*)::text AS count FROM mailbox_sync_journal WHERE run_id=$1", [runId]);
+  const journalRows = Number(journal.rows[0]?.count);
+  if (!Number.isSafeInteger(journalRows) || journalRows < 0) throw new Error("undo_readback_failed");
+  if (row.status === "undone") return { runId, status: "already_undone", journalRows };
+  if (!["running", "completed", "failed", "expired", "undo_conflict"].includes(row.status)) throw new Error("undo_target_not_terminal");
+  if (!row.created_by || row.role !== "founder") throw new Error("undo_actor_rejected");
+  const result = await undoMailboxRun(db, runId, row.created_by, verified);
+  const after = await db.query<{ status: string }>("SELECT status FROM mailbox_sync_runs WHERE id=$1", [runId]);
+  const action = result.conflict ? "mailbox_sync_undo_conflict" : "mailbox_sync_undo";
+  const audit = await db.query<{ backup: Record<string, unknown> | null }>(
+    `SELECT metadata->'backup' AS backup FROM audit_log
+     WHERE action=$1 AND entity_type='mailbox_sync_run' AND entity_id=$2 ORDER BY created_at DESC,id DESC LIMIT 1`, [action, runId]);
+  const expectedStatus = result.conflict ? "undo_conflict" : "undone";
+  const observedBackup = audit.rows[0]?.backup;
+  const backupMatches = observedBackup?.path === verified.path && observedBackup?.sizeBytes === verified.sizeBytes
+    && observedBackup?.tableDataCount === verified.tableDataCount && observedBackup?.verifiedAt === verified.verifiedAt
+    && observedBackup?.mode === "600";
+  if (after.rows[0]?.status !== expectedStatus || !backupMatches) throw new Error("undo_readback_failed");
+  return { runId, status: result.conflict ? "conflict" : "undone", journalRows };
 }
 
 export function assertScheduledDatabaseTarget(raw: string | undefined): void {
@@ -142,6 +188,26 @@ function loadProductionEnvironment(): void {
   assertScheduledDatabaseTarget(process.env.DATABASE_URL);
   if (process.env.AUTO_MIGRATE !== "false") throw new Error("explicit_migration_required");
 }
+
+async function readSystemdState(args: string[]): Promise<string> {
+  try { return (await execFile("systemctl", args, { timeout: 10_000, maxBuffer: 4096 })).stdout.trim(); }
+  catch (error) {
+    const output = (error as { stdout?: unknown }).stdout;
+    return (typeof output === "string" ? output : Buffer.isBuffer(output) ? output.toString("utf8") : "").trim();
+  }
+}
+
+async function requireQuiescentMailboxWriter(): Promise<void> {
+  const [timerEnabled, timerActive, serviceActive] = await Promise.all([
+    readSystemdState(["is-enabled", "growth-mailbox-sync.timer"]),
+    readSystemdState(["is-active", "growth-mailbox-sync.timer"]),
+    readSystemdState(["is-active", "growth-mailbox-sync.service"]),
+  ]);
+  if (timerEnabled !== "disabled" || timerActive !== "inactive" || serviceActive !== "inactive") {
+    throw new Error("undo_requires_quiescence");
+  }
+}
+
 export function productionDependencies(): ScheduledSyncDeps {
   return {
     platform: process.platform,
@@ -161,18 +227,30 @@ export function productionDependencies(): ScheduledSyncDeps {
     appRoot: FIXED_APP_ROOT,
     currentUid: () => typeof process.getuid === "function" ? process.getuid() : undefined,
     loadEnvironment: loadProductionEnvironment,
+    assertUndoQuiescent: requireQuiescentMailboxWriter,
+    onRunStarted: (runId) => { process.stdout.write(`RUN_STARTED run_id=${runId}${os.EOL}`); },
   };
 }
 
 export async function main(argv: string[] = process.argv.slice(2), deps: ScheduledSyncDeps = productionDependencies()): Promise<number> {
-  if (argv.length !== 0 || deps.platform !== "linux" || process.env.NODE_ENV !== "production" || deps.appRoot !== FIXED_APP_ROOT) return 2;
+  const undoRunId = argv.length === 2 && argv[0] === "undo" && RUN_ID.test(argv[1]) ? argv[1] : undefined;
+  if ((argv.length !== 0 && !undoRunId) || deps.platform !== "linux" || process.env.NODE_ENV !== "production" || deps.appRoot !== FIXED_APP_ROOT) return 2;
   try {
     await (deps.loadEnvironment ?? loadProductionEnvironment)();
     const receipt = parseScheduledReceipt(await deps.readStdin());
+    if (undoRunId) {
+      const outcome = await undoScheduledMailboxRun(undoRunId, receipt, deps);
+      process.stdout.write(JSON.stringify(outcome) + os.EOL);
+      return outcome.status === "conflict" ? 1 : 0;
+    }
     const outcome = await runScheduledMailboxSync(receipt, deps);
-    process.stdout.write(JSON.stringify(outcome) + os.EOL);
+    process.stdout.write(JSON.stringify({ status: "completed", ...outcome }) + os.EOL);
     return 0;
-  } catch {
+  } catch (error) {
+    if (error instanceof ScheduledSyncFailure) {
+      process.stdout.write(JSON.stringify({ status: "failed", runId: error.runId, code: "scheduled_sync_failed" }) + os.EOL);
+      return 1;
+    }
     process.stderr.write("scheduled mailbox sync failed\n");
     return 1;
   }

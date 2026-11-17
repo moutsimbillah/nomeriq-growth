@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { getDb } from "@/lib/db/client";
 import { hashPassword } from "@/lib/auth/password";
 import { currentDbContext } from "@/lib/db/context";
-import { parseScheduledReceipt, runScheduledMailboxSync } from "@/lib/email/scheduled-sync";
+import { parseScheduledReceipt, runScheduledMailboxSync, undoScheduledMailboxRun } from "@/lib/email/scheduled-sync";
 import { backfillSentCopies } from "@/lib/email/sync";
 import { finishMailboxRun, startMailboxRun, undoMailboxRun } from "@/lib/email/sync-journal";
 import { cleanupMailboxRuns } from "./helpers/mailbox-run-cleanup";
@@ -54,6 +54,40 @@ afterAll(async () => { const db = await getDb(); await cleanupMailboxRuns(db, [a
 describe("real scheduled mailbox ingestion", () => {
   it("journals sync, cancels follow-up on reply, and isolates side effects", async () => { fake.failUid = 2; await expect(runScheduledMailboxSync(receipt(), deps())).rejects.toThrow("scheduled_sync_failed"); const db = await getDb(); const run = await db.query(`SELECT id,status,error FROM mailbox_sync_runs WHERE account_id=$1`, [accountId]); expect(run.rows).toHaveLength(1); expect(run.rows[0].status).toBe("failed");    expect(String(run.rows[0].error)).toContain("scheduled_sync_failed"); const journal = await db.query(`SELECT table_name,operation FROM mailbox_sync_journal WHERE run_id=$1`, [run.rows[0].id]); expect(journal.rows.some((row) => row.table_name === "messages" && row.operation === "INSERT")).toBe(true); expect((await db.query(`SELECT status FROM drafts WHERE id=$1`, [draftId])).rows[0].status).toBe("cancelled"); expect(fake.translate).not.toHaveBeenCalled(); expect(fake.append).not.toHaveBeenCalled(); expect((await db.query(`SELECT count(*)::int AS n FROM outbound_sends WHERE account_id=$1`, [accountId])).rows[0].n).toBe(0); });
   it("resumes failed UID and replays idempotently with terminal run/checkpoint readback", async () => { fake.failUid = 2; await expect(runScheduledMailboxSync(receipt(), deps())).rejects.toThrow(); fake.failUid = 0; fake.fetched = []; const resumed = await runScheduledMailboxSync(receipt(), deps()); expect(resumed.accountId).toBe(accountId); expect(fake.fetched).toEqual([2]); fake.fetched = []; const replay = await runScheduledMailboxSync(receipt(), deps()); expect(replay.imported).toBe(0); expect(fake.fetched).toEqual([]); const db = await getDb(); const runs = await db.query(`SELECT status,mode FROM mailbox_sync_runs WHERE account_id=$1 ORDER BY started_at`, [accountId]); expect(runs.rows.map((row) => [row.status, row.mode])).toEqual([["failed", "scheduled"], ["completed", "scheduled"], ["completed", "scheduled"]]); const checkpoint = await db.query(`SELECT uidvalidity,last_uid,history_complete,error FROM mailbox_sync_state WHERE account_id=$1 AND folder='INBOX'`, [accountId]); expect(checkpoint.rows[0]).toMatchObject({ uidvalidity: 77, last_uid: 2, history_complete: false, error: null }); const messages = await db.query(`SELECT uid,message_id FROM messages WHERE account_id=$1 AND folder='INBOX'`, [accountId]); expect(messages.rows).toHaveLength(2); expect(new Set(messages.rows.map((row) => row.message_id)).size).toBe(2); });
+  it("undoes a completed scheduled sync only with a fresh verified backup and restores the exact prior state", async () => {
+    const db = await getDb();
+    const conversationBefore = (await db.query<{ data: Record<string, unknown> }>("SELECT to_jsonb(c) AS data FROM conversations c WHERE id=$1", [conversationId])).rows[0].data;
+    const depsForRun = deps();
+    const completed = await runScheduledMailboxSync(receipt(), depsForRun);
+    expect(completed.imported).toBe(2);
+    expect((await db.query("SELECT count(*)::int AS n FROM messages WHERE account_id=$1", [accountId])).rows[0].n).toBe(3);
+    expect((await db.query("SELECT status FROM drafts WHERE id=$1", [draftId])).rows[0].status).toBe("cancelled");
+    const changedConversation = (await db.query<{ data: Record<string, unknown> }>("SELECT to_jsonb(c) AS data FROM conversations c WHERE id=$1", [conversationId])).rows[0].data;
+    expect(changedConversation).not.toEqual(conversationBefore);
+
+    await expect(undoMailboxRun(db, completed.runId, userId)).rejects.toThrow();
+    expect((await db.query("SELECT status FROM mailbox_sync_runs WHERE id=$1", [completed.runId])).rows[0].status).toBe("completed");
+    expect((await db.query("SELECT count(*)::int AS n FROM audit_log WHERE action='mailbox_sync_undo' AND entity_id=$1", [completed.runId])).rows[0].n).toBe(0);
+
+    const undoReceipt = receipt();
+    const undone = await undoScheduledMailboxRun(completed.runId, undoReceipt, deps());
+    expect(undone).toMatchObject({ runId: completed.runId, status: "undone", journalRows: expect.any(Number) });
+    expect((await db.query("SELECT count(*)::int AS n FROM messages WHERE account_id=$1", [accountId])).rows[0].n).toBe(1);
+    expect((await db.query("SELECT status FROM drafts WHERE id=$1", [draftId])).rows[0].status).toBe("approved");
+    expect((await db.query<{ data: Record<string, unknown> }>("SELECT to_jsonb(c) AS data FROM conversations c WHERE id=$1", [conversationId])).rows[0].data).toEqual(conversationBefore);
+    expect((await db.query("SELECT last_sync_at FROM email_accounts WHERE id=$1", [accountId])).rows[0].last_sync_at).toBeNull();
+    expect((await db.query("SELECT count(*)::int AS n FROM mailbox_sync_state WHERE account_id=$1", [accountId])).rows[0].n).toBe(0);
+    const audit = await db.query<{ metadata: { backup: Record<string, unknown> } }>("SELECT metadata FROM audit_log WHERE action='mailbox_sync_undo' AND entity_id=$1", [completed.runId]);
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0].metadata.backup).toMatchObject({ path: undoReceipt.path, sizeBytes: undoReceipt.sizeBytes, tableDataCount: undoReceipt.tableDataCount, verifiedAt: undoReceipt.verifiedAt, mode: "600" });
+    expect((await db.query("SELECT count(*)::int AS n FROM outbound_sends WHERE account_id=$1", [accountId])).rows[0].n).toBe(0);
+    expect(fake.translate).not.toHaveBeenCalled();
+    expect(fake.append).not.toHaveBeenCalled();
+
+    expect(await undoScheduledMailboxRun(completed.runId, receipt(), deps())).toMatchObject({ status: "already_undone", runId: completed.runId });
+    expect((await db.query("SELECT count(*)::int AS n FROM audit_log WHERE action='mailbox_sync_undo' AND entity_id=$1", [completed.runId])).rows[0].n).toBe(1);
+  });
+
   it("journals manual Sent-copy intent before network and refuses undo after external effect", async () => {
     const db = await getDb();
     const seed = (await db.query<{ id: string; message_id: string }>("SELECT id,message_id FROM messages WHERE account_id=$1 AND direction='outbound' LIMIT 1", [accountId])).rows[0];

@@ -10,6 +10,16 @@ removal of timestamped database dumps older than 30 days; no other backup files 
 
 - `scripts/install-mailbox-sync.sh` — strict steps: `install`, `run-once`, `enable`, `disable`,
   `quarantine`; each takes exactly the expected 40-character release SHA.
+- `scripts/bootstrap-mailbox-sync-installer.sh` — root-only staging of the exact committed installer
+  blob into `/home/ubuntu/growth-mailbox-install/<release-sha>/`, with a root-owned mode-600 blob
+  marker. It refuses a dirty/mismatched release or conflicting staged bytes and safely resumes a
+  valid partial stage.
+- The installed root wrapper also accepts `undo <run-id>`; it requires the timer disabled and both
+  timer/service inactive, takes and verifies a fresh backup, and validates the structured undo
+  status and journal-row count before reporting success.
+- Immediately after creating a scheduled run, the private CLI emits `RUN_STARTED run_id=<uuid>`;
+  the root wrapper forwards only that validated breadcrumb to the service journal and suppresses
+  other CLI diagnostics. It is the recovery ID if systemd terminates the run before final output.
 - `scripts/mailbox-sync-storage-check.sh` — root-trusted manifest check, fixed
   `/var/backups/growth`, exact 30-day UTC timestamp retention (only regular `deploy-*.dump`
   files owned by `growth:growth`, mode `600`, link count 1, and strictly older than the cutoff
@@ -51,15 +61,20 @@ never applies migration SQL.
 ## Reviewed sequence
 
 1. Review the exact candidate bytes and run the isolated tests.
-2. On the target, `install <release-sha>` verifies the exact clean release, source files, deploy
-   hash, fixed paths, ownership/modes, and refuses unmanaged collisions. It installs units but
-   leaves them disabled and stopped, then runs daemon-reload only.
-3. `run-once <release-sha>` performs the storage precheck and starts only the new service. The
+2. On the target, stage and install only the exact release bytes:
+   `sudo -n bash /home/growth/app/scripts/bootstrap-mailbox-sync-installer.sh <release-sha>`, then
+   `sudo -n bash /home/ubuntu/growth-mailbox-install/<release-sha>/install-mailbox-sync.sh install <release-sha>`.
+   The installer verifies the clean release, source files, deploy hash, fixed paths, ownership/modes,
+   and refuses unmanaged collisions. It installs units but leaves them disabled and stopped, then
+   runs daemon-reload only.
+3. `sudo -n bash /home/ubuntu/growth-mailbox-install/<release-sha>/install-mailbox-sync.sh run-once <release-sha>`
+   performs the storage precheck and starts only the new service. The
    service takes and verifies a fresh dump through the existing authorized deploy routine before
    the private CLI initializes the database. It records `first-sync.ok` only after systemd reports
    `Result=success`, `ExecMainStatus=0`, inactive completion, and the CLI's own completion/checkpoint readback succeeds. This is the
    explicitly approved initial live import, not a health probe.
-4. `enable <release-sha>` requires the successful marker, matching release, loaded failure-alert
+4. `sudo -n bash /home/ubuntu/growth-mailbox-install/<release-sha>/install-mailbox-sync.sh enable <release-sha>`
+   requires the successful marker, matching release, loaded failure-alert
    unit, an intact **complete** install-state marker, and intact managed files, then enables/starts only the new timer.
 5. `disable <release-sha>` disables/stops only the new timer and service. `quarantine <release-sha>`
    acquires the writer's root-owned lock, takes and verifies a fresh backup through the unchanged
@@ -77,6 +92,30 @@ never applies migration SQL.
    a partial unit must be an exact prefix of the committed unit. A quarantined SHA cannot be installed
    again: a subsequent installation requires a separately reviewed newer release. Unpublished staging
    directories remain inert and retained as failure evidence; this action does not delete them.
+
+If an initial or later writer run fails after producing a `run-id`, never enable or re-enable the
+timer. Keep the root runtime installed long enough to use its protected wrapper. If the timer may be
+enabled, first run the reviewed installer's `disable <release-sha>` step and read back **disabled** /
+**inactive** for the timer and service. Then run
+`sudo -n bash /usr/local/lib/growth-mailbox-sync/growth-cron-sync.sh undo <run-id>`.
+The wrapper independently enforces quiescence, takes a fresh verified dump, and the CLI re-verifies
+that receipt before database access. Undo is limited to the one scheduled run: it preflights every
+journaled row, restores only unchanged database state, preserves the journal and audit history, and
+refuses if later changes conflict, the lease is still live, or a Sent-copy external-effect intent
+exists. A successful readback reports `UNDO_SUCCESS`, the run ID and journal-row count. A conflict
+or any other failure stops here: leave units disabled/inactive, do not restore the database, do not
+force past the conflict, and obtain a separately reviewed repair/containment decision. Run quarantine
+only as the separately reviewed preservation/containment step; it is not mailbox-data undo and must
+not precede a needed undo because it moves the wrapper.
+
+If systemd killed the service before the wrapper printed a run ID, retrieve the matching breadcrumb
+from the service journal (use the failed service's time window; if more than one run ID is plausible,
+stop rather than guess):
+`sudo -n journalctl -u growth-mailbox-sync.service --since "<failed-run-time>" --no-pager -q | grep -E '^RUN_STARTED run_id='`.
+After a forced interruption, once the service is confirmed inactive and the timer disabled, wait at
+least 120 seconds for the final run lease to expire. Then run the undo command above; it takes a new
+verified backup. A run that reported a handled failure has already released its lease and does not
+need this wait.
 
 If any check fails, the step stops. Expired-backup removal is bounded by the approved 30-day rule;
 other storage pauses are explicit maintenance conditions, not silent cleanup. The package does not

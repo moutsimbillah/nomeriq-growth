@@ -6,6 +6,8 @@ set -euo pipefail
 readonly APP=/home/growth/app
 readonly RUNTIME=/usr/local/lib/growth-mailbox-sync
 readonly SNAPSHOT="$RUNTIME/app"
+readonly SERVICE=growth-mailbox-sync.service
+readonly TIMER=growth-mailbox-sync.timer
 readonly DEPLOY="$RUNTIME/deploy.sh"
 readonly DEPLOY_SHA256=a8cc605ca1dfe323f1b3b7ce1d123e1ae3f8197268fc9339399b2d37b593f8c6
 readonly BACKUPS=/var/backups/growth
@@ -274,33 +276,105 @@ verified_receipt_json() {
     "$BACKUP_PATH" "$BACKUP_SIZE" "$BACKUP_TABLE_DATA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 
+filter_cli_output() {
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^RUN_STARTED\ run_id=([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$ ]]; then
+      printf '%s\n' "$line" >&2
+    elif [[ "$line" == RUN_STARTED* ]]; then
+      return 1
+    else
+      printf '%s\n' "$line"
+    fi
+  done
+}
+
 # The CLI loads the service environment itself in this fixed, non-secret-bearing command.
+# Forward only its validated run-start breadcrumb; discard all other private diagnostics.
 dispatch_cli() {
   local receipt=$1
-  [[ "$#" == 1 ]] || return 1
+  shift
   sudo -n -u growth -- env -i HOME=/home/growth USER=growth LOGNAME=growth PATH=/usr/bin:/bin NODE_ENV=production TSX_DISABLE_CACHE=1 \
-    "$NODE" "$TSX" --tsconfig "$CONFIG" "$CLI" <<<"$receipt" >/dev/null 2>&1
+    "$NODE" "$TSX" --tsconfig "$CONFIG" "$CLI" "$@" <<<"$receipt" 2>/dev/null | filter_cli_output
+}
+
+python3_cmd() { printf '%s\n' /usr/bin/python3; }
+parse_cli_result() {
+  "$(python3_cmd)" -I -c 'import json,re,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(1)
+if not isinstance(d,dict): sys.exit(1)
+status=d.get("status"); run_id=d.get("runId")
+if status not in {"completed","failed","undone","already_undone","conflict"}: sys.exit(1)
+if not isinstance(run_id,str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",run_id): sys.exit(1)
+print(status,run_id)'
+}
+
+parse_undo_cli_result() {
+  "$(python3_cmd)" -I -c 'import json,re,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(1)
+if not isinstance(d,dict): sys.exit(1)
+status=d.get("status"); run_id=d.get("runId"); rows=d.get("journalRows")
+if status not in {"undone","already_undone","conflict"}: sys.exit(1)
+if not isinstance(run_id,str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",run_id): sys.exit(1)
+if type(rows) is not int or rows < 0: sys.exit(1)
+print(status,run_id,rows)'
 }
 
 run_once() {
-  local raw receipt
+  local raw receipt output parsed status run_id
   INVOCATION_EPOCH=$(date +%s) || return 1
   require_cli || { fail cli_missing; return 1; }
   raw=$(raw_take_backup) || { fail backup_failed; return 1; }
   parse_receipt "$raw" || { fail backup_receipt_invalid; return 1; }
   verify_backup "$BACKUP_PATH" "$INVOCATION_EPOCH" || { fail backup_verify_failed; return 1; }
   receipt=$(verified_receipt_json) || { fail receipt_build_failed; return 1; }
-  dispatch_cli "$receipt" || { fail cli_failed; return 1; }
-  printf 'SUCCESS backup=1 verified=1 cli_exit=0\n'
+  if output=$(dispatch_cli "$receipt"); then
+    parsed=$(printf '%s' "$output" | parse_cli_result) || { fail cli_result_invalid; return 1; }
+    read -r status run_id <<<"$parsed"
+    [[ "$status" == completed ]] || { fail cli_result_invalid; return 1; }
+    printf 'SUCCESS backup=1 verified=1 cli_exit=0 run_id=%s\n' "$run_id"
+  else
+    parsed=$(printf '%s' "$output" | parse_cli_result 2>/dev/null) || { fail cli_failed; return 1; }
+    read -r status run_id <<<"$parsed"
+    if [[ "$status" == failed ]]; then printf 'FAIL code=cli_failed run_id=%s\n' "$run_id"; else fail cli_failed; fi
+    return 1
+  fi
+}
+
+undo_once() {
+  local run_id=$1 raw receipt output parsed status observed_id journal_rows
+  [[ "$run_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] || { fail invalid_run_id; return 1; }
+  [[ "$(systemctl is-enabled "$TIMER" 2>/dev/null || true)" == disabled ]] || { fail timer_not_disabled; return 1; }
+  [[ "$(systemctl is-active "$TIMER" 2>/dev/null || true)" == inactive ]] || { fail timer_active; return 1; }
+  [[ "$(systemctl is-active "$SERVICE" 2>/dev/null || true)" == inactive ]] || { fail service_active; return 1; }
+  INVOCATION_EPOCH=$(date +%s) || return 1
+  require_cli || { fail cli_missing; return 1; }
+  raw=$(raw_take_backup) || { fail backup_failed; return 1; }
+  parse_receipt "$raw" || { fail backup_receipt_invalid; return 1; }
+  verify_backup "$BACKUP_PATH" "$INVOCATION_EPOCH" || { fail backup_verify_failed; return 1; }
+  receipt=$(verified_receipt_json) || { fail receipt_build_failed; return 1; }
+  if output=$(dispatch_cli "$receipt" undo "$run_id"); then
+    parsed=$(printf '%s' "$output" | parse_undo_cli_result) || { fail undo_result_invalid; return 1; }
+    read -r status observed_id journal_rows <<<"$parsed"
+    [[ "$observed_id" == "$run_id" && ( "$status" == undone || "$status" == already_undone ) ]] || { fail undo_result_invalid; return 1; }
+    printf 'UNDO_SUCCESS status=%s run_id=%s journal_rows=%s backup=1 verified=1\n' "$status" "$run_id" "$journal_rows"
+  else
+    parsed=$(printf '%s' "$output" | parse_undo_cli_result 2>/dev/null) || { fail undo_failed; return 1; }
+    read -r status observed_id journal_rows <<<"$parsed"
+    if [[ "$observed_id" == "$run_id" && "$status" == conflict ]]; then printf 'UNDO_CONFLICT run_id=%s journal_rows=%s\n' "$run_id" "$journal_rows"; else fail undo_failed; fi
+    return 1
+  fi
 }
 
 main() {
-  [[ "$#" == 0 ]] || { fail invalid_args; return 1; }
+  [[ "$#" == 0 || ( "$#" == 2 && "$1" == undo ) ]] || { fail invalid_args; return 1; }
   require_wrapper_integrity || { fail wrapper_integrity; return 1; }
   require_deploy_integrity || { fail deploy_integrity; return 1; }
   require_cli || { fail cli_missing; return 1; }
   acquire_lock || { fail lock_busy; return 1; }
-  run_once
+  if [[ "$#" == 0 ]]; then run_once; else undo_once "$2"; fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

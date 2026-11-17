@@ -4,6 +4,8 @@ import { PGlite } from "@electric-sql/pglite";
 import { getDb, type DbClient } from "@/lib/db/client";
 import { hashPassword } from "@/lib/auth/password";
 import { finishMailboxRun, renewMailboxRun, startMailboxRun, undoMailboxRun, withMailboxRun, type BackupReceipt } from "@/lib/email/sync-journal";
+import { issueVerifiedBackupReceipt } from "@/lib/email/verified-scheduled-backup";
+import { mockScheduledBackupFacts } from "./helpers/scheduled-backup-facts";
 
 function client(db: PGlite): DbClient {
   return {
@@ -90,6 +92,27 @@ describe("mailbox sync journal foundation", () => {
     expect(prior.rows[0].status).toBe("expired");
     await expect(withMailboxRun(db, first, async () => undefined)).rejects.toThrow("fence rejected");
     await finishMailboxRun(db, second);
+  });
+
+  it("closes and undoes an interrupted scheduled run only after its lease expires", async () => {
+    const restoreFacts = mockScheduledBackupFacts();
+    try {
+      const verified = await issueVerifiedBackupReceipt({ ...receipt, verifiedAt: new Date().toISOString() });
+      const run = await startMailboxRun(db, { accountId, mode: "scheduled", leaseOwner: crypto.randomUUID(), backupReceipt: verified });
+      const messageId = crypto.randomUUID();
+      await withMailboxRun(db, run, async (tx) => {
+        await tx.query(`INSERT INTO messages (id,account_id,direction,source,from_email,subject,body_text) VALUES ($1,$2,'inbound','imap','interrupted@example.test','Interrupted','Body')`, [messageId, accountId]);
+      });
+
+      await expect(undoMailboxRun(db, run.id, actorId, verified)).rejects.toThrow("not terminal");
+      expect((await db.query("SELECT id FROM messages WHERE id=$1", [messageId])).rows).toHaveLength(1);
+
+      await db.query("UPDATE mailbox_sync_leases SET lease_until=clock_timestamp()-interval '1 second' WHERE account_id=$1", [accountId]);
+      expect(await undoMailboxRun(db, run.id, actorId, verified)).toEqual({ undone: true, conflict: false });
+      expect((await db.query("SELECT status FROM mailbox_sync_runs WHERE id=$1", [run.id])).rows[0].status).toBe("undone");
+      expect((await db.query("SELECT id FROM mailbox_sync_journal WHERE run_id=$1", [run.id])).rows).toHaveLength(1);
+      expect((await db.query("SELECT id FROM messages WHERE id=$1", [messageId])).rows).toHaveLength(0);
+    } finally { restoreFacts(); }
   });
 
   it("rolls back both business writes and their journal entries on transaction failure", async () => {

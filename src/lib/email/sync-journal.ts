@@ -68,23 +68,32 @@ async function apply(tx: DbClient, row: JournalRow): Promise<void> {
   const assignments = fields.map(field => `"${field}"=r."${field}"`).join(",");
   await tx.query(`UPDATE "${row.table_name}" t SET ${assignments} FROM jsonb_populate_record(NULL::"${row.table_name}",$1::jsonb) r WHERE t.id=$2`, [JSON.stringify(row.before_data), id]);
 }
-export async function undoMailboxRun(db: DbClient, runId: string, actorId: string): Promise<{ undone: boolean; conflict: boolean }> {
+export async function undoMailboxRun(db: DbClient, runId: string, actorId: string, backupReceipt?: BackupReceipt): Promise<{ undone: boolean; conflict: boolean }> {
   return db.transaction(async tx => {
-    const target = (await tx.query<{ account_id: string }>("SELECT account_id FROM mailbox_sync_runs WHERE id=$1", [runId])).rows[0];
+    const target = (await tx.query<{ account_id: string; mode: RunMode }>("SELECT account_id,mode FROM mailbox_sync_runs WHERE id=$1", [runId])).rows[0];
     if (!target) throw new Error("mailbox sync run not found");
+    if (target.mode === "scheduled" || backupReceipt) assertVerifiedBackupReceipt(backupReceipt);
+    const backup = backupReceipt ? { backup: { path: backupReceipt.path, sizeBytes: backupReceipt.sizeBytes,
+      tableDataCount: backupReceipt.tableDataCount, verifiedAt: backupReceipt.verifiedAt, mode: "600" } } : {};
     // Use the same account -> lease -> run lock order as sync and lease acquisition.
     await tx.query("SELECT id FROM email_accounts WHERE id=$1 FOR UPDATE", [target.account_id]);
-    const lease = (await tx.query<{ active_run_id: string | null }>("SELECT active_run_id FROM mailbox_sync_leases WHERE account_id=$1 FOR UPDATE", [target.account_id])).rows[0];
+    const lease = (await tx.query<{ active_run_id: string | null; live: boolean }>("SELECT active_run_id,lease_until > clock_timestamp() AS live FROM mailbox_sync_leases WHERE account_id=$1 FOR UPDATE", [target.account_id])).rows[0];
     const run = (await tx.query<{ status: string }>("SELECT status FROM mailbox_sync_runs WHERE id=$1 FOR UPDATE", [runId])).rows[0];
     if (run.status === "undone") return { undone: false, conflict: false };
-    if (!["completed", "failed", "expired", "undo_conflict"].includes(run.status)) throw new Error("mailbox sync run is not terminal and eligible for undo");
+    if (run.status === "running") {
+      if (target.mode !== "scheduled" || !lease || lease.active_run_id !== runId || lease.live) throw new Error("mailbox sync run is not terminal and eligible for undo");
+      const expired = await tx.query("UPDATE mailbox_sync_runs SET status='expired',finished_at=clock_timestamp(),error='lease expired' WHERE id=$1 AND status='running' RETURNING id", [runId]);
+      const released = await tx.query("UPDATE mailbox_sync_leases SET active_run_id=NULL,lease_until=clock_timestamp(),updated_at=clock_timestamp() WHERE account_id=$1 AND active_run_id=$2 AND lease_until <= clock_timestamp() RETURNING account_id", [target.account_id, runId]);
+      if (!expired.rows.length || !released.rows.length) throw new Error("mailbox sync stale run transition failed");
+      lease.active_run_id = null;
+    } else if (!["completed", "failed", "expired", "undo_conflict"].includes(run.status)) throw new Error("mailbox sync run is not terminal and eligible for undo");
     if (!lease || lease.active_run_id) throw new Error("mailbox sync undo fence rejected");
     const externalEffect = await tx.query("SELECT 1 FROM audit_log WHERE action='mailbox_sent_copy_append_intent' AND entity_type='mailbox_sync_run' AND entity_id=$1 LIMIT 1", [runId]);
     if (externalEffect.rows.length) throw new Error("mailbox sync undo refused after external Sent-copy effect intent");
     const journal = await tx.query<JournalRow>("SELECT table_name,capture_seq,pk,operation,before_data,after_data FROM mailbox_sync_journal WHERE run_id=$1 ORDER BY capture_seq DESC FOR UPDATE", [runId]);
     const conflict = async () => {
       await tx.query(`INSERT INTO audit_log(id,actor_type,actor_id,action,entity_type,entity_id,metadata)
-        VALUES($1,'founder',$2,'mailbox_sync_undo_conflict','mailbox_sync_run',$3,$4::jsonb)`, [crypto.randomUUID(), actorId, runId, JSON.stringify({ runId })]);
+        VALUES($1,'founder',$2,'mailbox_sync_undo_conflict','mailbox_sync_run',$3,$4::jsonb)`, [crypto.randomUUID(), actorId, runId, JSON.stringify({ runId, ...backup })]);
       await tx.query("UPDATE mailbox_sync_runs SET status='undo_conflict',error='undo refused because later state or dependencies changed' WHERE id=$1", [runId]);
       return { undone: false, conflict: true };
     };
@@ -99,7 +108,7 @@ export async function undoMailboxRun(db: DbClient, runId: string, actorId: strin
     }
     await tx.exec("RELEASE SAVEPOINT mailbox_sync_undo");
     await tx.query(`INSERT INTO audit_log(id,actor_type,actor_id,action,entity_type,entity_id,metadata)
-      VALUES($1,'founder',$2,'mailbox_sync_undo','mailbox_sync_run',$3,$4::jsonb)`, [crypto.randomUUID(), actorId, runId, JSON.stringify({ runId, journalRows: journal.rows.length })]);
+      VALUES($1,'founder',$2,'mailbox_sync_undo','mailbox_sync_run',$3,$4::jsonb)`, [crypto.randomUUID(), actorId, runId, JSON.stringify({ runId, journalRows: journal.rows.length, ...backup })]);
     await tx.query("UPDATE mailbox_sync_runs SET status='undone',finished_at=coalesce(finished_at,clock_timestamp()) WHERE id=$1", [runId]);
     return { undone: true, conflict: false };
   });

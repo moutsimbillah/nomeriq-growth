@@ -14,6 +14,12 @@ export async function cleanupMailboxRuns(db: DbClient, accountIds: readonly stri
   const ids = [...new Set(accountIds)];
   await db.transaction(async tx => {
   await tx.query(
+    `DELETE FROM audit_log
+      WHERE entity_type='mailbox_sync_run'
+        AND entity_id IN (SELECT id::text FROM mailbox_sync_runs WHERE account_id = ANY($1::uuid[]))`,
+    [ids],
+  );
+  await tx.query(
     `DELETE FROM mailbox_sync_journal
       WHERE run_id IN (SELECT id FROM mailbox_sync_runs WHERE account_id = ANY($1::uuid[]))`,
     [ids],

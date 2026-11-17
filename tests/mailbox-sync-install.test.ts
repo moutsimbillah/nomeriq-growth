@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -7,9 +7,10 @@ const root = process.cwd();
 const installer = join(root, "scripts", "install-mailbox-sync.sh");
 const storage = join(root, "scripts", "mailbox-sync-storage-check.sh");
 const wrapper = join(root, "scripts", "growth-cron-sync.sh");
+const bootstrap = join(root, "scripts", "bootstrap-mailbox-sync-installer.sh");
 
-function bash(script: string) {
-  try { return { status: 0, output: execFileSync("bash", ["-c", script], { cwd: root, encoding: "utf8" }) }; }
+function bash(script: string, env: Record<string, string> = {}) {
+  try { return { status: 0, output: execFileSync("bash", ["-c", script], { cwd: root, encoding: "utf8", env: { ...process.env, ...env } }) }; }
   catch (e) { const x = e as { status?: number; stdout?: string; stderr?: string }; return { status: x.status ?? 1, output: `${x.stdout ?? ""}${x.stderr ?? ""}` }; }
 }
 function source(path: string, body: string) { return bash(`source ${JSON.stringify(path)}; set +e; sudo(){ printf UNEXPECTED_PRIVILEGED_CALL >&2; return 97; }; systemctl(){ printf UNEXPECTED_SERVICE_CALL >&2; return 97; }; ${body}`); }
@@ -25,6 +26,70 @@ function storageFixture() {
   return { dir, run: (command: string) => source(script, `${fakeStat}; ${command}`) };
 }
 
+function bootstrapFixture() {
+  const scratch = process.env.TMPDIR;
+  if (!scratch) throw new Error("profile scratch required");
+  const dir = mkdtempSync(join(scratch, "mailbox-bootstrap-"));
+  const repo = join(dir, "app");
+  const stage = join(dir, "staged-installers");
+  mkdirSync(join(repo, "scripts"), { recursive: true });
+  const repoNative = repo.replace(/\\/g, "/");
+  const repoPosix = process.platform === "win32"
+    ? execFileSync("bash", ["-c", 'cd "$(cygpath -u "$FIXTURE")" && pwd -P'], { env: { ...process.env, FIXTURE: repoNative }, encoding: "utf8" }).trim()
+    : execFileSync("bash", ["-c", 'cd "$FIXTURE" && pwd -P'], { env: { ...process.env, FIXTURE: repo }, encoding: "utf8" }).trim();
+  const stagePosix = process.platform === "win32"
+    ? execFileSync("bash", ["-c", 'cygpath -u "$FIXTURE"'], { env: { ...process.env, FIXTURE: stage.replace(/\\/g, "/") }, encoding: "utf8" }).trim()
+    : stage;
+  const installerBytes = "#!/usr/bin/env bash\nprintf 'exact committed installer\\n'\n";
+  writeFileSync(join(repo, "scripts", "install-mailbox-sync.sh"), installerBytes);
+  let sourceBytes = readFileSync(bootstrap, "utf8");
+  const replacements: Array<[string, string]> = [
+    ["readonly APP_ROOT=/home/growth/app", `readonly APP_ROOT="${repoPosix}"`],
+    ["readonly INSTALLER_ROOT=/home/ubuntu/growth-mailbox-install", `readonly INSTALLER_ROOT="${stagePosix}"`],
+    ['git_growth() { sudo -n -u growth -- /usr/bin/git -C "$APP_ROOT" "$@"; }', 'git_growth() { git "$@"; }'],
+    ['root_only() { [[ "$(id -u)" == 0 ]] || refuse "root is required"; }', 'root_only() { :; }'],
+    ['actual_bootstrap=$(/usr/bin/git hash-object "$script")', 'actual_bootstrap=$(git hash-object "$script")'],
+  ];
+  for (const [before, after] of replacements) {
+    if (!sourceBytes.includes(before)) throw new Error(`bootstrap fixture anchor missing: ${before}`);
+    sourceBytes = sourceBytes.replace(before, after);
+  }
+  sourceBytes = sourceBytes.replaceAll("/usr/bin/git", "git");
+  writeFileSync(join(repo, "scripts", "bootstrap-mailbox-sync-installer.sh"), sourceBytes);
+  execFileSync("git", ["init", "-q"], { cwd: repo });
+  execFileSync("git", ["add", "scripts"], { cwd: repo });
+  execFileSync("git", ["-c", "user.name=Growth Fixture", "-c", "user.email=fixture@example.test", "commit", "-q", "-m", "fixture"], { cwd: repo });
+  const release = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  const bootstrapPosix = `${repoPosix}/scripts/bootstrap-mailbox-sync-installer.sh`;
+  const events = join(dir, "events");
+  const harness = `set -euo pipefail
+source "$BOOTSTRAP"
+git() { if [[ "$1" == hash-object ]]; then if command -v cygpath >/dev/null 2>&1; then command git hash-object "$(cygpath -w "$2")"; else command git hash-object "$2"; fi; else command git -C "$APP_NATIVE" "$@"; fi; }
+git_growth() { git "$@"; }
+root_only() { :; }
+install() { local dest=''; while (($#)); do if [[ "$1" == -d ]]; then dest=$2; break; fi; shift; done; [[ -n "$dest" ]] || return 1; printf 'install:%s\\n' "$dest" >>"$EVENTS"; command mkdir -p "$dest"; }
+chown() { printf 'chown:%s\\n' "$*" >>"$EVENTS"; return 0; }
+chmod() { printf 'chmod:%s\\n' "$*" >>"$EVENTS"; return 0; }
+stat() {
+  if [[ "$1" == -c ]]; then
+    case "$2" in
+      '%U'|'%G') printf 'root\\n' ;;
+      '%U:%G') printf 'root:root\\n' ;;
+      '%a') if [[ "$3" == */INSTALLER-BLOB-SHA ]]; then printf '644\\n'; else printf '755\\n'; fi ;;
+      '%h') printf '1\\n' ;;
+      '%U:%G:%a') printf 'root:root:755\\n' ;;
+      '%U:%G:%a:%h') printf 'root:root:644:1\\n' ;;
+      *) command stat "$@" ;;
+    esac
+  else command stat "$@"; fi
+}
+`;
+  function run(body: string) {
+    return bash(`${harness}${body}`, { BOOTSTRAP: bootstrapPosix, APP_NATIVE: repoNative, RELEASE: release, EVENTS: events });
+  }
+  return { dir, repo, stage, release, installerBytes, events, run };
+}
+
 describe("mailbox operational package", () => {
   it("syntax-checks all new shell bodies and pins the fixed operational surface", () => {
     expect(bash(`for f in ${JSON.stringify(installer)} ${JSON.stringify(storage)} ${JSON.stringify(wrapper)}; do bash -n "$f" || exit; done`).status).toBe(0);
@@ -37,6 +102,70 @@ describe("mailbox operational package", () => {
     expect(timer).toContain("OnActiveSec=15min");
     expect(timer).toContain("OnUnitInactiveSec=15min");
     expect(readFileSync(installer, "utf8")).toContain("EXPECTED_DEPLOY_SHA=a8cc605ca1dfe323f1b3b7ce1d123e1ae3f8197268fc9339399b2d37b593f8c6");
+  });
+
+  it("stages only the exact committed installer bytes and is idempotent", () => {
+    const f = bootstrapFixture();
+    try {
+      const result = f.run('main "$RELEASE"; main "$RELEASE"');
+      expect(result.status, result.output).toBe(0);
+      expect(result.output.match(/installer_staged/g)).toHaveLength(2);
+      const staged = join(f.stage, f.release, "install-mailbox-sync.sh");
+      const marker = join(f.stage, f.release, "INSTALLER-BLOB-SHA");
+      const blob = execFileSync("git", ["rev-parse", `${f.release}:scripts/install-mailbox-sync.sh`], { cwd: f.repo, encoding: "utf8" }).trim();
+      expect(readFileSync(staged, "utf8")).toBe(f.installerBytes);
+      expect(readFileSync(marker, "utf8")).toBe(`${blob}\n`);
+      expect(readFileSync(f.events, "utf8").match(/^chmod:/gm)).toHaveLength(2);
+      expect(execFileSync("git", ["status", "--porcelain"], { cwd: f.repo, encoding: "utf8" })).toBe("");
+      const sourceText = readFileSync(bootstrap, "utf8");
+      expect(sourceText).toContain('[[ "$(id -u)" == 0 ]] || refuse "root is required"');
+      expect(sourceText).toContain('git_growth show "$release:scripts/$file_name"');
+      expect(sourceText).toContain('git_growth status --porcelain --untracked-files=all');
+      expect(sourceText).toContain('mv -T -n -- "$tmp" "$stage/$file_name"');
+      expect(sourceText).not.toMatch(/rm\s+-rf|systemctl\s+(start|stop|enable|disable)/);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it("refuses a dirty release checkout before creating the privileged staging directory", () => {
+    const f = bootstrapFixture();
+    try {
+      writeFileSync(join(f.repo, "untracked.txt"), "not part of release");
+      const result = f.run('main "$RELEASE"');
+      expect(result.status).not.toBe(0);
+      expect(result.output).toContain("checkout is dirty");
+      expect(existsSync(f.stage)).toBe(false);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it("refuses a modified existing installer and leaves its bytes untouched", () => {
+    const f = bootstrapFixture();
+    try {
+      expect(f.run('main "$RELEASE"').status).toBe(0);
+      const staged = join(f.stage, f.release, "install-mailbox-sync.sh");
+      writeFileSync(staged, "preserve this conflicting file\n");
+      const result = f.run('main "$RELEASE"');
+      expect(result.status).not.toBe(0);
+      expect(result.output).toContain("existing staged installer differs");
+      expect(readFileSync(staged, "utf8")).toBe("preserve this conflicting file\n");
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it.each(["installer-only", "marker-only"])("resumes safe partial installer staging (%s)", (partial) => {
+    const f = bootstrapFixture();
+    try {
+      const stage = join(f.stage, f.release);
+      mkdirSync(stage, { recursive: true });
+      const staged = join(stage, "install-mailbox-sync.sh");
+      const marker = join(stage, "INSTALLER-BLOB-SHA");
+      const blob = execFileSync("git", ["rev-parse", `${f.release}:scripts/install-mailbox-sync.sh`], { cwd: f.repo, encoding: "utf8" }).trim();
+      if (partial === "installer-only") writeFileSync(staged, f.installerBytes);
+      else writeFileSync(marker, `${blob}\n`);
+
+      const result = f.run('main "$RELEASE"');
+      expect(result.status, result.output).toBe(0);
+      expect(readFileSync(staged, "utf8")).toBe(f.installerBytes);
+      expect(readFileSync(marker, "utf8")).toBe(`${blob}\n`);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
   });
 
   it("rejects wrong release SHA and dirty checkout before any installer write", () => {
