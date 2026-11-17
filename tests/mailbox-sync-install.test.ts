@@ -258,6 +258,20 @@ describe("mailbox operational package", () => {
     } finally { rmSync(f.dir, { recursive: true, force: true }); }
   });
 
+  it("refuses an empty timestamp-valid dump before pruning any eligible backup", () => {
+    const f = storageFixture();
+    const now = Math.floor(Date.parse("2026-11-17T12:00:00Z") / 1000);
+    const expired = join(f.dir, "deploy-20261018T115959Z.dump");
+    const empty = join(f.dir, "deploy-20261018T115958Z.dump");
+    writeFileSync(expired, "fixture"); writeFileSync(empty, "");
+    try {
+      const result = f.run(`prune_expired_backups ${now}`);
+      expect(result.status).not.toBe(0);
+      expect(existsSync(expired)).toBe(true);
+      expect(existsSync(empty)).toBe(true);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
   it("keeps backup failure before CLI dispatch in the actual wrapper control flow", () => {
     const result = source(wrapper, `record_failure(){ printf 'FAIL code=%s\\n' "$1"; }; require_wrapper_integrity(){ :; }; require_deploy_integrity(){ :; }; require_cli(){ :; }; take_backup(){ return 1; }; dispatch_cli(){ echo BAD_DISPATCH; }; run_once; printf 'status=%s\\n' "$?"`);
     expect(result.status).toBe(0);

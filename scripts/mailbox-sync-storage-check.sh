@@ -55,7 +55,8 @@ prune_expired_backups() {
   for f in "${files[@]}"; do
     base=${f##*/}
     [[ "$base" =~ ^deploy-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || continue
-    [[ -f "$f" && ! -L "$f" ]] || return 1
+    # A timestamp-shaped zero-byte file is not a database dump; refuse before any unlink.
+    [[ -f "$f" && ! -L "$f" && -s "$f" ]] || return 1
     metadata=$(stat -c '%U:%G:%a:%h' "$f" 2>/dev/null) || return 1
     [[ "$metadata" == growth:growth:600:1 ]] || return 1
     epoch=$(backup_epoch_from_name "$base") || return 1
