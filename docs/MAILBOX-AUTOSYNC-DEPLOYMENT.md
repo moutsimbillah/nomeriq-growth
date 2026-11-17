@@ -1,17 +1,21 @@
 # Mailbox scheduled sync: proposed installation package
 
 This package is **local and disabled by default**. It adds only the mailbox sync service,
-its conservative timer, a read-only backup-storage guard, and reversible quarantine. It does
-not send mail, change mailbox settings, alter billing, upload backups, delete backups, or modify
-existing research/follow-up/sends units.
+its conservative timer, a backup-retention/storage guard, and reversible quarantine. It does
+not send mail, change mailbox settings, alter billing, upload backups, delete backups younger
+than 30 days, or modify existing research/follow-up/sends units. The founder approved automatic
+removal of timestamped database dumps older than 30 days; no other backup files are eligible.
 
 ## Files and fixed paths
 
 - `scripts/install-mailbox-sync.sh` — strict steps: `install`, `run-once`, `enable`, `disable`,
   `quarantine`; each takes exactly the expected 40-character release SHA.
 - `scripts/mailbox-sync-storage-check.sh` — root-trusted manifest check, fixed
-  `/var/backups/growth`, at least **2,097,152 KiB** free, at most **1,000** timestamped dumps,
-  and refusal if the current timestamped dump target already exists. It is read-only.
+  `/var/backups/growth`, exact 30-day UTC timestamp retention (only regular `deploy-*.dump`
+  files owned by `growth:growth`, mode `600`, link count 1, and strictly older than the cutoff
+  are removed), at least **2,097,152 KiB** free, at most **3,200** timestamped dumps, and refusal
+  if the current timestamped dump target already exists. Invalid dates or unsafe matching files
+  stop the sync; files inside the 30-day window and unrelated files are preserved.
 - `scripts/systemd/growth-mailbox-sync.service` — root oneshot, storage check before the reviewed
   root wrapper, 300-second timeout, control-group kill, existing `growth-cron-alert.service` on
   failure.
@@ -36,7 +40,9 @@ placed in the commonly writable `/run/lock` directory.
 
 ## Founder approval boundary
 
-Building, testing, and reviewing this local package do not install it. Any real installation,
+Building, testing, and reviewing this local package do not install it. The founder approved
+30-day automatic retention of old database dump backups; this approval does not cover any other
+file class or data. Any real installation,
 run-once import, timer enable/disable, or quarantine is a founder-approval action for these exact
 new privileged scripts and units. A short application deployment/restart is a separate approval.
 Before any live schema action, show the exact SQL to the founder and obtain approval; this package
@@ -72,8 +78,9 @@ never applies migration SQL.
    again: a subsequent installation requires a separately reviewed newer release. Unpublished staging
    directories remain inert and retained as failure evidence; this action does not delete them.
 
-If any check fails, the step stops. Storage pauses are explicit maintenance conditions, not silent
-cleanup. The package does not claim full timer notification delivery proof; the existing alert unit
+If any check fails, the step stops. Expired-backup removal is bounded by the approved 30-day rule;
+other storage pauses are explicit maintenance conditions, not silent cleanup. The package does not
+claim full timer notification delivery proof; the existing alert unit
 is integrated and its load state is checked before timer activation.
 
 ## Future deployments

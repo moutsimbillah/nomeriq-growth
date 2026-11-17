@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -13,10 +13,21 @@ function bash(script: string) {
   catch (e) { const x = e as { status?: number; stdout?: string; stderr?: string }; return { status: x.status ?? 1, output: `${x.stdout ?? ""}${x.stderr ?? ""}` }; }
 }
 function source(path: string, body: string) { return bash(`source ${JSON.stringify(path)}; set +e; sudo(){ printf UNEXPECTED_PRIVILEGED_CALL >&2; return 97; }; systemctl(){ printf UNEXPECTED_SERVICE_CALL >&2; return 97; }; ${body}`); }
+function storageFixture() {
+  const scratch = process.env.TMPDIR;
+  if (!scratch) throw new Error("profile scratch required");
+  const dir = mkdtempSync(join(scratch, "mailbox-storage-retention-"));
+  const posix = execFileSync("bash", ["-c", 'cd "$FIXTURE" && pwd -P'], { env: { ...process.env, FIXTURE: dir }, encoding: "utf8" }).trim();
+  const script = join(dir, "storage.sh");
+  const body = readFileSync(storage, "utf8").replace("readonly BACKUP_DIR=/var/backups/growth", `readonly BACKUP_DIR="${posix}"`);
+  writeFileSync(script, body);
+  const fakeStat = `stat(){ if [[ "$1" == -c && "$2" == '%U:%G:%a:%h' ]]; then printf '%s\\n' growth:growth:600:1; return; fi; command stat "$@"; }`;
+  return { dir, run: (command: string) => source(script, `${fakeStat}; ${command}`) };
+}
 
 describe("mailbox operational package", () => {
   it("syntax-checks all new shell bodies and pins the fixed operational surface", () => {
-    expect(bash(`bash -n ${JSON.stringify(installer)} ${JSON.stringify(storage)} ${JSON.stringify(wrapper)}`).status).toBe(0);
+    expect(bash(`for f in ${JSON.stringify(installer)} ${JSON.stringify(storage)} ${JSON.stringify(wrapper)}; do bash -n "$f" || exit; done`).status).toBe(0);
     const unit = readFileSync(join(root, "scripts/systemd/growth-mailbox-sync.service"), "utf8");
     const timer = readFileSync(join(root, "scripts/systemd/growth-mailbox-sync.timer"), "utf8");
     expect(unit).toContain("ExecStartPre=/usr/local/lib/growth-mailbox-sync/mailbox-sync-storage-check.sh");
@@ -44,12 +55,62 @@ describe("mailbox operational package", () => {
     expect(result.output).toContain("status=1 bytes=old");
   });
 
-  it("enforces storage headroom and the 1000-backup bound using pure facts", () => {
-    const result = source(storage, "for f in '2097152 1000' '2097151 1000' '2097152 1001'; do set -- $f; if check_facts $1 $2; then echo OK; else echo REFUSED; fi; done");
+  it("enforces storage headroom and the 3200-backup bound using pure facts", () => {
+    const result = source(storage, "for f in '2097152 3200' '2097151 3200' '2097152 3201'; do set -- $f; if check_facts $1 $2; then echo OK; else echo REFUSED; fi; done");
     expect(result.status).toBe(0);
     expect(result.output.match(/^OK$/gm)?.length).toBe(1);
     expect(result.output.match(/^REFUSED$/gm)?.length).toBe(2);
     expect(readFileSync(storage, "utf8")).toContain("target=\"$BACKUP_DIR/deploy-$(date -u +%Y%m%dT%H%M%SZ).dump\"");
+  });
+
+  it("prunes only valid backups strictly older than 30 days", () => {
+    const f = storageFixture();
+    const now = Math.floor(Date.parse("2026-11-17T12:00:00Z") / 1000);
+    const expired = join(f.dir, "deploy-20261018T115959Z.dump");
+    const boundary = join(f.dir, "deploy-20261018T120000Z.dump");
+    const recent = join(f.dir, "deploy-20261117T120000Z.dump");
+    const unrelated = join(f.dir, "notes.dump");
+    for (const path of [expired, boundary, recent, unrelated]) writeFileSync(path, "fixture");
+    try {
+      const result = f.run(`prune_expired_backups ${now}`);
+      expect(result.status, result.output).toBe(0);
+      expect(result.output.trim()).toBe("1");
+      expect(existsSync(expired)).toBe(false);
+      expect(existsSync(boundary)).toBe(true);
+      expect(existsSync(recent)).toBe(true);
+      expect(existsSync(unrelated)).toBe(true);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it("rejects malformed timestamps before deleting any eligible backup", () => {
+    const f = storageFixture();
+    const now = Math.floor(Date.parse("2026-11-17T12:00:00Z") / 1000);
+    const expired = join(f.dir, "deploy-20261018T115959Z.dump");
+    const malformed = join(f.dir, "deploy-20261340T000000Z.dump");
+    writeFileSync(expired, "fixture"); writeFileSync(malformed, "fixture");
+    try {
+      const result = f.run(`prune_expired_backups ${now}`);
+      expect(result.status).not.toBe(0);
+      expect(existsSync(expired)).toBe(true);
+      expect(existsSync(malformed)).toBe(true);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it("fails closed on future or incorrectly protected matching dumps", () => {
+    const f = storageFixture();
+    const now = Math.floor(Date.parse("2026-11-17T12:00:00Z") / 1000);
+    const future = join(f.dir, "deploy-20271117T120000Z.dump");
+    const expired = join(f.dir, "deploy-20261018T115959Z.dump");
+    writeFileSync(future, "fixture"); writeFileSync(expired, "fixture");
+    try {
+      const futureResult = f.run(`prune_expired_backups ${now}`);
+      expect(futureResult.status).not.toBe(0);
+      expect(existsSync(future)).toBe(true);
+      expect(existsSync(expired)).toBe(true);
+      const unsafe = f.run(`stat(){ if [[ "$1" == -c && "$2" == '%U:%G:%a:%h' ]]; then printf '%s\\n' growth:growth:644:1; return; fi; command stat "$@"; }; prune_expired_backups ${now}`);
+      expect(unsafe.status).not.toBe(0);
+      expect(existsSync(expired)).toBe(true);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
   });
 
   it("keeps backup failure before CLI dispatch in the actual wrapper control flow", () => {

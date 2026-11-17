@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Read-only guard for mailbox backup growth and disk headroom.
+# Retention guard for mailbox backups and disk headroom.
 set -euo pipefail
 readonly BACKUP_DIR=/var/backups/growth
 readonly MIN_FREE_KIB=2097152
-readonly MAX_BACKUPS=1000
+readonly RETENTION_SECONDS=2592000
+readonly RETENTION_DAYS=30
+readonly MAX_BACKUPS=3200
 readonly DEPLOY=/usr/local/lib/growth-mailbox-sync/deploy.sh
 readonly MANIFEST=/usr/local/lib/growth-mailbox-sync/SHA256SUMS
 readonly LOGGER_TAG=growth-mailbox-sync-storage
@@ -23,6 +25,39 @@ check_facts() {
   [[ "$free_kib" -ge "$MIN_FREE_KIB" ]] || return 1
   [[ "$count" -le "$MAX_BACKUPS" ]] || return 1
 }
+backup_epoch_from_name() {
+  local base=$1 year clock stamp raw epoch canonical
+  [[ "$base" =~ ^deploy-([0-9]{8})T([0-9]{6})Z\.dump$ ]] || return 1
+  year=${BASH_REMATCH[1]}
+  clock=${BASH_REMATCH[2]}
+  stamp="${year}T${clock}Z"
+  raw=$(date -u -d "$year ${clock:0:2}:${clock:2:2}:${clock:4:2}" '+%s %Y%m%dT%H%M%SZ' 2>/dev/null) || return 1
+  read -r epoch canonical <<<"$raw"
+  [[ "$canonical" == "$stamp" && "$epoch" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$epoch"
+}
+prune_expired_backups() {
+  local now=${1:-} cutoff f base metadata epoch removed=0
+  local -a files=() expired=()
+  [[ "$now" =~ ^[0-9]+$ ]] || now=$(date +%s) || return 1
+  cutoff=$((now - RETENTION_SECONDS))
+  mapfile -d '' -t files < <(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -name 'deploy-*.dump' -print0)
+  for f in "${files[@]}"; do
+    base=${f##*/}
+    [[ "$base" =~ ^deploy-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || continue
+    [[ -f "$f" && ! -L "$f" ]] || return 1
+    metadata=$(stat -c '%U:%G:%a:%h' "$f" 2>/dev/null) || return 1
+    [[ "$metadata" == growth:growth:600:1 ]] || return 1
+    epoch=$(backup_epoch_from_name "$base") || return 1
+    (( epoch <= now )) || return 1
+    (( epoch < cutoff )) && expired+=("$f")
+  done
+  for f in "${expired[@]}"; do
+    unlink -- "$f" || return 1
+    removed=$((removed + 1))
+  done
+  printf '%s\n' "$removed"
+}
 backup_count() {
   local n=0 f base
   while IFS= read -r -d '' f; do
@@ -37,15 +72,17 @@ main() {
   [[ $# == 0 ]] || { fail invalid_args; return 1; }
   root_trusted_wrapper || { fail wrapper_untrusted; return 1; }
   [[ -d "$BACKUP_DIR" && ! -L "$BACKUP_DIR" ]] || { fail backup_dir_invalid; return 1; }
-  local owner mode free count target
+  local owner mode free count target now pruned
   owner=$(stat -c '%U:%G' "$BACKUP_DIR") || { fail backup_dir_stat; return 1; }
   mode=$(stat -c '%a' "$BACKUP_DIR") || { fail backup_dir_stat; return 1; }
   [[ "$owner" == growth:growth && "$mode" == 700 ]] || { fail backup_dir_permissions; return 1; }
+  now=$(date +%s) || { fail clock_unavailable; return 1; }
+  pruned=$(prune_expired_backups "$now") || { fail retention_cleanup; return 1; }
   free=$(df -Pk "$BACKUP_DIR" | awk 'NR==2 {print $4}')
   count=$(backup_count)
   check_facts "$free" "$count" || { [[ "$free" =~ ^[0-9]+$ && "$free" -lt "$MIN_FREE_KIB" ]] && fail disk_headroom || fail backup_count; return 1; }
   target="$BACKUP_DIR/deploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
   [[ ! -e "$target" && ! -L "$target" ]] || { fail backup_target_exists; return 1; }
-  printf 'storage_ok free_kib=%s backup_count=%s min_free_kib=%s max_backups=%s\n' "$free" "$count" "$MIN_FREE_KIB" "$MAX_BACKUPS"
+  printf 'storage_ok free_kib=%s backup_count=%s min_free_kib=%s max_backups=%s retention_days=%s pruned_backups=%s\n' "$free" "$count" "$MIN_FREE_KIB" "$MAX_BACKUPS" "$RETENTION_DAYS" "$pruned"
 }
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
