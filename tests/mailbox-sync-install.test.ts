@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -182,6 +182,51 @@ describe("mailbox operational package", () => {
     const result = bash(`source ${JSON.stringify(installer)}; set +e; d=$(mktemp -d); printf old >"$d/target"; printf new >"$d/source"; assert_managed_or_absent "$d/target" "$d/source"; status=$?; printf 'status=%s bytes=%s\\n' "$status" "$(cat "$d/target")"; rm -rf "$d"`);
     expect(result.status).toBe(0);
     expect(result.output).toContain("status=1 bytes=old");
+  });
+
+  it("allows only authentic caniuse-lite bytes and rejects altered or other credential-like files", () => {
+    const dir = mkdtempSync(join(process.env.TMPDIR!, "mailbox-credential-guard-"));
+    const app = join(dir, "app");
+    const modules = join(app, "node_modules");
+    const authentic = join(modules, "caniuse-lite/data/features/credential-management.js");
+    const packageModule = join(root, "node_modules/caniuse-lite/data/features/credential-management.js");
+    mkdirSync(join(modules, "caniuse-lite/data/features"), { recursive: true });
+    const toPosix = (path: string) => process.platform === "win32"
+      ? execFileSync("bash", ["-c", 'cygpath -u "$P"'], { env: { ...process.env, P: path.replace(/\\\\/g, "/") }, encoding: "utf8" }).trim()
+      : path;
+    const fixtureInstaller = join(dir, "installer.sh");
+    writeFileSync(fixtureInstaller, readFileSync(installer, "utf8").replace("readonly APP_ROOT=/home/growth/app", `readonly APP_ROOT="${toPosix(app)}"`));
+    const runPredicate = (path: string) => bash(`source ${JSON.stringify(toPosix(fixtureInstaller))}; set +e; dependency_file_is_credential_like "$AUTHENTIC"; printf 'status=%s\\n' "$?"`, { AUTHENTIC: toPosix(path) });
+    try {
+      const authenticBytes = readFileSync(packageModule);
+      writeFileSync(authentic, authenticBytes);
+      expect(runPredicate(authentic).output).toContain("status=1");
+      expect(authenticBytes.length).toBeGreaterThan(0);
+      writeFileSync(authentic, `${authenticBytes.toString("utf8")}\n// altered fixture bytes\n`);
+      expect(runPredicate(authentic).output).toContain("status=0");
+      const elsewhere = join(modules, "another-package/credential.js");
+      mkdirSync(join(modules, "another-package"), { recursive: true });
+      writeFileSync(elsewhere, "synthetic credential-like fixture");
+      expect(runPredicate(elsewhere).output).toContain("status=0");
+      const outside = join(dir, "outside.js");
+      writeFileSync(outside, "synthetic secret");
+      symlinkSync(outside, join(modules, "another-package/linked.js"));
+      writeFileSync(authentic, authenticBytes);
+      const runScan = (item: string, status: number) => bash(`source ${JSON.stringify(toPosix(fixtureInstaller))}; set +e; find(){ if [[ -n "$FAKE_FIND_ITEM" ]]; then printf '%s\\0' "$FAKE_FIND_ITEM"; fi; return "$FAKE_FIND_STATUS"; }; scan_dependency_credentials "$ROOT"; printf 'status=%s\\n' "$?"`, {
+        ROOT: toPosix(modules), FAKE_FIND_ITEM: item ? toPosix(item) : "", FAKE_FIND_STATUS: String(status),
+      });
+      // A successful clean listing must pass despite the unrelated credential file on disk:
+      // this proves the fake producer, rather than the real find, was exercised.
+      expect(runScan(authentic, 0).output).toContain("status=0");
+      expect(runScan(authentic, 1).output).toContain("status=1");
+      expect(runScan("", 1).output).toContain("status=1");
+      expect(runScan(elsewhere, 0).output).toContain("status=1");
+      const scan = bash(`find ${JSON.stringify(toPosix(modules))} -type f -print | grep -F linked.js`);
+      expect(scan.status).not.toBe(0);
+      const sourceText = readFileSync(installer, "utf8");
+      expect(sourceText).toContain('[[ -d "$APP_ROOT/node_modules" && ! -L "$APP_ROOT/node_modules" ]]');
+      expect(sourceText).toContain('fresh_verified_backup "$ORIGINAL_DEPLOY" || return 1');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
   it("enforces storage headroom and the 3200-backup bound using pure facts", () => {

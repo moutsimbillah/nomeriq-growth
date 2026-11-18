@@ -144,6 +144,32 @@ require_migration_035() {
 }
 
 record_fact() { local f=$1 hash; hash=$(sha256sum "$f" | awk '{print $1}'); stat -c "fact path=%n owner=%U:%G mode=%a sha256=$hash" "$f"; }
+dependency_file_is_credential_like() {
+  local path=$1 relative digest
+  relative=${path#"$APP_ROOT/node_modules/"}
+  case "$relative" in
+    caniuse-lite/data/features/credential-management.js)
+      digest=$(sha256sum -- "$path") || return 0
+      [[ "${digest%% *}" != 9c4732ae7346e5488daeeb8ea5abd0cd0655d020f9a11499d54553576a87712f ]]
+      return
+      ;;
+  esac
+  case "$(basename -- "$path")" in
+    .env*|.npmrc|*.pem|*credential*|auth.json) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+scan_dependency_credentials() {
+  local root=$1 f bad='' scan_fd scan_pid
+  exec {scan_fd}< <(find "$root" -type f -print0)
+  scan_pid=$!
+  while IFS= read -r -d '' f <&"$scan_fd"; do
+    if dependency_file_is_credential_like "$f" && [[ -z "$bad" ]]; then bad=$f; fi
+  done
+  exec {scan_fd}<&-
+  wait "$scan_pid" || return 1
+  [[ -z "$bad" ]] || { refuse "credential-like dependency file; nothing copied"; return 1; }
+}
 assert_managed_or_absent() {
   local target=$1 src=$2
   if [[ -e "$target" || -L "$target" ]]; then
@@ -153,7 +179,7 @@ assert_managed_or_absent() {
 }
 
 install_runtime() {
-  local release=$1 stage f resolved paths bad phase
+  local release=$1 stage f resolved paths phase
   root_only || return 1; require_release "$release" || return 1
   require_deploy_source "$release" || return 1
   [[ ! -e "$QUARANTINE_ROOT/$release" && ! -L "$QUARANTINE_ROOT/$release" ]] || { refuse "quarantined release cannot be reinstalled"; return 1; }
@@ -171,8 +197,7 @@ install_runtime() {
   trusted_chain /usr/local/lib && trusted_chain "$UNIT_DIR" || return 1
   [[ "$(systemctl show "$ALERT" -p LoadState --value)" == loaded ]] || return 1
   [[ -d "$APP_ROOT/node_modules" && ! -L "$APP_ROOT/node_modules" ]] || return 1
-  bad=$(find "$APP_ROOT/node_modules" -type f \( -name '.env*' -o -name '.npmrc' -o -name '*.pem' -o -name '*credential*' -o -name 'auth.json' \) -print -quit) || return 1
-  [[ -z "$bad" ]] || { refuse "credential-like dependency file; nothing copied"; return 1; }
+  scan_dependency_credentials "$APP_ROOT/node_modules" || return 1
   fresh_verified_backup "$ORIGINAL_DEPLOY" || return 1
   stage="$RUNTIME_DIR.staging.$$.${release}"
   [[ ! -e "$stage" && ! -L "$stage" ]] || return 1
