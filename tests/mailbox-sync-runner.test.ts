@@ -29,6 +29,17 @@ require_cli() { return 0; }
 ${body}`;
 }
 
+function mappedWrapper() {
+  const dir = mkdtempSync(join(scratch!, "growth-wrapper-map-"));
+  const run = join(dir, "run").replaceAll("\\", "/");
+  const source = readFileSync(wrapper, "utf8")
+    .replaceAll('readonly RUNTIME_LOCK_DIR=/run/growth-mailbox-sync', `readonly RUNTIME_LOCK_DIR="${run}/growth-mailbox-sync"`)
+    .replaceAll('local root=/run dir=$RUNTIME_LOCK_DIR', `local root="${run}" dir=$RUNTIME_LOCK_DIR`);
+  const copy = join(dir, "wrapper.sh");
+  writeFileSync(copy, source);
+  return { dir, run, copy };
+}
+
 const validReceipt = (path = "/var/backups/growth/deploy-20261114T120000Z.dump", mode = "600") =>
   `dump: ${path}\nsize: 2048 bytes\nmode: ${mode}\ntable-data entries: 50\n`;
 
@@ -259,7 +270,83 @@ done
     expect(source).not.toContain('mkdir -p "$(dirname "$FAILURE_MARKER")"');
   });
 
-  it("propagates the real main failure status and refuses unknown arguments", () => {
+  // Windows cannot establish Linux UID/GID/mode facts. Only those OS facts are
+  // injected here; mkdir, file/type checks and the production decision run for real.
+  it.each([
+    ["absent", 0, 1], ["existing", 0, 0],
+    ["parent-owner", 2, 0], ["parent-group", 2, 0], ["parent-mode", 2, 0], ["parent-type", 2, 0],
+    ["target-owner", 2, 0], ["target-group", 2, 0], ["target-mode", 2, 0], ["target-type", 2, 0],
+    ["caller-owner", 2, 0], ["caller-group", 2, 0],
+    ["lock-owner", 2, 0], ["lock-group", 2, 0], ["lock-mode", 2, 0], ["lock-links", 2, 0],
+  ])("checks runtime filesystem case %s without repairing existing state", (scenario, expected, creates) => {
+    const mapped = mappedWrapper();
+    const result = bash(harness(`
+command mkdir "$TEST_RUN"
+case "$CASE" in
+  parent-type) command rmdir "$TEST_RUN"; printf sentinel > "$TEST_RUN" ;;
+  absent|parent-*|caller-*) : ;;
+  target-type) printf sentinel > "$RUNTIME_LOCK_DIR" ;;
+  *) command mkdir "$RUNTIME_LOCK_DIR" ;;
+esac
+case "$CASE" in lock-*) printf sentinel > "$LOCKFILE" ;; esac
+CREATE_LOG="$TEST_RUN/../creates.log"
+: > "$CREATE_LOG"
+mkdir(){ printf 'mkdir\\n' >> "$CREATE_LOG"; command mkdir "$@"; }
+chmod(){ echo UNEXPECTED_REPAIR; return 99; }
+chown(){ echo UNEXPECTED_REPAIR; return 99; }
+id(){
+  case "$1:$CASE" in -u:caller-owner|-g:caller-group) echo 1;; *) echo 0;; esac
+}
+stat(){
+  [[ "$1" == -c ]] || return 99
+  if [[ "$3" == "$TEST_RUN" ]]; then
+    case "$CASE" in
+      parent-owner) echo '1:0:755:directory';;
+      parent-group) echo '0:1:755:directory';;
+      parent-mode) echo '0:0:777:directory';;
+      *) echo '0:0:755:directory';;
+    esac
+  elif [[ "$3" == "$RUNTIME_LOCK_DIR" ]]; then
+    case "$2:$CASE" in
+      %u:target-owner|%g:target-group) echo 1;;
+      %u:*|%g:*) echo 0;;
+      %a:target-mode) echo 755;;
+      %a:*) echo 700;;
+      %F:*) command stat -c %F "$3";;
+      *) return 99;;
+    esac
+  elif [[ "$3" == "$LOCKFILE" ]]; then
+    case "$CASE" in
+      lock-owner) echo '1:0:600:1';; lock-group) echo '0:1:600:1';;
+      lock-mode) echo '0:0:644:1';; lock-links) echo '0:0:600:2';;
+      *) echo '0:0:600:1';;
+    esac
+  else return 99; fi
+}
+flock(){ echo FLOCK_REACHED; return 0; }
+if acquire_lock; then status=0; else status=$?; fi
+calls=$(grep -c '^mkdir$' "$CREATE_LOG")
+printf 'STATUS=%s CREATES=%s\\n' "$status" "$calls"
+case "$CASE" in lock-*) [[ "$(cat "$LOCKFILE")" == sentinel ]] || echo MUTATED;; esac
+`), { WRAPPER: mapped.copy, TEST_RUN: mapped.run, CASE: String(scenario) });
+    expect(result.status).toBe(0);
+    expect(result.output).toContain(`STATUS=${expected} CREATES=${creates}`);
+    expect(result.output).not.toMatch(/MUTATED|UNEXPECTED_REPAIR/);
+    expect(result.output.includes("FLOCK_REACHED")).toBe(expected === 0);
+  });
+
+  it.each([[2, "runtime_path_invalid"], [1, "lock_busy"]])("maps lock status %s without starting a writer", (status, code) => {
+    const result = bash(harness(`
+acquire_lock(){ return "$LOCK_STATUS"; }
+run_once(){ echo UNEXPECTED_WRITE; }
+if main; then echo BAD_SUCCESS; else echo REFUSED; fi
+`), { LOCK_STATUS: String(status) });
+    expect(result.output).toContain(`FAIL code=${code}`);
+    expect(result.output).toContain("REFUSED");
+    expect(result.output).not.toMatch(/BAD_SUCCESS|UNEXPECTED_WRITE/);
+  });
+
+  it("reports the real main failure status and refuses unknown arguments", () => {
     const result = bash(harness(`require_wrapper_integrity() { return 0; }
 require_deploy_integrity() { return 0; }
 require_cli() { return 0; }

@@ -45,8 +45,11 @@ copies `.env*`, credentials, or user data. The existing `/home/growth/deploy/dep
 untouched; the package requires its exact reviewed SHA256 `a8cc605ca1dfe323f1b3b7ce1d123e1ae3f8197268fc9339399b2d37b593f8c6` before installation. No service environment file or credential is copied into the root runtime.
 The unchanged approved backup script still invokes the checkout's `scripts/pgx.py` as `growth`.
 That existing backup-helper boundary is distinct from the protected private CLI snapshot.
-The oneshot creates a root-private `/run/growth-mailbox-sync` lock directory; its lock is not
-placed in the commonly writable `/run/lock` directory.
+The oneshot self-provisions `/run/growth-mailbox-sync` only when absent, and only beneath a verified
+root-owned `/run`; it creates the directory as root:root mode 0700. An existing target is never
+repaired: wrong type, ownership, group, mode, or a symlink fails closed. This runtime setup does not
+start or enable the service or timer. The lock is not placed in the commonly writable `/run/lock`
+directory.
 
 ## Founder approval boundary
 

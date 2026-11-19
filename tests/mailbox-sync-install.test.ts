@@ -184,6 +184,58 @@ describe("mailbox operational package", () => {
     expect(result.output).toContain("status=1 bytes=old");
   });
 
+  it("preserves scanner parity for real files, exact trust exception, and partial producer failure", () => {
+    const dir = mkdtempSync(join(process.env.TMPDIR!, "mailbox-scan-parity-"));
+    const modules = join(dir, "credential-directory", "node_modules");
+    const toPosix = (path: string) => process.platform === "win32"
+      ? execFileSync("bash", ["-c", 'cygpath -u "$P"'], { env: { ...process.env, P: path.replace(/\\\\/g, "/") }, encoding: "utf8" }).trim()
+      : path;
+    const fixtureInstaller = join(dir, "installer.sh");
+    const app = join(dir, "credential-directory");
+    mkdirSync(modules, { recursive: true });
+    writeFileSync(fixtureInstaller, readFileSync(installer, "utf8").replace("readonly APP_ROOT=/home/growth/app", `readonly APP_ROOT="${toPosix(app)}"`));
+    const patterns = [".env", ".env.local", ".npmrc", "key.pem", "my-credential-file", "auth.json"];
+    const unsafe = patterns.map((name, index) => {
+      const folder = join(modules, `pkg-${index}`); mkdirSync(folder);
+      const path = join(folder, name); writeFileSync(path, "synthetic fixture"); return path;
+    });
+    const cleanDir = join(modules, "package-credential-name"); mkdirSync(cleanDir);
+    writeFileSync(join(cleanDir, "safe file.txt"), "safe");
+    // Windows forbids control characters in filenames; Linux runs exercise this edge.
+    if (process.platform !== "win32") writeFileSync(join(cleanDir, "safe\nfile.txt"), "safe");
+    const authentic = join(modules, "caniuse-lite/data/features/credential-management.js");
+    const sourceModule = join(root, "node_modules/caniuse-lite/data/features/credential-management.js");
+    mkdirSync(join(modules, "caniuse-lite/data/features"), { recursive: true });
+    try {
+      writeFileSync(authentic, readFileSync(sourceModule));
+      const expected = bash(`find "$ROOT" -type f -print0 | while IFS= read -r -d '' p; do case "${"${p##*/}"}" in .env*|.npmrc|*.pem|*credential*|auth.json) printf '%s\\0' "$p";; esac; done`, { ROOT: toPosix(modules) });
+      const filtered = bash(`find "$ROOT" -type f \\( -name '.env*' -o -name '.npmrc' -o -name '*.pem' -o -name '*credential*' -o -name 'auth.json' \\) -print0`, { ROOT: toPosix(modules) });
+      expect(expected.status).toBe(0); expect(filtered.status).toBe(0);
+      const predicate = (path: string) => {
+        const filename = path.slice(path.lastIndexOf("/") + 1);
+        return filename.startsWith(".env") || filename === ".npmrc" || filename.endsWith(".pem")
+          || filename.includes("credential") || filename === "auth.json";
+      };
+      const expectedPaths = expected.output.split("\0").filter(Boolean).sort();
+      const filteredPaths = filtered.output.split("\0").filter(Boolean).sort();
+      const scanned = bash(`source "$INSTALLER"; set +e; scan_dependency_credentials "$ROOT"; printf 'status=%s\\n' "$?"`, { INSTALLER: toPosix(fixtureInstaller), ROOT: toPosix(modules) });
+      expect(expectedPaths).toEqual(filteredPaths);
+      expect(expectedPaths.every(predicate)).toBe(true);
+      // The harness returns stdout; the fixed refusal diagnostic goes to stderr.
+      expect(scanned.output).toContain("status=1");
+      writeFileSync(authentic, `${readFileSync(authentic, "utf8")}\\n// tampered\\n`);
+      expect(bash(`source "$INSTALLER"; set +e; dependency_file_is_credential_like "$FILE"; printf 'status=%s\\n' "$?"`, { INSTALLER: toPosix(fixtureInstaller), FILE: toPosix(authentic) }).output).toContain("status=0");
+      // The same real candidate listing succeeds before an injected producer failure.
+      // This ensures a credential refusal cannot accidentally satisfy the failure test.
+      for (const file of unsafe) rmSync(file);
+      writeFileSync(authentic, readFileSync(sourceModule));
+      const clean = bash(`source "$INSTALLER"; set +e; scan_dependency_credentials "$ROOT"; printf 'status=%s\\n' "$?"`, { INSTALLER: toPosix(fixtureInstaller), ROOT: toPosix(modules) });
+      expect(clean.output).toContain("status=0");
+      const partial = bash(`source "$INSTALLER"; set +e; find(){ command find "$@"; return 73; }; scan_dependency_credentials "$ROOT"; printf 'status=%s\\n' "$?"`, { INSTALLER: toPosix(fixtureInstaller), ROOT: toPosix(modules) });
+      expect(partial.output).toContain("status=1");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("allows only authentic caniuse-lite bytes and rejects altered or other credential-like files", () => {
     const dir = mkdtempSync(join(process.env.TMPDIR!, "mailbox-credential-guard-"));
     const app = join(dir, "app");

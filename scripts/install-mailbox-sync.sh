@@ -154,14 +154,14 @@ dependency_file_is_credential_like() {
       return
       ;;
   esac
-  case "$(basename -- "$path")" in
+  case "${path##*/}" in
     .env*|.npmrc|*.pem|*credential*|auth.json) return 0 ;;
     *) return 1 ;;
   esac
 }
 scan_dependency_credentials() {
   local root=$1 f bad='' scan_fd scan_pid
-  exec {scan_fd}< <(find "$root" -type f -print0)
+  exec {scan_fd}< <(find "$root" -type f \( -name '.env*' -o -name '.npmrc' -o -name '*.pem' -o -name '*credential*' -o -name 'auth.json' \) -print0)
   scan_pid=$!
   while IFS= read -r -d '' f <&"$scan_fd"; do
     if dependency_file_is_credential_like "$f" && [[ -z "$bad" ]]; then bad=$f; fi

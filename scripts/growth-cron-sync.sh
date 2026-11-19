@@ -16,7 +16,8 @@ readonly TSX="$SNAPSHOT/node_modules/.bin/tsx"
 readonly TSX_TARGET="$SNAPSHOT/node_modules/tsx/dist/cli.mjs"
 readonly CONFIG="$SNAPSHOT/tsconfig.json"
 readonly NODE=/usr/bin/node
-readonly LOCKFILE=/run/growth-mailbox-sync/lock
+readonly RUNTIME_LOCK_DIR=/run/growth-mailbox-sync
+readonly LOCKFILE=$RUNTIME_LOCK_DIR/lock
 readonly FAILURE_MARKER=/var/lib/growth/scheduled-mailbox-sync.failure
 readonly MIN_SIZE=1024
 readonly MIN_TABLE_DATA=50
@@ -186,14 +187,33 @@ require_deploy_integrity() {
   (cd "$(dirname "$DEPLOY")" && sha256sum -c SHA256SUMS >/dev/null 2>&1)
 }
 
+ensure_runtime_lock_dir() {
+  local root=/run dir=$RUNTIME_LOCK_DIR owner group mode kind
+  # /run is the only parent trusted for this runtime state; never create through an untrusted parent.
+  [[ -d "$root" && ! -L "$root" ]] || return 1
+  [[ "$(stat -c '%u:%g:%a:%F' "$root" 2>/dev/null)" == "0:0:755:directory" ]] || return 1
+  # Refuse before creating anything unless the effective caller can create root-owned state.
+  [[ "$(id -u 2>/dev/null)" == 0 && "$(id -g 2>/dev/null)" == 0 ]] || return 1
+  if [[ ! -e "$dir" && ! -L "$dir" ]]; then
+    (umask 077; mkdir -- "$dir") 2>/dev/null || true
+  fi
+  # A concurrent mkdir is acceptable only if the resulting inode independently passes every check.
+  [[ -d "$dir" && ! -L "$dir" ]] || return 1
+  owner=$(stat -c '%u' "$dir" 2>/dev/null) || return 1
+  group=$(stat -c '%g' "$dir" 2>/dev/null) || return 1
+  mode=$(stat -c '%a' "$dir" 2>/dev/null) || return 1
+  kind=$(stat -c '%F' "$dir" 2>/dev/null) || return 1
+  [[ "$owner:$group:$mode:$kind" == "0:0:700:directory" ]]
+}
+
 acquire_lock() {
-  secure_dir_chain /run/growth-mailbox-sync || return 1
+  ensure_runtime_lock_dir || return 2
   if [[ -e "$LOCKFILE" || -L "$LOCKFILE" ]]; then
-    [[ -f "$LOCKFILE" && ! -L "$LOCKFILE" && "$(stat -c '%U:%G:%a:%h' "$LOCKFILE")" == root:root:600:1 ]] || return 1
+    [[ -f "$LOCKFILE" && ! -L "$LOCKFILE" && "$(stat -c '%u:%g:%a:%h' "$LOCKFILE")" == 0:0:600:1 ]] || return 2
   fi
   umask 077
-  exec {LOCK_FD}>"$LOCKFILE" 2>/dev/null || return 1
-  flock -n "$LOCK_FD"
+  exec {LOCK_FD}>>"$LOCKFILE" 2>/dev/null || return 2
+  flock -n "$LOCK_FD" || return 1
 }
 
 # This is the only backup producer. Refuse a same-second target before calling it.
@@ -373,7 +393,10 @@ main() {
   require_wrapper_integrity || { fail wrapper_integrity; return 1; }
   require_deploy_integrity || { fail deploy_integrity; return 1; }
   require_cli || { fail cli_missing; return 1; }
-  acquire_lock || { fail lock_busy; return 1; }
+  local lock_status
+  if acquire_lock; then lock_status=0; else lock_status=$?; fi
+  if [[ "$lock_status" == 2 ]]; then fail runtime_path_invalid; return 1; fi
+  if [[ "$lock_status" != 0 ]]; then fail lock_busy; return 1; fi
   if [[ "$#" == 0 ]]; then run_once; else undo_once "$2"; fi
 }
 
