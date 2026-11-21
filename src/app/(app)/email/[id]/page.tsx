@@ -43,7 +43,7 @@ const NEXT_ACTION: Record<string, string> = {
   pricing: "Confirm founder-approved commercial terms before quoting anything.",
   technical: "Clarify their stack first; do not invent integrations.",
   not_interested: "Close politely. Suppression has already stopped follow-ups.",
-  unsubscribe: "No further contact. The suppression is recorded.",
+  unsubscribe: "Possible opt-out — check the reply, then decide. Nothing has been suppressed automatically.",
   other: "Read the actual message and ask for the missing detail.",
 };
 

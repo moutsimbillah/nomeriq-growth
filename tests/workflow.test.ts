@@ -38,6 +38,7 @@ import {
   startCampaign,
 } from "@/lib/services/campaigns";
 import { classifyReply } from "@/lib/email/classify";
+import { SUSPECTED_OPT_OUT_NEXT_ACTION } from "@/lib/email/sync";
 import { unsubscribeByToken } from "@/lib/services/suppressions";
 import { runAgentAction, TOOL_DEFINITIONS } from "@/lib/agent/service";
 import { createApiKey, type ApiKeyIdentity } from "@/lib/agent/apiKeys";
@@ -510,7 +511,7 @@ describe("Nomeriq Growth end-to-end workflow", () => {
     expect(Number(count.rows[0]?.count)).toBe(1);
   });
 
-  it("records an opt-out immediately, suppresses the contact and blocks replies", async () => {
+  it("records a classified opt-out as a review flag without suppressing the contact", async () => {
     await new Promise((resolve) => setTimeout(resolve, 5200));
     await approveDraft(state.gammaDraftId, state.userId);
     await sendDraft({ draftId: state.gammaDraftId, actorUserId: state.userId });
@@ -522,14 +523,20 @@ describe("Nomeriq Growth end-to-end workflow", () => {
       actorUserId: state.userId,
     });
     const db = await getDb();
+    // Founder decision (21 Nov 2026): a detected opt-out flags the lead for review; it does not
+    // suppress the address, mark do-not-contact or close the lead. This case used to assert the
+    // automatic behaviour (an 'unsubscribe' suppression, do_not_contact and status='lost').
     const suppression = await db.query<{ email: string; reason: string }>(
       `SELECT email, reason FROM suppressions WHERE normalized_email = $1`,
       ["hello@gamma-forex.example.com"],
     );
-    expect(suppression.rows[0]?.reason).toBe("unsubscribe");
+    expect(suppression.rows).toHaveLength(0);
     const prospect = await getProspect(state.gammaId);
-    expect(prospect?.doNotContact).toBe(true);
-    expect(prospect?.status).toBe("lost");
+    expect(prospect?.nextAction).toBe(SUSPECTED_OPT_OUT_NEXT_ACTION);
+    expect(prospect?.doNotContact).toBe(false);
+    expect(prospect?.status).toBe("replied");
+    // The reply is still blocked: the conversation keeps the 'unsubscribe' classification, which the
+    // send gate honours on its own, exactly as it did before this change.
     await expect(
       sendReply({
         conversationId: conversation!.id,

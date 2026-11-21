@@ -214,6 +214,26 @@ function bodyText(parsed: ParsedMail): string {
   return "";
 }
 
+/**
+ * How the sync treats a rules-based `unsubscribe` classification.
+ *
+ * Founder decision (21 Nov 2026): the detector is only a regex over the reply body with quoted
+ * history stripped (src/lib/email/classify.ts), so a prospect's own company footer can contain the
+ * word "unsubscribe" while the person said nothing of the kind. Asked what should happen then, the
+ * founder chose "Flag for review — khud 'lost' na kare": flag the prospect where the founder will
+ * see it and change nothing else. Closing a lead is the founder's decision, not the detector's.
+ *
+ * `false` (the default) is the review behaviour: no suppression, no `status='lost'`, no
+ * `do_not_contact`; only the marker below is written and the classification is journalled. Flip
+ * this to `true` only on a new, explicit founder decision — the automatic path is kept alongside so
+ * the policy is visible and testable instead of implied.
+ */
+export const AUTO_OPT_OUT_ON_CLASSIFIED_UNSUBSCRIBE: boolean = false;
+
+/** The founder-facing marker a suspected opt-out leaves on the prospect. */
+export const SUSPECTED_OPT_OUT_NEXT_ACTION =
+  "Possible opt-out — review before any further contact";
+
 export async function applyInboundEffect(
   conversationId: string,
   prospectId: string,
@@ -298,35 +318,62 @@ export async function applyInboundEffect(
 
 
     if (classification.classification === "unsubscribe") {
-      const emailResult = await tx.query<{ email: string }>(
-        `SELECT email FROM prospect_emails WHERE prospect_id = $1
-         ORDER BY is_primary DESC LIMIT 1`,
-        [prospectId],
-      );
-      const email = emailResult.rows[0]?.email;
-      if (email) {
+      if (AUTO_OPT_OUT_ON_CLASSIFIED_UNSUBSCRIBE) {
+        // Legacy automatic path — never the default. Kept so the flag above stays meaningful.
+        const emailResult = await tx.query<{ email: string }>(
+          `SELECT email FROM prospect_emails WHERE prospect_id = $1
+           ORDER BY is_primary DESC LIMIT 1`,
+          [prospectId],
+        );
+        const email = emailResult.rows[0]?.email;
+        if (email) {
+          await tx.query(
+            `INSERT INTO suppressions
+              (id, normalized_email, email, reason, source, prospect_id, note)
+             VALUES ($1, $2, $3, $4, 'inbound_reply', $5, $6)
+             ON CONFLICT (normalized_email) DO UPDATE SET
+               active = true, reason = excluded.reason, updated_at = now()`,
+            [
+              crypto.randomUUID(),
+              normalizeEmail(email),
+              email,
+              "unsubscribe",
+              prospectId,
+              truncate(body, 400),
+            ],
+          );
+        }
         await tx.query(
-          `INSERT INTO suppressions
-            (id, normalized_email, email, reason, source, prospect_id, note)
-           VALUES ($1, $2, $3, $4, 'inbound_reply', $5, $6)
-           ON CONFLICT (normalized_email) DO UPDATE SET
-             active = true, reason = excluded.reason, updated_at = now()`,
+          `UPDATE prospects SET do_not_contact = true, status = 'lost',
+            next_action = 'No further contact — opt-out recorded', updated_at = now()
+           WHERE id = $1`,
+          [prospectId],
+        );
+      } else {
+        // Founder decision: flag for review, do not close the lead. A footer nobody wrote to opt out
+        // must not suppress the address, mark it do_not_contact, or set status='lost'. Only the
+        // next_action marker changes; the message-level classification stays on the conversation and
+        // the suspicion is journalled so nothing happens silently.
+        await tx.query(
+          `UPDATE prospects SET next_action = $2, updated_at = now() WHERE id = $1`,
+          [prospectId, SUSPECTED_OPT_OUT_NEXT_ACTION],
+        );
+        await tx.query(
+          `INSERT INTO audit_log (id, actor_type, actor_id, action, entity_type, entity_id, metadata)
+            VALUES ($1, 'system', NULL, 'lead.opt_out_suspected', 'prospect', $2, $3::jsonb)`,
           [
             crypto.randomUUID(),
-            normalizeEmail(email),
-            email,
-            "unsubscribe",
             prospectId,
-            truncate(body, 400),
+            JSON.stringify({
+              classification: classification.classification,
+              confidence: classification.confidence,
+              matched: classification.matched,
+              messageId: messageDbId ?? null,
+              reviewMarker: SUSPECTED_OPT_OUT_NEXT_ACTION,
+            }),
           ],
         );
       }
-      await tx.query(
-        `UPDATE prospects SET do_not_contact = true, status = 'lost',
-          next_action = 'No further contact — opt-out recorded', updated_at = now()
-         WHERE id = $1`,
-        [prospectId],
-      );
     }
   });
 }

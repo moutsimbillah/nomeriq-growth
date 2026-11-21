@@ -27,7 +27,7 @@ What this environment cannot do is run that same path against the live web: ther
 | 9 | Synchronize externally sent IONOS mail | **Implemented; live not verified** | Sent-folder sync with UIDVALIDITY/UID tracking and external-send association. |
 | 10 | Open reply and send without extra approvals | **Working** | Founder reads, optionally generates a suggestion, edits and sends. Only recipient, suppression, authentication, idempotency and footer safeguards apply. |
 | 11 | Prepare follow-ups | **Working** | Due-thread detection, configurable count/delays, deterministic personalized follow-ups, review UI, save/approve/send. |
-| 12 | Prevent follow-ups after reply/opt-out | **Working** | Inbound sync cancels active follow-up drafts; opt-out creates suppression and do-not-contact. |
+| 12 | Prevent follow-ups after reply/opt-out | **Working** | Inbound sync cancels active follow-up drafts; a rules-classified opt-out no longer suppresses or sets do-not-contact by itself — it flags the lead for founder review (a `next_action` marker plus a journalled `lead.opt_out_suspected`). Only the founder closes a lead. |
 | 13 | Track demo/proposal/sale | **Working** | Ten-stage pipeline and next action on every lead, with UI stage editor and API. |
 | 14 | ChatGPT and Claude contribute without duplication | **Working** | Shared MCP + REST, scoped keys, one shared skill, `check_duplicate`, `save_prospect`, `save_draft`, progress. No send/delete/settings/job-control tools. |
 | 15 | Repeat for another 100 | **Supported** | New targets continue from database counts; duplicate protection spans the whole database. Not executed to 100 without live research. |
