@@ -27,6 +27,10 @@ const SYNC_VERDICT_LABEL: Record<MailboxSyncVerdict, string> = {
  * The verdict comes from the newest mailbox_sync_runs row, never from last_sync_at (which only moves on
  * success). "overdue" — no run for over 30 minutes — is deliberately loud: it is the only hint here the
  * 15-minute timer has stopped, and the app cannot read the timer, so it makes no "next sync at" claim.
+ *
+ * A "failed" verdict is never shown as if it explained itself: the run's own recorded reason
+ * (`mailbox_sync_runs.error`) travels with it, and when the run recorded none the line says so plainly
+ * rather than leaving a bare "failed".
  */
 export function MailboxSyncStatusLine({
   status,
@@ -36,8 +40,10 @@ export function MailboxSyncStatusLine({
   /** The newest run's start, already formatted in the workspace zone; null when never. */
   atLabel: string | null;
 }) {
-  const { verdict } = status;
+  const { verdict, reason } = status;
   const overdue = verdict === "overdue";
+  const failed = verdict === "failed";
+  const failureReason = reason?.trim() ? reason.trim() : null;
   return (
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-12 text-muted">
       <span className="inline-flex items-center gap-1.5">
@@ -62,6 +68,11 @@ export function MailboxSyncStatusLine({
         {overdue && <CircleAlert size={11} />}
         {SYNC_VERDICT_LABEL[verdict]}
       </span>
+      {failed && (
+        <span data-sync-reason className="min-w-0 break-anywhere text-rust">
+          {failureReason ?? "The newest run failed and recorded no reason."}
+        </span>
+      )}
       <span className="text-faint">
         Auto-sync every 15 minutes
       </span>

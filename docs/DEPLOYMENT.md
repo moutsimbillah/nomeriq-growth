@@ -367,22 +367,27 @@ For a deploy that includes a migration, the order with this revision is:
    build identifier and running process start time are unchanged.
 3. Use the existing target assertion and env-loaded `npm run db:migrate` command in **Applying
    migrations to production** above. Immediately before it runs, require the live ledger to contain
-   exactly the 34 files through `034_strict_prospect_identity.sql`, with `035_mailbox_sync_journal.sql`,
-   `036_override_write_order.sql`, `037_campaign_batch_pacing.sql` and `038_campaign_autostart.sql`
-   all absent. The runner applies each file in numeric order and writes each ledger row in the same
-   transaction; do not hand-write the ledger.
-   This release has **four** new migrations, so require **all four** newly applied in that numeric
-   order, the ledger to move from **34 to 38 rows**, and each `applied_at` to be no earlier than the
-   recorded runner start. The runner prints all ledger rows first and the `Target` line last, so read
-   back the full **38-row** output and require `Target: remote PostgreSQL / Supabase`.
+   exactly the **36** files through `036_override_write_order.sql`, with
+   `037_campaign_batch_pacing.sql` and `038_campaign_autostart.sql` absent. **The live server already
+   runs `dcce225`, which shipped `035_mailbox_sync_journal.sql` and `036_override_write_order.sql`, so
+   both are already applied and recorded on live** — this deploy adds only **037 and 038**. The 035/036
+   artefacts and readbacks below are retained for a fresh environment that has neither. The runner
+   applies each file in numeric order and writes each ledger row in the same transaction; do not
+   hand-write the ledger.
+   This release has **two** new migrations, so require **both** newly applied in that numeric order,
+   the ledger to move from **36 to 38 rows**, and each `applied_at` to be no earlier than the recorded
+   runner start. The runner prints all ledger rows first and the `Target` line last, so read back the
+   full **38-row** output and require `Target: remote PostgreSQL / Supabase`.
 
-   Read back 035's own artefacts: the three new tables (`mailbox_sync_leases`, `mailbox_sync_runs`,
+   Read back 035's own artefacts (already applied and recorded on live; retained for a fresh
+   environment): the three new tables (`mailbox_sync_leases`, `mailbox_sync_runs`,
    `mailbox_sync_journal`), the `mailbox_sync_journal_capture_seq` sequence, the indexes
    (`mailbox_sync_runs_account_idx`, `mailbox_sync_runs_active_idx`, `mailbox_sync_journal_run_idx`),
    row-level security on all three tables, the `mailbox_sync_capture_mutation` function and the
    `mailbox_sync_capture` triggers, plus unchanged pre-existing business counts.
 
-   Read back 036's own artefacts — the column and the index, by exact definition:
+   Read back 036's own artefacts (already applied and recorded on live; retained for a fresh
+   environment) — the column and the index, by exact definition:
 
    ```sql
    SELECT data_type, is_identity, identity_generation
@@ -465,7 +470,7 @@ For a deploy that includes a migration, the order with this revision is:
    -- expect exactly one row with all seven columns true
    ```
 
-   Read back the ledger rows for all four:
+   Read back the ledger rows for all four (035/036 already present, 037/038 newly applied):
 
    ```sql
    SELECT id FROM _migrations WHERE id >= '035' ORDER BY id;
@@ -479,12 +484,16 @@ For a deploy that includes a migration, the order with this revision is:
    All four migrations are additive (`CREATE TABLE/INDEX/SEQUENCE IF NOT EXISTS`, `ADD COLUMN IF NOT
    EXISTS`, guarded trigger/constraint creation; 036 adds one nullable identity column and one index;
    037 adds six nullable/defaulted columns, one table and three indexes; 038 only widens the journal's
-   `level` CHECK to accept two further values and drops and re-adds nothing else), so all four are
-   **retained on rollback** — nothing is dropped or rewritten and the pre-release code ignores them.
-   Stop if any migration other than 035, 036, 037 and 038 is pending, if any of the four is missing or
-   out of numeric order, or if any assertion differs.
+   `level` CHECK to accept two further values and drops and re-adds nothing else), so none is dropped or
+   re-written and the pre-release code ignores them. 035 and 036 are already live and retained; 037 and
+   038 are **retained on rollback** beside them.
+   Stop if any migration other than 037 and 038 is pending, if either is missing or out of numeric
+   order, or if any assertion differs.
 4. Only after those checks, run `deploy.sh build` followed by `deploy.sh restart`, verify the exact
-   commit, health, service, timers and baseline counts. Do not invoke sync, send or research as a probe.
+   commit, health, service, timers and baseline counts. **`growth-cron-sends.timer` must be active:**
+   it is what calls `POST /api/cron/sends` (`runDueCampaigns`), so a scheduled campaign starts itself
+   and ongoing sending continues only while that timer is running. Do not invoke sync, send or research
+   as a probe.
 
 There is no migration-in-restart or new schema-write mechanism. A failure stops before the next
 step; retain additive schema and recipient holds, and use only an independently reviewed rollback.

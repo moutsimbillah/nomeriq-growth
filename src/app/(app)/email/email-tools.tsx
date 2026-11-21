@@ -196,19 +196,28 @@ export async function EmailToolsPage({
     now: filters.now,
   });
   const account = accounts[0] ?? null;
-  const syncHealth =
-    account && account.provider !== "sandbox"
-      ? await getSyncHealth(account.id).catch(() => [])
-      : [];
-  // The honest sync line reads the newest mailbox_sync_runs row, not last_sync_at (which only moves on
-  // success). Null for a sandbox mailbox, which never runs the scheduled sync.
-  const syncStatus =
-    account && account.provider !== "sandbox"
-      ? await getMailboxSyncStatus(account.id).catch(() => null)
-      : null;
-  const syncStatusAtLabel = syncStatus?.at
-    ? formatDateTime(syncStatus.at, settings.timezone)
-    : null;
+  // One honest sync line PER connected mailbox. The Mailbox-list, Sent and Drafts views aggregate
+  // every mailbox's mail, so a single line for accounts[0] would silently hide a second account whose
+  // sync has stopped. The verdict reads the newest mailbox_sync_runs row, never last_sync_at (which
+  // only moves on success); a sandbox mailbox never runs the scheduled sync, so it carries no line.
+  const mailboxSync = await Promise.all(
+    accounts.map(async (mailbox) => {
+      const sandboxMailbox = mailbox.provider === "sandbox";
+      const health: Awaited<ReturnType<typeof getSyncHealth>> = sandboxMailbox
+        ? []
+        : await getSyncHealth(mailbox.id).catch(() => []);
+      const status = sandboxMailbox
+        ? null
+        : await getMailboxSyncStatus(mailbox.id).catch(() => null);
+      return {
+        account: mailbox,
+        sandboxMailbox,
+        health,
+        status,
+        atLabel: status?.at ? formatDateTime(status.at, settings.timezone) : null,
+      };
+    }),
+  );
   const openDrafts = drafts.filter((draft) => draft.status === "draft");
   const dueFollowUps = followCandidates.filter((candidate) => candidate.due);
   // "Eligible but not yet prepared": due, and no draft is already waiting for review.
@@ -262,35 +271,53 @@ export async function EmailToolsPage({
         }
       />
 
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-line bg-white/45 px-3.5 py-2.5">
-        <div className="flex items-center gap-2 text-12 text-muted">
-          <Mail size={13} className={account?.status === "connected" ? "text-forest" : "text-amber"} />
-          <span className="font-semibold text-ink">{account?.emailAddress || "No mailbox"}</span>
-          {account?.provider === "sandbox" ? (
-            <span className="badge border-amber/20 bg-amber/[0.07] text-amber">sandbox</span>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-2 rounded-xl border border-line bg-white/45 px-3.5 py-2.5">
+        <div className="flex flex-col gap-1 text-12 text-muted">
+          {mailboxSync.length > 0 ? (
+            mailboxSync.map(({ account: mailbox, sandboxMailbox, health, status, atLabel }) => (
+              <div key={mailbox.id} className="flex flex-wrap items-center gap-2">
+                <Mail size={13} className={mailbox.status === "connected" ? "text-forest" : "text-amber"} />
+                <span className="font-semibold text-ink">{mailbox.emailAddress}</span>
+                {sandboxMailbox ? (
+                  <span className="badge border-amber/20 bg-amber/[0.07] text-amber">sandbox</span>
+                ) : (
+                  <span
+                    className={`badge ${
+                      mailbox.status === "connected"
+                        ? "border-forest/20 bg-lime/25 text-forest"
+                        : "border-rust/20 bg-rust/[0.05] text-rust"
+                    }`}
+                  >
+                    {mailbox.status || "not connected"}
+                  </span>
+                )}
+                {status && (
+                  <>
+                    <span className="text-faint" aria-hidden>
+                      ·
+                    </span>
+                    <MailboxSyncStatusLine status={status} atLabel={atLabel} />
+                  </>
+                )}
+                {health.some((state) => !state.historyComplete || state.error) && (
+                  <span className="inline-flex items-center gap-1 text-12 text-amber">
+                    <CircleAlert size={9} /> History incomplete
+                  </span>
+                )}
+              </div>
+            ))
           ) : (
-            <span
-              className={`badge ${
-                account?.status === "connected"
-                  ? "border-forest/20 bg-lime/25 text-forest"
-                  : "border-rust/20 bg-rust/[0.05] text-rust"
-              }`}
-            >
-              {account?.status || "not connected"}
-            </span>
-          )}
-          {syncStatus && (
-            <>
-              <span className="text-faint" aria-hidden>
-                ·
-              </span>
-              <MailboxSyncStatusLine status={syncStatus} atLabel={syncStatusAtLabel} />
-            </>
-          )}
-          {syncHealth.some((state) => !state.historyComplete || state.error) && (
-            <span className="inline-flex items-center gap-1 text-12 text-amber">
-              <CircleAlert size={9} /> History incomplete
-            </span>
+            <div className="flex items-center gap-2">
+              <Mail size={13} className="text-amber" />
+              <span className="font-semibold text-ink">{account?.emailAddress || "No mailbox"}</span>
+              {account?.provider === "sandbox" ? (
+                <span className="badge border-amber/20 bg-amber/[0.07] text-amber">sandbox</span>
+              ) : (
+                <span className="badge border-rust/20 bg-rust/[0.05] text-rust">
+                  {account?.status || "not connected"}
+                </span>
+              )}
+            </div>
           )}
         </div>
         <Link href="/settings#email" className="text-12 font-semibold text-muted hover:text-ink">

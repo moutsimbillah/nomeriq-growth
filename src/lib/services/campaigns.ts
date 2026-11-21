@@ -34,8 +34,11 @@ export const PER_MINUTE_WINDOW_SECONDS = 60;
 /** The largest batch one action may create or preview. Mirrors the drafts list ceiling. */
 export const MAX_CAMPAIGN_BATCH = 200;
 /**
- * How many consecutive item failures pause a campaign as systemic. A run of failures usually means the
- * plumbing, not the recipients; one success resets the counter.
+ * How many consecutive INDETERMINATE item failures pause a campaign as systemic. Only failures whose
+ * cause is NOT the recipient — a transient/provider error, an unknown error — are counted; a
+ * deterministic per-recipient skip (a suppression, an opt-out, an invalid address, a rejection hold)
+ * never is, so a run of those skips past and the campaign carries on. Any resolved item — a send, or a
+ * deterministic skip — resets the counter. See `isDeterministicSkip` and `isSystemFailure`.
  */
 export const CAMPAIGN_FAILURE_CIRCUIT_BREAKER = 3;
 /**
@@ -785,6 +788,16 @@ const PER_ITEM_SKIP_CODES = new Set([
   "rejection_hold",
 ]);
 
+/**
+ * A DETERMINISTIC per-recipient skip: the same recipient and draft produce the same result every time,
+ * so it is not evidence of a systemic fault and must not count toward the circuit breaker. The
+ * founder's rule — "skip the failed one and carry on if it is not a system issue" — makes these skips
+ * the thing the runner moves past, never a reason to pause.
+ */
+export function isDeterministicSkip(error: unknown): boolean {
+  return error instanceof AppError && PER_ITEM_SKIP_CODES.has(error.code);
+}
+
 const SYSTEM_FAILURE_CODES = new Set([
   "email_account_not_connected",
   "bounce_rate_paused",
@@ -794,15 +807,35 @@ const SYSTEM_FAILURE_CODES = new Set([
 ]);
 
 /**
+ * The provider is asking us to slow down, or our quota is spent. This is the provider's own capacity,
+ * not the recipient's fault, so it pauses the campaign immediately rather than skipping one recipient —
+ * carrying on would only deepen the throttle. Covers the usual API codes and the SMTP transient
+ * throttling responses (421/450/452) and the wordings providers use for them.
+ */
+const RATE_LIMIT_CODES = new Set([
+  "rate_limited",
+  "rate_limit_exceeded",
+  "too_many_requests",
+  "quota_exceeded",
+  "quota_exhausted",
+  "throttled",
+]);
+const RATE_LIMIT_PATTERN =
+  /rate.?limit|throttl|too many (?:messages|requests|connections|recipients)|quota|(?:^|\D)(?:421|450|452)(?!\d)/i;
+
+/**
  * A system failure pauses the whole campaign and keeps it resumable; a per-item failure skips the one
  * item and the runner goes on. This decides which. An unexpected (non-AppError) exception is always
- * systemic, because an internal error is never the recipient's fault. The transport's own label is
- * coarse — an authentication failure and an unreachable server both arrive as `smtp_rejected` — so the
- * message decides between them and a mailbox-rejected recipient.
+ * systemic, because an internal error is never the recipient's fault. A provider rate-limit or quota
+ * refusal is systemic for the same reason — it is the provider's capacity, not this recipient. The
+ * transport's own label is coarse — an authentication failure and an unreachable server both arrive as
+ * `smtp_rejected` — so the message decides between them and a mailbox-rejected recipient.
  */
 export function isSystemFailure(error: unknown): boolean {
   if (!(error instanceof AppError)) return true;
   if (SYSTEM_FAILURE_CODES.has(error.code)) return true;
+  if (RATE_LIMIT_CODES.has(error.code)) return true;
+  if (RATE_LIMIT_PATTERN.test(error.message)) return true;
   if (error.code === "smtp_rejected") {
     return /authenticat|credential|EAUTH|unauthor|not connected|refused|timed? ?out|timeout|ESOCKET|ETIMEDOUT|connect(?:ion)? (?:fail|error|reset)/i.test(
       error.message,
@@ -924,8 +957,13 @@ async function handleItemError(
     };
   }
 
-  // Per-item failure: this item is terminal and named in its own row AND the run journal; the campaign goes on.
-  const itemStatus = PER_ITEM_SKIP_CODES.has(code) ? "skipped" : "failed";
+  // Per-item failure: this item is terminal and named in its own row AND the run journal; the campaign
+  // goes on. A DETERMINISTIC skip (a suppression, an opt-out, an invalid address, a rejection hold) is
+  // never a systemic signal — it does not count toward the circuit breaker, and it resets the run of
+  // failures because it is not one of them. Only an INDETERMINATE failure (a transient/provider or
+  // unknown error) counts; see `isDeterministicSkip` and `isSystemFailure`.
+  const deterministic = isDeterministicSkip(error);
+  const itemStatus = deterministic ? "skipped" : "failed";
   await db.query(
     `UPDATE campaign_items SET status = $2, error = $1, updated_at = now() WHERE id = $3`,
     [message, itemStatus, item.id],
@@ -937,24 +975,30 @@ async function handleItemError(
     metadata: { code: code || null, itemStatus },
   });
 
-  const failures = await bumpConsecutiveFailures(campaignId);
-  if (failures >= CAMPAIGN_FAILURE_CIRCUIT_BREAKER) {
-    const reason = `${failures} items failed in a row, which usually means the sending setup rather than the recipients. The campaign was paused after: ${message}`;
-    await db.query(
-      `UPDATE campaigns SET status = 'paused', last_error = $2, updated_at = now() WHERE id = $1`,
-      [campaignId, reason],
-    );
-    await journal(campaignId, "paused", {
-      reason,
-      metadata: { consecutiveFailures: failures },
-    });
-    return {
-      done: false,
-      sent: false,
-      outcome: "paused",
-      error: message,
-      progress: await campaignProgress(campaignId),
-    };
+  if (deterministic) {
+    // A deterministic skip is progress, not a fault: it is not a failure, so it never trips the breaker
+    // and it resets the run of indeterminate failures behind it.
+    await resetConsecutiveFailures(campaignId);
+  } else {
+    const failures = await bumpConsecutiveFailures(campaignId);
+    if (failures >= CAMPAIGN_FAILURE_CIRCUIT_BREAKER) {
+      const reason = `${failures} items failed in a row, which usually means the sending setup rather than the recipients. The campaign was paused after: ${message}`;
+      await db.query(
+        `UPDATE campaigns SET status = 'paused', last_error = $2, updated_at = now() WHERE id = $1`,
+        [campaignId, reason],
+      );
+      await journal(campaignId, "paused", {
+        reason,
+        metadata: { consecutiveFailures: failures },
+      });
+      return {
+        done: false,
+        sent: false,
+        outcome: "paused",
+        error: message,
+        progress: await campaignProgress(campaignId),
+      };
+    }
   }
 
   const progress = await campaignProgress(campaignId);

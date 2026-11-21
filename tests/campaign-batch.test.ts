@@ -30,8 +30,11 @@ import {
   setCampaignStatus,
   listCampaignJournal,
   campaignProgress,
+  isDeterministicSkip,
+  isSystemFailure,
   CAMPAIGN_FAILURE_CIRCUIT_BREAKER,
 } from "@/lib/services/campaigns";
+import { AppError } from "@/lib/utils";
 import type { Category } from "@/lib/types";
 import { assessmentFor } from "./helpers/lead-assessment";
 
@@ -137,6 +140,24 @@ async function suppressEmail(email: string): Promise<void> {
     [email],
   );
   state.suppressions.push(email);
+}
+
+/**
+ * Make the next `times` sends fail with an INDETERMINATE provider error: a transient refusal of the
+ * message, whose cause is the provider and not the recipient. It arrives as a definitive SMTP rejection
+ * (`smtp_rejected`) whose message matches neither a connection/auth failure nor a rate-limit refusal, so
+ * it is a per-item failure that DOES count toward the circuit breaker.
+ */
+function failNextSendsIndeterminately(times: number) {
+  for (let i = 0; i < times; i += 1) {
+    transport.deliver.mockImplementationOnce(async () => {
+      throw new EmailDeliveryError(
+        "The provider returned a temporary error; the message was not accepted.",
+        true,
+        "EENVELOPE",
+      );
+    });
+  }
 }
 
 async function campaignRow(id: string) {
@@ -556,7 +577,8 @@ describe("the runner: per-item vs system failures", () => {
     expect(progress.queued).toBe(0);
   });
 
-  it("pauses after the circuit breaker trips on consecutive failures", async () => {
+  it("skips three consecutive suppressed recipients and completes — a deterministic skip never pauses", async () => {
+    const db = await getDb();
     const accountId = await newMailbox();
     const drafts = [];
     for (const n of [1, 2, 3]) {
@@ -579,8 +601,54 @@ describe("the runner: per-item vs system failures", () => {
     await startCampaign(id, state.userId);
 
     const run = await runCampaign(id, state.userId);
-    expect(run.status).toBe("paused");
+    // A run of deterministic per-recipient skips is NEVER systemic: the campaign skips them and finishes,
+    // per the founder's rule — skip the failed one and carry on if it is not the system.
+    expect(run.status).toBe("completed");
     expect(CAMPAIGN_FAILURE_CIRCUIT_BREAKER).toBe(3);
+    expect(run.skipped).toBe(3);
+    expect(run.sent).toBe(0);
+
+    const campaign = await campaignRow(id);
+    expect(campaign.status).toBe("completed");
+    expect(campaign.last_error).toBeNull();
+
+    const journal = await listCampaignJournal(id);
+    expect(journal.filter((entry) => entry.level === "item_skipped")).toHaveLength(3);
+    expect(journal.some((entry) => entry.level === "paused")).toBe(false);
+
+    const progress = await campaignProgress(id);
+    expect(progress.skipped).toBe(3);
+    expect(progress.queued).toBe(0);
+    void db;
+  });
+
+  it("still pauses after three consecutive INDETERMINATE failures", async () => {
+    const db = await getDb();
+    const accountId = await newMailbox();
+    const drafts = [];
+    for (const n of [1, 2, 3]) {
+      drafts.push(
+        await makeDraft(accountId, `Cb Indeterminate ${n}`, `cb-indeterminate-${n}.example`, `hello@cb-indeterminate-${n}.example`),
+      );
+    }
+    for (const draft of drafts) await approveDraft(draft.draftId, state.userId);
+
+    const { id } = await createCampaign({
+      name: "Indeterminate 1",
+      draftIds: drafts.map((draft) => draft.draftId),
+      accountId,
+      userId: state.userId,
+      authorize: true,
+      perMinuteCap: null,
+    });
+    state.campaigns.push(id);
+    await startCampaign(id, state.userId);
+
+    // Three failures whose cause is the provider, not the recipient: these DO count toward the breaker.
+    failNextSendsIndeterminately(3);
+
+    const run = await runCampaign(id, state.userId);
+    expect(run.status).toBe("paused");
 
     const campaign = await campaignRow(id);
     expect(campaign.status).toBe("paused");
@@ -588,7 +656,69 @@ describe("the runner: per-item vs system failures", () => {
 
     const journal = await listCampaignJournal(id);
     expect(journal.some((entry) => entry.level === "paused")).toBe(true);
-    expect((await campaignProgress(id)).skipped).toBe(3);
+    const failed = await db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM campaign_items WHERE campaign_id = $1 AND status = 'failed'`,
+      [id],
+    );
+    expect(failed.rows[0].n).toBe(3);
+  });
+
+  it("pauses immediately on a provider rate-limit refusal rather than skipping the recipient", async () => {
+    const db = await getDb();
+    const accountId = await newMailbox();
+    const draft = await makeDraft(accountId, "Cb RateLimit One", "cb-ratelimit-one.example", "hello@cb-ratelimit-one.example");
+    await approveDraft(draft.draftId, state.userId);
+    const { id } = await createCampaign({
+      name: "RateLimit 1",
+      draftIds: [draft.draftId],
+      accountId,
+      userId: state.userId,
+      authorize: true,
+      perMinuteCap: null,
+    });
+    state.campaigns.push(id);
+    await startCampaign(id, state.userId);
+
+    transport.deliver.mockImplementationOnce(async () => {
+      throw new EmailDeliveryError(
+        "421 4.7.0 Too many messages from this mailbox — rate limit exceeded, slow down.",
+        true,
+        "EENVELOPE",
+      );
+    });
+
+    const run = await runCampaign(id, state.userId);
+    expect(run.status).toBe("paused");
+    const campaign = await campaignRow(id);
+    expect(campaign.status).toBe("paused");
+    expect(campaign.last_error ?? "").toMatch(/rate limit|too many/i);
+
+    const journal = await listCampaignJournal(id);
+    expect(journal.some((entry) => entry.level === "system_failure")).toBe(true);
+
+    // The recipient is NOT skipped or failed: this is the provider's capacity, not a bad recipient.
+    const skippedOrFailed = await db.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM campaign_items WHERE campaign_id = $1 AND status IN ('skipped','failed')`,
+      [id],
+    );
+    expect(skippedOrFailed.rows[0].n).toBe(0);
+  });
+
+  it("classifies failures: deterministic skips are never systemic, rate-limit and quota refusals always are", () => {
+    for (const code of ["suppressed", "do_not_contact", "already_contacted", "prospect_replied", "unverified_recipient", "duplicate_contact", "rejection_hold"]) {
+      expect(isDeterministicSkip(new AppError("skip", 409, code)), code).toBe(true);
+      expect(isSystemFailure(new AppError("skip", 409, code)), code).toBe(false);
+    }
+    // Rate-limit / quota refusals pause the campaign: they are the provider's capacity, not a recipient.
+    expect(isSystemFailure(new AppError("429 Too Many Requests: rate limit exceeded.", 429, "smtp_rejected"))).toBe(true);
+    expect(isSystemFailure(new AppError("Monthly sending quota exceeded for this mailbox.", 429, "smtp_rejected"))).toBe(true);
+    expect(isSystemFailure(new AppError("450 4.7.0 Requested mail action not taken: throttled.", 502, "smtp_rejected"))).toBe(true);
+    expect(isSystemFailure(new AppError("throttled", 429, "smtp_rejected"))).toBe(true);
+    // A generic temporary provider error is indeterminate, not systemic: it counts toward the breaker.
+    expect(isSystemFailure(new AppError("The provider returned a temporary error; the message was not accepted.", 502, "smtp_rejected"))).toBe(false);
+    expect(isDeterministicSkip(new AppError("The provider returned a temporary error.", 502, "smtp_rejected"))).toBe(false);
+    // An unknown (non-AppError) exception is always systemic.
+    expect(isSystemFailure(new Error("boom"))).toBe(true);
   });
 
   it("pauses immediately on an authentication failure", async () => {
@@ -638,7 +768,6 @@ describe("the runner: per-item vs system failures", () => {
       drafts.push(
         await makeDraft(accountId, `Cb Resume ${n}`, `cb-resume-${n}.example`, `hello@cb-resume-${n}.example`),
       );
-      await suppressEmail(`hello@cb-resume-${n}.example`);
     }
     const tail = await makeDraft(accountId, "Cb Resume Four", "cb-resume-four.example", "hello@cb-resume-four.example");
     for (const draft of [...drafts, tail]) await approveDraft(draft.draftId, state.userId);
@@ -654,6 +783,8 @@ describe("the runner: per-item vs system failures", () => {
     state.campaigns.push(id);
     await startCampaign(id, state.userId);
 
+    // Three indeterminate failures trip the breaker and pause the campaign; the fourth item stays queued.
+    failNextSendsIndeterminately(3);
     const paused = await runCampaign(id, state.userId);
     expect(paused.status).toBe("paused");
     const queued = await db.query(`SELECT 1 FROM campaign_items WHERE campaign_id = $1 AND status = 'queued'`, [id]);

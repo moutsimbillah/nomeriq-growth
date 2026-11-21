@@ -64,6 +64,28 @@ describe("the honest mailbox sync line renders its verdict loudly", () => {
     expect(never).toContain('data-sync-verdict="never"');
     expect(never).toContain("Last sync");
   });
+
+  it("shows a failed run's own reason and never leaves a bare 'failed'", () => {
+    const withReason = render("MailboxSyncStatusLine", {
+      status: {
+        verdict: "failed",
+        at: "2026-11-22T10:00:00.000Z",
+        ageMinutes: 120,
+        reason: "IMAP login failed for moutsim@nomeriq.com.",
+      },
+      atLabel: "22 Nov 2026, 15:00",
+    });
+    expect(withReason).toContain('data-sync-verdict="failed"');
+    expect(withReason).toContain('data-sync-reason');
+    expect(withReason).toContain("IMAP login failed for moutsim@nomeriq.com.");
+
+    // A failed run that recorded no reason says so rather than presenting "failed" as the explanation.
+    const noReason = render("MailboxSyncStatusLine", {
+      status: { verdict: "failed", at: "2026-11-22T10:00:00.000Z", ageMinutes: 120, reason: null },
+      atLabel: "22 Nov 2026, 15:00",
+    });
+    expect(noReason).toContain("The newest run failed and recorded no reason.");
+  });
 });
 
 describe("the batch preview panel", () => {

@@ -14,11 +14,15 @@ import {
 
 const NOW = new Date("2026-11-22T12:00:00.000Z");
 const at = (minutesAgo: number) => new Date(NOW.getTime() - minutesAgo * 60_000).toISOString();
-const run = (status: string, minutesAgo: number): MailboxSyncRun => ({ status, startedAt: at(minutesAgo) });
+const run = (status: string, minutesAgo: number, error: string | null = null): MailboxSyncRun => ({
+  status,
+  startedAt: at(minutesAgo),
+  error,
+});
 
 describe("describeMailboxSync", () => {
   it("reports never when no run has ever been recorded", () => {
-    expect(describeMailboxSync([], NOW)).toEqual({ verdict: "never", at: null, ageMinutes: null });
+    expect(describeMailboxSync([], NOW)).toEqual({ verdict: "never", at: null, ageMinutes: null, reason: null });
   });
 
   it("reports succeeded for a fresh completed run", () => {
@@ -32,6 +36,36 @@ describe("describeMailboxSync", () => {
     expect(describeMailboxSync([run("failed", 3)], NOW).verdict).toBe("failed");
     expect(describeMailboxSync([run("expired", 3)], NOW).verdict).toBe("failed");
     expect(describeMailboxSync([run("undo_conflict", 3)], NOW).verdict).toBe("failed");
+  });
+
+  it("surfaces the failed run's OWN recorded reason, never a bare 'failed'", () => {
+    const failed = describeMailboxSync([run("failed", 3, "IMAP login failed for moutsim@nomeriq.com.")], NOW);
+    expect(failed.verdict).toBe("failed");
+    expect(failed.reason).toBe("IMAP login failed for moutsim@nomeriq.com.");
+
+    // An expired run carries the runner's own reason too ("lease expired"), and an undo conflict its own.
+    expect(describeMailboxSync([run("expired", 3, "lease expired")], NOW).reason).toBe("lease expired");
+
+    // A failed run that recorded no reason yields null rather than inventing one — the line says so.
+    expect(describeMailboxSync([run("failed", 3)], NOW).reason).toBeNull();
+    // A blank reason is not a reason.
+    expect(describeMailboxSync([run("failed", 3, "   ")], NOW).reason).toBeNull();
+  });
+
+  it("never carries a reason on a success, an overdue or a never verdict", () => {
+    expect(describeMailboxSync([run("completed", 2, "should be ignored")], NOW).reason).toBeNull();
+    const staleMinutes = MAILBOX_SYNC_OVERDUE_MS / 60_000 + 1;
+    expect(describeMailboxSync([run("failed", staleMinutes, "IMAP login failed")], NOW).reason).toBeNull();
+    expect(describeMailboxSync([], NOW).reason).toBeNull();
+  });
+
+  it("uses the newest CONCLUDED run's reason, not a still-running run's", () => {
+    const status = describeMailboxSync(
+      [run("running", 1, "in flight"), run("failed", 6, "IMAP login failed")],
+      NOW,
+    );
+    expect(status.verdict).toBe("failed");
+    expect(status.reason).toBe("IMAP login failed");
   });
 
   it("reports overdue - the loud case - when no run started within the window, whatever the outcome", () => {
@@ -85,5 +119,17 @@ describe("the sync line is wired from run rows, not last_sync_at", () => {
   it("reads the newest run row and renders that line", () => {
     expect(page).toMatch(/getMailboxSyncStatus\(/);
     expect(page).toMatch(/MailboxSyncStatusLine/);
+  });
+
+  it("surfaces the run's own reason rather than a bare 'failed'", () => {
+    // The view reads the run's own error/reason and says so when the run recorded none.
+    expect(view).toMatch(/reason/);
+    expect(view).toMatch(/recorded no reason/);
+  });
+
+  it("renders one status line per mailbox, not only the first account", () => {
+    expect(page).toMatch(/getMailboxSyncStatus\(mailbox\.id\)/);
+    expect(page).toMatch(/mailboxSync\.map\(/);
+    expect(page).not.toMatch(/getMailboxSyncStatus\(account\.id\)/);
   });
 });
