@@ -114,6 +114,80 @@ export function dayStart(
 
 const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+const wallClockFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function wallClockFormatter(zone: string): Intl.DateTimeFormat {
+  let f = wallClockFormatterCache.get(zone);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    });
+    wallClockFormatterCache.set(zone, f);
+  }
+  return f;
+}
+
+const WALL_CLOCK_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+/** The wall-clock time a zone shows for an instant, as `YYYY-MM-DDTHH:mm`. Deterministic, host-zone free. */
+export function wallClockInZone(instant: Date, zone: string = DEFAULT_TIMEZONE): string {
+  const parts = wallClockFormatter(zone).formatToParts(instant);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
+/** The zone's offset from UTC at a given instant, in milliseconds (positive east of UTC). */
+function zoneOffsetMs(instant: Date, zone: string): number {
+  const parts = wallClockFormatter(zone).formatToParts(instant);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+  const asUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour"),
+    get("minute"),
+    get("second"),
+  );
+  return asUtc - instant.getTime();
+}
+
+/**
+ * The UTC instant a founder meant when they typed a wall-clock time in a named zone. This is what makes
+ * a schedule honest: the founder enters "2026-11-23 14:00" and thinks in Asia/Karachi, and the value
+ * stored and compared is the single UTC instant that Karachi wall clock denotes — never the browser's,
+ * or the server's, own zone.
+ *
+ * It is computed from the zone's offset at the instant, refined once so a DST transition does not pick
+ * the wrong offset, and it round-trips: the result must show back as exactly the entered wall clock, so
+ * an impossible time (30 Feb, or a clock time a spring-forward skips) is refused rather than silently
+ * shifted.
+ */
+export function zonedWallClockToUtc(
+  wallClock: string,
+  zone: string = DEFAULT_TIMEZONE,
+): Date {
+  const match = WALL_CLOCK_RE.exec(String(wallClock).trim());
+  if (!match) throw new Error(`Invalid wall clock: ${wallClock}`);
+  if (!isValidTimezone(zone)) throw new Error(`Invalid timezone: ${zone}`);
+  const [, y, mo, d, h, mi, s] = match;
+  const target = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s ?? "0"));
+  let utc = target - zoneOffsetMs(new Date(target), zone);
+  utc = target - zoneOffsetMs(new Date(utc), zone);
+  const result = new Date(utc);
+  const rounded = `${y}-${mo}-${d}T${h}:${mi}`;
+  if (wallClockInZone(result, zone) !== rounded) {
+    throw new Error(`That date and time does not exist in ${zone}.`);
+  }
+  return result;
+}
+
 function parseCalendarDay(value: string): CalendarDay | null {
   if (!ISO_DAY_RE.test(value)) return null;
   const year = Number(value.slice(0, 4));

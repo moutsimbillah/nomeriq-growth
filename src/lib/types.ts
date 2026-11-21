@@ -330,6 +330,14 @@ export interface ResearchTickResult {
   notes: string[];
 }
 
+export interface CampaignJournalEntry {
+  id: string;
+  level: string;
+  reason: string;
+  draftId: string | null;
+  createdAt: string;
+}
+
 export interface CampaignSummary {
   id: string;
   name: string;
@@ -338,8 +346,18 @@ export interface CampaignSummary {
   total: number;
   sent: number;
   failed: number;
+  /** Items that ended skipped (opt-out, already contacted, ...) — named in `journal`. */
+  skipped: number;
   queued: number;
   createdAt: string;
+  /** A scheduled start, ISO, or null for a campaign the founder starts by hand. */
+  scheduledAt: string | null;
+  /** The per-minute cap: 1..6, or null for "no per-minute limit". */
+  perMinuteCap: number | null;
+  /** The reason the campaign paused (a system failure or the circuit breaker), when it is paused. */
+  lastError: string | null;
+  /** The most recent run-journal entries, so a shrinking number is always explained. */
+  journal: CampaignJournalEntry[];
 }
 
 export interface ConversationSummary {

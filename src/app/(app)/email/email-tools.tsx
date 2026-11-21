@@ -41,6 +41,7 @@ import { FollowUpDraftList, FollowUpEligibleList } from "@/components/follow-up-
 import { listCampaigns } from "@/lib/services/campaigns";
 import { listEmailAccounts } from "@/lib/email/accounts";
 import { getSyncHealth } from "@/lib/email/sync";
+import { getMailboxSyncStatus } from "@/lib/email/sync-status";
 import { getWorkspaceSettings } from "@/lib/services/settings";
 import {
   AgentPill,
@@ -53,10 +54,9 @@ import {
   Tabs,
 } from "@/components/ui";
 import { SyncMailboxButton } from "@/components/sync-mailbox-button";
-import {
-  CampaignActions,
-  NewCampaignButton,
-} from "@/components/email-actions";
+import { CampaignBuilder } from "@/components/campaign-builder";
+import { CampaignList } from "@/components/campaign-status";
+import { MailboxSyncStatusLine } from "@/components/campaign-ui";
 import { formatDateTime, relativeTime, truncate } from "@/lib/utils";
 import { CLASSIFICATION_LABELS } from "@/lib/types";
 
@@ -200,10 +200,16 @@ export async function EmailToolsPage({
     account && account.provider !== "sandbox"
       ? await getSyncHealth(account.id).catch(() => [])
       : [];
+  // The honest sync line reads the newest mailbox_sync_runs row, not last_sync_at (which only moves on
+  // success). Null for a sandbox mailbox, which never runs the scheduled sync.
+  const syncStatus =
+    account && account.provider !== "sandbox"
+      ? await getMailboxSyncStatus(account.id).catch(() => null)
+      : null;
+  const syncStatusAtLabel = syncStatus?.at
+    ? formatDateTime(syncStatus.at, settings.timezone)
+    : null;
   const openDrafts = drafts.filter((draft) => draft.status === "draft");
-  const approvedFirstContact = drafts.filter(
-    (draft) => draft.kind === "first_contact" && draft.status === "approved",
-  );
   const dueFollowUps = followCandidates.filter((candidate) => candidate.due);
   // "Eligible but not yet prepared": due, and no draft is already waiting for review.
   const unpreparedFollowUps = dueFollowUps.filter((candidate) => !candidate.activeDraftId);
@@ -273,8 +279,13 @@ export async function EmailToolsPage({
               {account?.status || "not connected"}
             </span>
           )}
-          {account?.lastSyncAt && (
-            <span className="text-faint">· synced {relativeTime(account.lastSyncAt)}</span>
+          {syncStatus && (
+            <>
+              <span className="text-faint" aria-hidden>
+                ·
+              </span>
+              <MailboxSyncStatusLine status={syncStatus} atLabel={syncStatusAtLabel} />
+            </>
           )}
           {syncHealth.some((state) => !state.historyComplete || state.error) && (
             <span className="inline-flex items-center gap-1 text-12 text-amber">
@@ -689,83 +700,20 @@ export async function EmailToolsPage({
       {active === "Campaigns" && (
         <div className="mt-4 space-y-4">
           <Notice tone="info" title="Batch sending is founder-authorized.">
-            Create a campaign from approved first-contact drafts. Nothing sends
-            automatically. The runner lives in this tab and respects the
-            configured interval and 24-hour safety cap.
+            Build a campaign from the filters you choose and watch the live count, then one button
+            approves and queues exactly that batch. A campaign you <strong>schedule starts itself</strong> at
+            that time — you do not need to be at the screen. Nothing sends before you approve a batch, and
+            a single failed email is skipped and named rather than stopping the rest.
           </Notice>
-          <Card className="p-0">
-            <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-5">
-              <SectionHeading
-                title="Campaigns"
-                description="A small, explicit batch queue — not an email blaster."
-              />
-              <NewCampaignButton
-                drafts={approvedFirstContact.map((draft) => ({
-                  id: draft.id,
-                  prospectName: draft.prospectName || "Prospect",
-                  subject: draft.subject,
-                }))}
-                accounts={accounts.map((account) => ({
-                  id: account.id,
-                  emailAddress: account.emailAddress,
-                  provider: account.provider,
-                  status: account.status,
-                }))}
-              />
-            </div>
-            {campaigns.length === 0 ? (
-              <EmptyState
-                icon="sparkles"
-                title="No campaigns yet"
-                description={
-                  approvedFirstContact.length
-                    ? `${approvedFirstContact.length} approved first-contact draft${approvedFirstContact.length === 1 ? " is" : "s are"} ready to queue.`
-                    : "Approve at least one first-contact draft on its lead page first."
-                }
-              />
-            ) : (
-              <div className="table-wrap mt-3">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Campaign</th>
-                      <th>Progress</th>
-                      <th>Status</th>
-                      <th>Account</th>
-                      <th className="text-right">Control</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {campaigns.map((campaign) => (
-                      <tr key={campaign.id}>
-                        <td>
-                          <div className="font-semibold text-ink">{campaign.name}</div>
-                          <div className="text-12 text-faint">
-                            Created {relativeTime(campaign.createdAt)}
-                          </div>
-                        </td>
-                        <td>
-                          <div className="text-12 text-ink">
-                            {campaign.sent} of {campaign.total} sent
-                          </div>
-                          <div className="text-12 text-faint">
-                            {campaign.failed} failed · {campaign.queued} queued
-                          </div>
-                        </td>
-                        <td>
-                          <span className="badge capitalize">{campaign.status}</span>
-                        </td>
-                        <td className="text-12 text-muted">{campaign.accountEmail}</td>
-                        <td>
-                          <CampaignActions campaign={campaign} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Card>
+          <CampaignBuilder
+            accounts={accounts.map((account) => ({
+              id: account.id,
+              emailAddress: account.emailAddress,
+              provider: account.provider,
+              status: account.status,
+            }))}
+          />
+          <CampaignList campaigns={campaigns} />
         </div>
       )}
 

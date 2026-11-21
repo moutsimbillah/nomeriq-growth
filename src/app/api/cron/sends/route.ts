@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db/client";
 import { processQueuedSends } from "@/lib/services/email-sending";
+import { runDueCampaigns } from "@/lib/services/campaigns";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,5 +35,12 @@ export async function GET(request: Request) {
   const result = await processQueuedSends({
     max: Number(process.env.QUEUED_SEND_MAX ?? 5),
   });
-  return NextResponse.json({ ok: true, data: result });
+  // Campaigns run through their whole selection, one item after each success, on the same cadence. A
+  // paused or held campaign stops for this tick and is picked up again on the next one. This same pass
+  // first auto-starts any scheduled campaign whose time has arrived, so a founder who set a start time
+  // never has to be at the screen to click Start.
+  const campaigns = await runDueCampaigns({
+    maxCampaigns: Number(process.env.CAMPAIGN_RUN_MAX ?? 3),
+  });
+  return NextResponse.json({ ok: true, data: { ...result, campaigns } });
 }

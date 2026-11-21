@@ -6,6 +6,8 @@ import { tagsFromActorType } from "@/lib/agent/agentTag";
 import { recordFounderEnteredEmail } from "./prospects";
 import { addedWindow, COUNTED_ADDED_RANGES, type AddedRange } from "@/lib/dates/pakistan";
 import type { AgentTag, ChannelTag } from "@/lib/types";
+import { leadModelConditions } from "@/lib/leads/query";
+import type { LeadFilters } from "@/lib/leads/leadFilters";
 import { generateFirstContact } from "@/lib/ai/writer";
 import { validateDraft } from "@/lib/ai/claims";
 import {
@@ -70,6 +72,16 @@ export interface DraftFilters {
   agent?: string;
   /** The lead's sending profile: a profile id, or "default" for a lead not tied to one yet. */
   sender?: string;
+  /** The prospect's market, matched against the prospect's categories (forex, metals, ...). */
+  market?: string;
+  /** The prospect's pipeline stage (`prospects.status`). */
+  stage?: string;
+  /** The prospect's evidence-backed tier, resolved exactly as the Leads page resolves it. */
+  tier?: LeadFilters["tier"];
+  /** Whether the prospect has at least one stored contact email. */
+  hasEmail?: boolean;
+  /** Only leads not yet contacted: no outbound message and no accepted/queued send. */
+  notContacted?: boolean;
   /** Which workspace-zone day window it was saved in. */
   added?: AddedRange;
   addedFrom?: string;
@@ -79,6 +91,23 @@ export interface DraftFilters {
   /** Injectable clock, so day boundaries are testable. */
   now?: Date;
 }
+
+/**
+ * "Not yet contacted", as a predicate over the joined prospect `p.id`: no outbound message (a Sent
+ * copy counts) and no send that was accepted, queued or in flight. It is the contact notion the send
+ * gate itself refuses on; it does not follow identity-merged duplicate links, so a lead whose only
+ * contact was recorded under a merged twin reads as not-yet-contacted here — an over-inclusive
+ * reading, which the batch then still skips honestly at send time rather than sending twice.
+ */
+const NOT_CONTACTED_SQL = `NOT EXISTS (
+    SELECT 1 FROM messages m
+     WHERE m.direction = 'outbound' AND m.delivery_status IS DISTINCT FROM 'failed'
+       AND (m.prospect_id = p.id
+            OR m.conversation_id IN (SELECT c.id FROM conversations c WHERE c.prospect_id = p.id))
+  ) AND NOT EXISTS (
+    SELECT 1 FROM outbound_sends s
+     WHERE s.prospect_id = p.id AND s.status IN ('accepted', 'sandbox', 'uncertain', 'sending', 'queued')
+  )`;
 
 /** The SQL for a workspace-zone day window, pushing its two instants as params. */
 function addedCondition(filters: DraftFilters, params: unknown[]): string | null {
@@ -123,6 +152,23 @@ function draftWhere(
     params.push(filters.sender);
     conditions.push(`p.sending_profile_id = $${params.length}`);
   }
+  if (filters.stage) {
+    params.push(filters.stage);
+    conditions.push(`p.status = $${params.length}`);
+  }
+  if (filters.market) {
+    params.push(JSON.stringify([filters.market]));
+    conditions.push(`p.categories @> $${params.length}::jsonb`);
+  }
+  if (filters.hasEmail === true) {
+    conditions.push(`EXISTS (SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id)`);
+  } else if (filters.hasEmail === false) {
+    conditions.push(`NOT EXISTS (SELECT 1 FROM prospect_emails pe WHERE pe.prospect_id = p.id)`);
+  }
+  if (filters.notContacted) conditions.push(NOT_CONTACTED_SQL);
+  // Only when a tier is asked for: `leadModelConditions` adds its own excluded-tier guard, which is
+  // the default posture anyway, so calling it unconditionally would change counts the founder did not ask to change.
+  if (filters.tier !== undefined) conditions.push(leadModelConditions({ tier: filters.tier }, params));
   const added = addedCondition(filters, params);
   if (added) conditions.push(added);
   return { conditions, params };
@@ -173,6 +219,53 @@ export async function countDrafts(
   const result = await db.query<{ n: number }>(
     `${DRAFT_COUNT_SELECT}
      ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}`,
+    params,
+  );
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+/**
+ * The drafts a campaign batch may select: first-contact drafts still awaiting the founder, matching
+ * the filters. The order is documented and total — newest first, ties broken by id — so the same
+ * filters and limit always resolve the same selection.
+ */
+export async function listBatchCandidates(
+  filters: DraftFilters = {},
+  limit: number,
+): Promise<Draft[]> {
+  filters = {
+    ...filters,
+    timezone: filters.timezone ?? (await getWorkspaceSettings()).timezone,
+    now: filters.now ?? new Date(),
+  };
+  const db = await getDb();
+  const { conditions, params } = draftWhere(undefined, filters.agent, filters);
+  conditions.push("d.kind = 'first_contact'", "d.status IN ('draft', 'approved')");
+  const capped = Math.min(Math.max(Math.floor(limit), 1), MAX_DRAFT_LIMIT);
+  params.push(capped);
+  const result = await db.query<any>(
+    `${DRAFT_SELECT}
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY d.updated_at DESC, d.id DESC
+     LIMIT $${params.length}`,
+    params,
+  );
+  return result.rows.map(mapDraft);
+}
+
+/** How many first-contact drafts still awaiting the founder match the filters in total. */
+export async function countBatchCandidates(filters: DraftFilters = {}): Promise<number> {
+  filters = {
+    ...filters,
+    timezone: filters.timezone ?? (await getWorkspaceSettings()).timezone,
+    now: filters.now ?? new Date(),
+  };
+  const db = await getDb();
+  const { conditions, params } = draftWhere(undefined, filters.agent, filters);
+  conditions.push("d.kind = 'first_contact'", "d.status IN ('draft', 'approved')");
+  const result = await db.query<{ n: number }>(
+    `${DRAFT_COUNT_SELECT}
+     WHERE ${conditions.join(" AND ")}`,
     params,
   );
   return Number(result.rows[0]?.n ?? 0);
