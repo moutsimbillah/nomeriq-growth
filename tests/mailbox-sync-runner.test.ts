@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -373,5 +373,244 @@ main
     const result = bash(`bash "$RUNNER" & bash "$RUNNER" & wait; cat "$LOG_PATH"`, { RUNNER: runner, LOCK_PATH: join(dir, "lock"), LOG_PATH: join(dir, "events") });
     expect((result.output.match(/^backup$/gm) ?? []).length).toBe(1);
     expect(result.output).toContain("failure:lock_busy");
+  });
+});
+
+// One verified dump per UTC day. Windows cannot express a dump's POSIX facts (owner, group, mode,
+// link count), has no pg_restore, and has no trusted /var/backups ancestor chain, so only those
+// facts are substituted below: the discovery glob, the strict name pattern, the producer receipt
+// parsing, the UTC-day rule, the take-or-reuse decision, the refusal codes and the re-stamp all run
+// as written. The same functions were also run against real POSIX files with real modes in an
+// isolated Linux matrix, which is reported separately from this suite.
+const dumpName = (clock: string) =>
+  `deploy-${execFileSync("bash", ["-c", "date -u +%Y%m%d"], { encoding: "utf8" }).trim()}T${clock}Z.dump`;
+
+function dayFixture() {
+  const dir = mkdtempSync(join(scratch!, "growth-day-backup-"));
+  const backups = join(dir, "backups");
+  mkdirSync(backups);
+  const backupDir = execFileSync("bash", ["-c", 'cd "$F" && pwd -P'], { encoding: "utf8", env: { ...process.env, F: backups } }).trim();
+  const copy = join(dir, "wrapper.sh");
+  writeFileSync(copy, readFileSync(wrapper, "utf8").replaceAll("/var/backups/growth", backupDir));
+  return { dir, backups, backupDir, copy };
+}
+
+// The producer boundary and the process/OS fact boundaries. Every other line runs unchanged.
+function dayFacts(tableData: string) {
+  return `export TABLE_DATA=${tableData}
+stat() {
+  if [[ "$1" != -c ]]; then command stat "$@"; return $?; fi
+  if [[ "\${3:-}" == "$BACKUPS" ]]; then
+    case "$2" in '%U') printf 'growth\\n'; return 0;; '%a') printf '700\\n'; return 0;; esac
+  elif [[ "\${3:-}" == "$BACKUPS"/* ]]; then
+    case "$2" in
+      '%U') printf '%s\\n' "$FILE_OWNER"; return 0;;
+      '%G') printf '%s\\n' "$FILE_GROUP"; return 0;;
+      '%a') printf '%s\\n' "$FILE_MODE"; return 0;;
+      '%F') printf 'regular file\\n'; return 0;;
+      '%h') printf '%s\\n' "$FILE_NLINK"; return 0;;
+      '%s') printf '%s\\n' "$FILE_SIZE"; return 0;;
+      '%Y') if [[ "$FILE_MTIME" == real ]]; then command stat -c '%Y' "$3"; else printf '%s\\n' "$FILE_MTIME"; fi; return 0;;
+    esac
+  fi
+  command stat "$@"
+}
+pg_restore() {
+  local i
+  for ((i = 0; i < TABLE_DATA; i++)); do printf '1; 0 0 TABLE DATA public t growth\\n'; done
+}
+secure_dir_chain() { printf 'chain\\n' >>"$events"; return 0; }
+touch() { printf 'stamp\\n' >>"$events"; command touch "$@"; }
+take_backup() {
+  printf 'take\\n' >>"$events"
+  local name="$BACKUPS/deploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
+  printf 'x%.0s' {1..2048} >"$name" || return 1
+  printf 'dump: %s\\nsize: %s bytes\\nmode: 600\\ntable-data entries: %s\\n' "$name" 2048 "$TABLE_DATA"
+}`;
+}
+
+function dayHarness(fixture: { copy: string }, tableData: string, body: string) {
+  return `set +e
+source "$WRAPPER"
+set +e
+python3_cmd() { command -v python3; }
+marker=$(mktemp)
+events=$(mktemp)
+record_failure() { printf '%s\\n' "$1" >>"$marker"; printf 'FAIL code=%s\\n' "$1"; }
+require_wrapper_integrity() { return 0; }
+require_deploy_integrity() { return 0; }
+require_cli() { return 0; }
+FILE_OWNER=\${FILE_OWNER:-growth}
+FILE_GROUP=\${FILE_GROUP:-growth}
+FILE_MODE=\${FILE_MODE:-600}
+FILE_NLINK=\${FILE_NLINK:-1}
+FILE_SIZE=\${FILE_SIZE:-2048}
+FILE_MTIME=\${FILE_MTIME:-real}
+${dayFacts(tableData)}
+${body}`;
+}
+
+describe("scheduled mailbox backup: one verified dump per UTC day", () => {
+  it("takes and verifies the day's first dump when the UTC date has none", () => {
+    const f = dayFixture();
+    try {
+      const result = bash(dayHarness(f, "52", `
+receiptfile=$(mktemp)
+dispatch_cli() { printf 'cli\\n' >>"$events"; printf '%s' "$1" >"$receiptfile"; printf '{"status":"completed","runId":"123e4567-e89b-42d3-a456-426614174000"}\\n'; }
+run_once
+printf 'status=%s\\n' "$?"
+printf 'RECEIPT=%s\\n' "$(cat "$receiptfile")"
+printf 'events=%s\\n' "$(tr '\\n' , <"$events")"
+`), { WRAPPER: f.copy });
+      expect(result.status).toBe(0);
+      expect(result.output).toContain("BACKUP verified=1 reused=0");
+      expect(result.output).toContain("SUCCESS backup=1 verified=1 cli_exit=0 run_id=123e4567-e89b-42d3-a456-426614174000 reused=0");
+      expect(result.output).toContain('RECEIPT={"kind":"pg_dump","verified":true,"mode":"600",');
+      expect(result.output).toContain('"reused":false}');
+      expect(result.output).toContain("events=take,chain,cli,");
+      const dumps = readdirSync(f.backups).filter((name) => /^deploy-\d{8}T\d{6}Z\.dump$/.test(name));
+      expect(dumps).toHaveLength(1);
+      expect(readFileSync(join(f.backups, dumps[0])).length).toBe(2048);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it("reuses and re-verifies the day's dump and takes no new dump", () => {
+    const f = dayFixture();
+    const dayStart = Math.floor(Date.now() / 1000 / 86400) * 86400;
+    const existing = join(f.backups, dumpName("000500"));
+    try {
+      writeFileSync(existing, "x".repeat(2048));
+      // The day's dump is hours old: only the UTC day, never the 300-second window, may accept it.
+      utimesSync(existing, dayStart, dayStart);
+      const result = bash(dayHarness(f, "52", `
+receiptfile=$(mktemp)
+take_backup() { printf 'TAKE_SHOULD_NOT_RUN\\n'; return 0; }
+dispatch_cli() { printf 'cli\\n' >>"$events"; printf '%s' "$1" >"$receiptfile"; printf '{"status":"completed","runId":"123e4567-e89b-42d3-a456-426614174000"}\\n'; }
+run_once
+printf 'status=%s\\n' "$?"
+printf 'RECEIPT=%s\\n' "$(cat "$receiptfile")"
+printf 'events=%s\\n' "$(tr '\\n' , <"$events")"
+`), { WRAPPER: f.copy });
+      expect(result.status).toBe(0);
+      expect(result.output).not.toContain("TAKE_SHOULD_NOT_RUN");
+      expect(result.output).toContain(`BACKUP verified=1 reused=1 path=${f.backupDir}/deploy-`);
+      expect(result.output).toContain("SUCCESS backup=1 verified=1 cli_exit=0 run_id=123e4567-e89b-42d3-a456-426614174000 reused=1");
+      expect(result.output).toContain('"reused":true}');
+      expect(result.output).toContain("events=chain,stamp,cli,");
+      const dumps = readdirSync(f.backups);
+      expect(dumps).toEqual([dumpName("000500")]);
+      // The reused dump was re-stamped so the private CLI's own 300-second file-age rule holds:
+      // only the modification time moved, and the file is still the day's own bytes.
+      const after = statSync(existing);
+      expect(after.size).toBe(2048);
+      expect(Date.now() - after.mtimeMs).toBeLessThan(60_000);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ["wrong mode", { FILE_MODE: "644" }],
+    ["zero size", { FILE_SIZE: "0" }],
+    ["below the table-data floor", {}, "49"],
+    ["not today's timestamp", { FILE_MTIME: String(Math.floor(Date.now() / 1000) - 172800) }],
+    ["wrong owner", { FILE_OWNER: "root" }],
+    ["hard-linked", { FILE_NLINK: "2" }],
+  ])("refuses and writes nothing when the day's dump is %s", (_label, env, tableData = "52") => {
+    const f = dayFixture();
+    const existing = join(f.backups, dumpName("060000"));
+    try {
+      writeFileSync(existing, "x".repeat(2048));
+      const before = statSync(existing);
+      const result = bash(dayHarness(f, tableData, `
+take_backup() { printf 'TAKE_SHOULD_NOT_RUN\\n'; return 0; }
+dispatch_cli() { printf 'CLI_SHOULD_NOT_RUN\\n'; }
+run_once
+printf 'status=%s\\n' "$?"
+printf 'marker=%s\\n' "$(cat "$marker")"
+`), { WRAPPER: f.copy, ...env });
+      expect(result.status).toBe(0);
+      expect(result.output).toContain("FAIL code=backup_reuse_invalid");
+      expect(result.output).toContain("status=1");
+      expect(result.output).toContain("marker=backup_reuse_invalid");
+      expect(result.output).not.toMatch(/TAKE_SHOULD_NOT_RUN|CLI_SHOULD_NOT_RUN|SUCCESS/);
+      const after = statSync(existing);
+      expect(after.size).toBe(before.size);
+      expect(after.mtimeMs).toBe(before.mtimeMs);
+      expect(readdirSync(f.backups)).toEqual([dumpName("060000")]);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it("refuses a matching entry that is not a plain file and writes nothing", () => {
+    const f = dayFixture();
+    try {
+      mkdirSync(join(f.backups, dumpName("070000")));
+      const result = bash(dayHarness(f, "52", `
+take_backup() { printf 'TAKE_SHOULD_NOT_RUN\\n'; return 0; }
+dispatch_cli() { printf 'CLI_SHOULD_NOT_RUN\\n'; }
+run_once
+printf 'status=%s\\n' "$?"
+printf 'marker=%s\\n' "$(cat "$marker")"
+`), { WRAPPER: f.copy });
+      expect(result.status).toBe(0);
+      expect(result.output).toContain("FAIL code=backup_day_unsafe");
+      expect(result.output).toContain("marker=backup_day_unsafe");
+      expect(result.output).not.toMatch(/TAKE_SHOULD_NOT_RUN|CLI_SHOULD_NOT_RUN/);
+      expect(statSync(join(f.backups, dumpName("070000"))).isDirectory()).toBe(true);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it("reuses the newest dump of the day when the day holds several", () => {
+    const f = dayFixture();
+    try {
+      const older = join(f.backups, dumpName("010000"));
+      const newer = join(f.backups, dumpName("230000"));
+      writeFileSync(older, "x".repeat(2048));
+      writeFileSync(newer, "x".repeat(2048));
+      const result = bash(dayHarness(f, "52", `
+take_backup() { printf 'TAKE_SHOULD_NOT_RUN\\n'; return 0; }
+printf 'candidate=%s\\n' "$(existing_today_backup)"
+`), { WRAPPER: f.copy });
+      expect(result.status).toBe(0);
+      expect(result.output).toContain(`candidate=${f.backupDir}/${dumpName("230000")}`);
+      expect(readdirSync(f.backups).sort()).toEqual([dumpName("010000"), dumpName("230000")].sort());
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it("keeps a manual undo on a fresh dump even when the UTC day already has one", () => {
+    const f = dayFixture();
+    const runId = "123e4567-e89b-42d3-a456-426614174000";
+    try {
+      writeFileSync(join(f.backups, dumpName("020000")), "x".repeat(2048));
+      const result = bash(dayHarness(f, "52", `
+receiptfile=$(mktemp)
+systemctl() { case "$1 $2" in 'is-enabled growth-mailbox-sync.timer') printf 'disabled\\n';; *) printf 'inactive\\n';; esac; }
+dispatch_cli() { printf 'cli:%s:%s\\n' "$2" "$3" >>"$events"; printf '%s' "$1" >"$receiptfile"; printf '{"status":"undone","runId":"${runId}","journalRows":4}\\n'; }
+undo_once '${runId}'
+printf 'status=%s\\n' "$?"
+printf 'RECEIPT=%s\\n' "$(cat "$receiptfile")"
+printf 'events=%s\\n' "$(tr '\\n' , <"$events")"
+`), { WRAPPER: f.copy });
+      expect(result.status).toBe(0);
+      expect(result.output).toContain(`UNDO_SUCCESS status=undone run_id=${runId} journal_rows=4 backup=1 verified=1`);
+      expect(result.output).toContain("events=");
+      expect(result.output).toMatch(/events=[^\\n]*take,/);
+      expect(result.output).toContain('"reused":false}');
+      expect(result.output).not.toContain('"reused":true}');
+      const dumps = readdirSync(f.backups).filter((name) => /^deploy-\d{8}T\d{6}Z\.dump$/.test(name));
+      expect(dumps).toHaveLength(2);
+    } finally { rmSync(f.dir, { recursive: true, force: true }); }
+  });
+
+  it("accepts a dump timestamp only on the current UTC date", () => {
+    const result = bash(harness(`
+now=1700000000
+day=$((now / 86400 * 86400))
+for t in "$now $now" "$day $now" "$((day - 1)) $now" "$((now + 1)) $now" "$((day + 86400)) $now" ""; do
+  set -- $t
+  if validate_backup_is_today "\${1:-}" "\${2:-}"; then printf 'OK %s\\n' "\${1:-empty}"; else printf 'NO %s\\n' "\${1:-empty}"; fi
+done`));
+    expect(result.status).toBe(0);
+    expect(result.output).toContain("OK 1700000000");
+    expect(result.output.match(new RegExp(`OK ${1700000000 - (1700000000 % 86400)}`, "g"))).toHaveLength(1);
+    expect(result.output.match(/^NO /gm)).toHaveLength(4);
   });
 });

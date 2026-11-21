@@ -72,8 +72,12 @@ never applies migration SQL.
    runs daemon-reload only.
 3. `sudo -n bash /home/ubuntu/growth-mailbox-install/<release-sha>/install-mailbox-sync.sh run-once <release-sha>`
    performs the storage precheck and starts only the new service. The
-   service takes and verifies a fresh dump through the existing authorized deploy routine before
-   the private CLI initializes the database. It records `first-sync.ok` only after systemd reports
+   service keeps one verified dump per UTC day: the first run that date takes it through the
+   existing authorized deploy routine, and every later run of that day reuses and re-verifies
+   that same dump (same path, size, mode 600, owner and group, single link and table-data count)
+   before the private CLI initializes the database. A day whose dump is missing or fails any check
+   refuses the run without a database write, and nothing is deleted to make room. Reversing an
+   individual run is the per-run journal's job, not the dump's. It records `first-sync.ok` only after systemd reports
    `Result=success`, `ExecMainStatus=0`, inactive completion, and the CLI's own completion/checkpoint readback succeeds. This is the
    explicitly approved initial live import, not a health probe.
 4. `sudo -n bash /home/ubuntu/growth-mailbox-install/<release-sha>/install-mailbox-sync.sh enable <release-sha>`

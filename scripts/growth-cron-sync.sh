@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Root entry point for the future scheduled mailbox sync.
 # This file is deliberately fail-closed: it never enables a route or a timer.
+#
+# Backup policy (founder decision of 21 Nov 2026): the 15-minute schedule stays, but a run takes
+# a new disaster-recovery dump at most once per UTC day. Every run still verifies a dump of the
+# current UTC date before any database write: the day's own dump is re-verified and reused, and a
+# day with no dump at all is the only case that produces a new one. An unusable day dump refuses
+# the run, and nothing is ever deleted to make room. Run-level undo is the per-run journal.
 set -euo pipefail
 
 readonly APP=/home/growth/app
@@ -30,6 +36,7 @@ BACKUP_SIZE=0
 BACKUP_MODE=''
 BACKUP_TABLE_DATA=0
 BACKUP_RECEIPT=''
+BACKUP_REUSED=0
 
 # All failure output is a fixed code. Command diagnostics are intentionally discarded.
 record_failure() {
@@ -224,6 +231,85 @@ raw_take_backup() {
   take_backup
 }
 
+# ---- one verified dump per UTC day ---------------------------------------------------------
+# A run takes a new dump only when the current UTC date has no dump at all. The day's existing
+# dump is re-verified with the same checks as a fresh one and reused; an unusable day dump
+# refuses the run before any database write. Nothing is repaired, replaced or deleted.
+
+utc_today() { date -u +%Y%m%d; }
+
+# The newest dump whose name is the current UTC date, or an empty string when the day has none.
+# A matching entry that is not a plain regular file is refused (return 2), never repaired.
+existing_today_backup() {
+  local today entry newest=''
+  today=$(utc_today) || return 2
+  for entry in "$BACKUPS"/deploy-"$today"T[0-9][0-9][0-9][0-9][0-9][0-9]Z.dump; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    [[ -f "$entry" && ! -L "$entry" ]] || return 2
+    if [[ -z "$newest" || "$entry" > "$newest" ]]; then newest=$entry; fi
+  done
+  printf '%s' "$newest"
+}
+
+# Read a reused dump's own facts into the same fields the producer's receipt fills, through the
+# same listing path, so the receipt handed to the private CLI describes the file that was checked.
+read_backup_facts() {
+  local path=$1 size mode listing status entries
+  size=$(stat -c '%s' "$path" 2>/dev/null) || return 1
+  mode=$(stat -c '%a' "$path" 2>/dev/null) || return 1
+  if listing=$(pg_restore --list "$path" 2>/dev/null); then status=0; else status=$?; fi
+  [[ "$status" == 0 ]] || return 1
+  entries=$(printf '%s\n' "$listing" | grep -c 'TABLE DATA') || return 1
+  BACKUP_PATH=$path; BACKUP_SIZE=$size; BACKUP_MODE=$mode; BACKUP_TABLE_DATA=$entries
+  [[ "$BACKUP_SIZE" =~ ^[1-9][0-9]*$ && "$BACKUP_MODE" == 600 && "$BACKUP_TABLE_DATA" =~ ^[0-9]+$ ]]
+}
+
+# The one owned copy of the day's dump stays in place, so the run has to present it to the private
+# CLI's own verifier, which requires the file itself to be at most 300 seconds old. A dump that
+# has just passed every check above is therefore re-stamped: the modification time alone moves,
+# and immediately re-checked against the same bound. Name, path, bytes, size, owner, group, mode
+# and link count are untouched, and the retention guard ages a dump by its name, not this stamp.
+stamp_reused_backup() {
+  local path=$1 mtime now
+  touch -c -- "$path" 2>/dev/null || return 1
+  mtime=$(stat -c '%Y' "$path" 2>/dev/null) || return 1
+  now=$(date +%s) || return 1
+  [[ "$mtime" =~ ^[0-9]+$ && "$mtime" -le "$now" && $((now - mtime)) -le "$MAX_BACKUP_AGE" ]]
+}
+
+# Reuse is verified with the same file facts as a fresh dump; the UTC day stands in for the
+# 300-second window, so the day's dump is accepted while its own timestamp is still that date.
+verify_reused_backup() {
+  local path=$1 today mtime now
+  verify_backup_facts "$path" || return 1
+  today=$(utc_today) || return 1
+  [[ "$path" =~ ^/var/backups/growth/deploy-${today}T[0-9]{6}Z\.dump$ ]] || return 1
+  mtime=$(stat -c '%Y' "$path" 2>/dev/null) || return 1
+  now=$(date +%s) || return 1
+  validate_backup_is_today "$mtime" "$now"
+}
+
+# The run's backup step: the day's reused dump, or the day's only new one. Never both, never
+# neither, and never a write to the database without a verified dump behind it.
+ensure_day_backup() {
+  local candidate raw
+  if ! candidate=$(existing_today_backup); then
+    fail backup_day_unsafe
+    return 1
+  fi
+  if [[ -n "$candidate" ]]; then
+    read_backup_facts "$candidate" || { fail backup_reuse_invalid; return 1; }
+    verify_reused_backup "$candidate" || { fail backup_reuse_invalid; return 1; }
+    stamp_reused_backup "$candidate" || { fail backup_reuse_unstamped; return 1; }
+    BACKUP_REUSED=1
+    return 0
+  fi
+  BACKUP_REUSED=0
+  raw=$(raw_take_backup) || { fail backup_failed; return 1; }
+  parse_receipt "$raw" || { fail backup_receipt_invalid; return 1; }
+  verify_backup "$BACKUP_PATH" "$INVOCATION_EPOCH" || { fail backup_verify_failed; return 1; }
+}
+
 parse_receipt() {
   local raw=$1 line lines=0
   BACKUP_PATH=''; BACKUP_SIZE=0; BACKUP_MODE=''; BACKUP_TABLE_DATA=0
@@ -262,8 +348,20 @@ validate_backup_time() {
   [[ "$mtime" -ge "$invocation" && "$mtime" -le "$now" && $((now - mtime)) -le "$MAX_BACKUP_AGE" ]]
 }
 
-verify_backup() {
-  local path=$1 invocation=$2 size mode owner file_type mtime now entries listing real_path producer_status
+# UTC day equality. Epoch seconds divided by one day is the UTC day number, and UTC has no offset
+# to correct for, so the same quotient means the same UTC date. A future stamp is refused too.
+validate_backup_is_today() {
+  local mtime=$1 now=$2
+  [[ "$mtime" =~ ^[0-9]+$ && "$now" =~ ^[0-9]+$ ]] || return 1
+  [[ "$mtime" -le "$now" ]] || return 1
+  [[ $((mtime / 86400)) == $((now / 86400)) ]]
+}
+
+# The file facts every accepted dump must have, whether the producer just wrote it or a run of the
+# same UTC day reuses it: strict name, private growth-owned directory, plain regular file at its
+# canonical path, owner and group growth, mode 600, one link, and at least the minimum size.
+verify_backup_facts() {
+  local path=$1 owner group mode file_type nlink size real_path
   [[ "$path" =~ ^/var/backups/growth/deploy-[0-9]{8}T[0-9]{6}Z\.dump$ ]] || return 1
   secure_dir_chain /var/backups || return 1
   # The approved dump producer writes as growth into this existing private growth-owned directory.
@@ -274,11 +372,21 @@ verify_backup() {
   real_path=$(readlink -f -- "$path" 2>/dev/null) || return 1
   [[ "$real_path" == "$path" ]] || return 1
   owner=$(stat -c '%U' "$path" 2>/dev/null) || return 1
+  group=$(stat -c '%G' "$path" 2>/dev/null) || return 1
   mode=$(stat -c '%a' "$path" 2>/dev/null) || return 1
   file_type=$(stat -c '%F' "$path" 2>/dev/null) || return 1
-  [[ "$owner" == growth && "$mode" == 600 && "$file_type" == "regular file" ]] || return 1
+  nlink=$(stat -c '%h' "$path" 2>/dev/null) || return 1
+  [[ "$owner" == growth && "$group" == growth && "$mode" == 600 && "$file_type" == "regular file" && "$nlink" == 1 ]] || return 1
   size=$(stat -c '%s' "$path" 2>/dev/null) || return 1
   [[ "$size" =~ ^[0-9]+$ && "$size" -ge "$MIN_SIZE" && "$size" == "$BACKUP_SIZE" ]] || return 1
+  # The listing floor applies to a reused dump exactly as to a fresh one.
+  [[ "$BACKUP_TABLE_DATA" =~ ^[0-9]+$ && "$BACKUP_TABLE_DATA" -ge "$MIN_TABLE_DATA" ]]
+}
+
+# The fresh path: the file facts, plus the producer's own freshness window around this invocation.
+verify_backup() {
+  local path=$1 invocation=$2 mtime now listing producer_status
+  verify_backup_facts "$path" || return 1
   mtime=$(stat -c '%Y' "$path" 2>/dev/null) || return 1
   now=$(date +%s) || return 1
   validate_backup_time "$mtime" "$invocation" "$now" || return 1
@@ -291,9 +399,11 @@ verify_backup() {
 }
 
 verified_receipt_json() {
+  local reused=false
   [[ "$BACKUP_PATH" =~ ^/var/backups/growth/deploy-[0-9]{8}T[0-9]{6}Z\.dump$ && "$BACKUP_MODE" == 600 ]] || return 1
-  printf '{"kind":"pg_dump","verified":true,"mode":"600","path":"%s","sizeBytes":%s,"tableDataCount":%s,"verifiedAt":"%s"}\n' \
-    "$BACKUP_PATH" "$BACKUP_SIZE" "$BACKUP_TABLE_DATA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if [[ "$BACKUP_REUSED" == 1 ]]; then reused=true; fi
+  printf '{"kind":"pg_dump","verified":true,"mode":"600","path":"%s","sizeBytes":%s,"tableDataCount":%s,"verifiedAt":"%s","reused":%s}\n' \
+    "$BACKUP_PATH" "$BACKUP_SIZE" "$BACKUP_TABLE_DATA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$reused"
 }
 
 filter_cli_output() {
@@ -343,18 +453,18 @@ print(status,run_id,rows)'
 }
 
 run_once() {
-  local raw receipt output parsed status run_id
+  local receipt output parsed status run_id
   INVOCATION_EPOCH=$(date +%s) || return 1
   require_cli || { fail cli_missing; return 1; }
-  raw=$(raw_take_backup) || { fail backup_failed; return 1; }
-  parse_receipt "$raw" || { fail backup_receipt_invalid; return 1; }
-  verify_backup "$BACKUP_PATH" "$INVOCATION_EPOCH" || { fail backup_verify_failed; return 1; }
+  ensure_day_backup || return 1
   receipt=$(verified_receipt_json) || { fail receipt_build_failed; return 1; }
+  # reused=0 means this run took the day's new dump; reused=1 means it re-verified the day's own.
+  printf 'BACKUP verified=1 reused=%s path=%s\n' "$BACKUP_REUSED" "$BACKUP_PATH"
   if output=$(dispatch_cli "$receipt"); then
     parsed=$(printf '%s' "$output" | parse_cli_result) || { fail cli_result_invalid; return 1; }
     read -r status run_id <<<"$parsed"
     [[ "$status" == completed ]] || { fail cli_result_invalid; return 1; }
-    printf 'SUCCESS backup=1 verified=1 cli_exit=0 run_id=%s\n' "$run_id"
+    printf 'SUCCESS backup=1 verified=1 cli_exit=0 run_id=%s reused=%s\n' "$run_id" "$BACKUP_REUSED"
   else
     parsed=$(printf '%s' "$output" | parse_cli_result 2>/dev/null) || { fail cli_failed; return 1; }
     read -r status run_id <<<"$parsed"
@@ -371,6 +481,7 @@ undo_once() {
   [[ "$(systemctl is-active "$SERVICE" 2>/dev/null || true)" == inactive ]] || { fail service_active; return 1; }
   INVOCATION_EPOCH=$(date +%s) || return 1
   require_cli || { fail cli_missing; return 1; }
+  # Undo is a manual recovery action, not a scheduled run: it keeps taking a fresh dump.
   raw=$(raw_take_backup) || { fail backup_failed; return 1; }
   parse_receipt "$raw" || { fail backup_receipt_invalid; return 1; }
   verify_backup "$BACKUP_PATH" "$INVOCATION_EPOCH" || { fail backup_verify_failed; return 1; }
