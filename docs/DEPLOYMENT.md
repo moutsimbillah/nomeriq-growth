@@ -367,15 +367,122 @@ For a deploy that includes a migration, the order with this revision is:
    build identifier and running process start time are unchanged.
 3. Use the existing target assertion and env-loaded `npm run db:migrate` command in **Applying
    migrations to production** above. Immediately before it runs, require the live ledger to contain
-   exactly the 34 files through `034_strict_prospect_identity.sql`, with `035_mailbox_sync_journal.sql`
-   and its three tables absent. The runner applies each file and its ledger insert in one transaction;
-   do not hand-write the ledger. For this release, require only migration 035 newly applied, the
-   ledger to move from 34 to 35 rows, and its `applied_at` to be no earlier than the recorded runner
-   start. The runner prints all ledger rows first and the `Target` line last, so read back the full
-   35-row output and require `Target: remote PostgreSQL / Supabase`. Independently verify the three
-   new tables (`mailbox_sync_leases`, `mailbox_sync_runs`, `mailbox_sync_journal`), sequence, indexes,
-   row-level security, capture function and expected triggers, plus unchanged pre-existing business
-   counts. Stop if any migration other than 035 is pending or any assertion differs.
+   exactly the 34 files through `034_strict_prospect_identity.sql`, with `035_mailbox_sync_journal.sql`,
+   `036_override_write_order.sql`, `037_campaign_batch_pacing.sql` and `038_campaign_autostart.sql`
+   all absent. The runner applies each file in numeric order and writes each ledger row in the same
+   transaction; do not hand-write the ledger.
+   This release has **four** new migrations, so require **all four** newly applied in that numeric
+   order, the ledger to move from **34 to 38 rows**, and each `applied_at` to be no earlier than the
+   recorded runner start. The runner prints all ledger rows first and the `Target` line last, so read
+   back the full **38-row** output and require `Target: remote PostgreSQL / Supabase`.
+
+   Read back 035's own artefacts: the three new tables (`mailbox_sync_leases`, `mailbox_sync_runs`,
+   `mailbox_sync_journal`), the `mailbox_sync_journal_capture_seq` sequence, the indexes
+   (`mailbox_sync_runs_account_idx`, `mailbox_sync_runs_active_idx`, `mailbox_sync_journal_run_idx`),
+   row-level security on all three tables, the `mailbox_sync_capture_mutation` function and the
+   `mailbox_sync_capture` triggers, plus unchanged pre-existing business counts.
+
+   Read back 036's own artefacts — the column and the index, by exact definition:
+
+   ```sql
+   SELECT data_type, is_identity, identity_generation
+     FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='prospect_assessment_overrides'
+      AND column_name='write_seq';
+   -- expect exactly one row:  bigint | YES | BY DEFAULT
+
+   SELECT indexdef FROM pg_indexes
+    WHERE schemaname='public' AND indexname='prospect_assessment_overrides_write_order_idx';
+   -- expect: CREATE INDEX ... ON public.prospect_assessment_overrides
+   --         USING btree (prospect_id, field_name, decided_at DESC, write_seq DESC)
+   ```
+
+   Read back 037's own artefacts — the six new `campaigns` columns, the `campaign_run_journal`
+   table with its `level` CHECK, and the three new indexes:
+
+   ```sql
+   SELECT column_name, data_type, is_nullable, column_default
+     FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='campaigns'
+      AND column_name IN ('scheduled_at','per_minute_cap','batch_size','filter_spec',
+                          'consecutive_failures','last_error')
+    ORDER BY column_name;
+   -- expect exactly six rows:
+   --   batch_size           | integer                  | NO  | 0
+   --   consecutive_failures | integer                  | NO  | 0
+   --   filter_spec          | jsonb                    | NO  | '{}'::jsonb
+   --   last_error           | text                     | YES | (null)
+   --   per_minute_cap       | integer                  | YES | (null)
+   --   scheduled_at         | timestamp with time zone | YES | (null)
+
+   -- per_minute_cap is integer and NULLABLE, and its CHECK admits NULL or 1..6 (an explicit 0 or 7+
+   -- is refused, never clamped):
+   SELECT pg_get_constraintdef(oid) AS def
+     FROM pg_constraint
+    WHERE conrelid='public.campaigns'::regclass AND contype='c'
+      AND pg_get_constraintdef(oid) LIKE '%per_minute_cap%';
+   -- expect exactly one row, a CHECK of the form
+   --   CHECK ((per_minute_cap IS NULL OR ((per_minute_cap >= 1) AND (per_minute_cap <= 6))))
+
+   SELECT column_name, data_type, is_nullable
+     FROM information_schema.columns
+    WHERE table_schema='public' AND table_name='campaign_run_journal'
+    ORDER BY ordinal_position;
+   -- expect exactly eight rows, in order: id uuid NO, campaign_id uuid NO, level text NO,
+   --   item_id uuid YES, draft_id uuid YES, reason text NO, metadata jsonb NO, created_at NO
+
+   -- The journal carries a level CHECK; 038 widens its accepted set, read there.
+   SELECT count(*) AS level_checks
+     FROM pg_constraint
+    WHERE conrelid='public.campaign_run_journal'::regclass AND contype='c'
+      AND pg_get_constraintdef(oid) LIKE '%level%';
+   -- expect exactly 1
+
+   SELECT indexname FROM pg_indexes
+    WHERE schemaname='public'
+      AND indexname IN ('outbound_sends_campaign_completed_idx','campaigns_due_idx',
+                        'campaign_run_journal_campaign_idx')
+    ORDER BY indexname;
+   -- expect exactly three rows, one per named index
+   ```
+
+   Read back 038's own artefact — the widened journal `level` CHECK, read by its own definition (a
+   name check alone would not prove the accepted values):
+
+   ```sql
+   SELECT
+     def LIKE '%item_skipped%'    AS has_item_skipped,
+     def LIKE '%system_failure%'  AS has_system_failure,
+     def LIKE '%paused%'          AS has_paused,
+     def LIKE '%resumed%'         AS has_resumed,
+     def LIKE '%completed%'       AS has_completed,
+     def LIKE '%auto_started%'    AS has_auto_started,
+     def LIKE '%auto_start_held%' AS has_auto_start_held
+   FROM (SELECT pg_get_constraintdef(oid) AS def
+           FROM pg_constraint
+          WHERE conrelid='public.campaign_run_journal'::regclass AND contype='c'
+            AND pg_get_constraintdef(oid) LIKE '%auto_started%') s;
+   -- expect exactly one row with all seven columns true
+   ```
+
+   Read back the ledger rows for all four:
+
+   ```sql
+   SELECT id FROM _migrations WHERE id >= '035' ORDER BY id;
+   -- expect exactly four rows, in numeric order:
+   --   035_mailbox_sync_journal.sql
+   --   036_override_write_order.sql
+   --   037_campaign_batch_pacing.sql
+   --   038_campaign_autostart.sql
+   ```
+
+   All four migrations are additive (`CREATE TABLE/INDEX/SEQUENCE IF NOT EXISTS`, `ADD COLUMN IF NOT
+   EXISTS`, guarded trigger/constraint creation; 036 adds one nullable identity column and one index;
+   037 adds six nullable/defaulted columns, one table and three indexes; 038 only widens the journal's
+   `level` CHECK to accept two further values and drops and re-adds nothing else), so all four are
+   **retained on rollback** — nothing is dropped or rewritten and the pre-release code ignores them.
+   Stop if any migration other than 035, 036, 037 and 038 is pending, if any of the four is missing or
+   out of numeric order, or if any assertion differs.
 4. Only after those checks, run `deploy.sh build` followed by `deploy.sh restart`, verify the exact
    commit, health, service, timers and baseline counts. Do not invoke sync, send or research as a probe.
 
