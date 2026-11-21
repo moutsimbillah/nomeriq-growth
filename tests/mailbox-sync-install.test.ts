@@ -2,8 +2,10 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveScratchDir } from "./helpers/scratch";
 
 const root = process.cwd();
+const scratch = resolveScratchDir();
 const installer = join(root, "scripts", "install-mailbox-sync.sh");
 const storage = join(root, "scripts", "mailbox-sync-storage-check.sh");
 const wrapper = join(root, "scripts", "growth-cron-sync.sh");
@@ -15,8 +17,6 @@ function bash(script: string, env: Record<string, string> = {}) {
 }
 function source(path: string, body: string) { return bash(`source ${JSON.stringify(path)}; set +e; sudo(){ printf UNEXPECTED_PRIVILEGED_CALL >&2; return 97; }; systemctl(){ printf UNEXPECTED_SERVICE_CALL >&2; return 97; }; ${body}`); }
 function storageFixture() {
-  const scratch = process.env.TMPDIR;
-  if (!scratch) throw new Error("profile scratch required");
   const dir = mkdtempSync(join(scratch, "mailbox-storage-retention-"));
   const posix = execFileSync("bash", ["-c", 'cd "$FIXTURE" && pwd -P'], { env: { ...process.env, FIXTURE: dir }, encoding: "utf8" }).trim();
   const script = join(dir, "storage.sh");
@@ -27,8 +27,6 @@ function storageFixture() {
 }
 
 function bootstrapFixture() {
-  const scratch = process.env.TMPDIR;
-  if (!scratch) throw new Error("profile scratch required");
   const dir = mkdtempSync(join(scratch, "mailbox-bootstrap-"));
   const repo = join(dir, "app");
   const stage = join(dir, "staged-installers");
@@ -185,7 +183,7 @@ describe("mailbox operational package", () => {
   });
 
   it("preserves scanner parity for real files, exact trust exception, and partial producer failure", () => {
-    const dir = mkdtempSync(join(process.env.TMPDIR!, "mailbox-scan-parity-"));
+    const dir = mkdtempSync(join(scratch, "mailbox-scan-parity-"));
     const modules = join(dir, "credential-directory", "node_modules");
     const toPosix = (path: string) => process.platform === "win32"
       ? execFileSync("bash", ["-c", 'cygpath -u "$P"'], { env: { ...process.env, P: path.replace(/\\\\/g, "/") }, encoding: "utf8" }).trim()
@@ -237,7 +235,7 @@ describe("mailbox operational package", () => {
   });
 
   it("allows only authentic caniuse-lite bytes and rejects altered or other credential-like files", () => {
-    const dir = mkdtempSync(join(process.env.TMPDIR!, "mailbox-credential-guard-"));
+    const dir = mkdtempSync(join(scratch, "mailbox-credential-guard-"));
     const app = join(dir, "app");
     const modules = join(app, "node_modules");
     const authentic = join(modules, "caniuse-lite/data/features/credential-management.js");

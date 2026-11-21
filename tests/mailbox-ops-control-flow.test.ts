@@ -2,15 +2,15 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveScratchDir } from "./helpers/scratch";
 
 const source = readFileSync("scripts/install-mailbox-sync.sh", "utf8");
 const sha = "c55480ce357c490c404074b495e3a77d2515465c";
-const scratch = process.env.TMPDIR;
-if (!scratch) throw new Error("profile scratch required");
+const scratch = resolveScratchDir();
 const deploymentDoc = readFileSync("docs/MAILBOX-AUTOSYNC-DEPLOYMENT.md", "utf8");
 
 function fixture() {
-  const dir = mkdtempSync(join(scratch!, "mailbox-ops-control-"));
+  const dir = mkdtempSync(join(scratch, "mailbox-ops-control-"));
   const posix = execFileSync("bash", ["-c", 'cd "$FIXTURE" && pwd -P'], { env: { ...process.env, FIXTURE: dir }, encoding: "utf8" }).trim();
   const locations: Record<string, string> = {
     "readonly APP_ROOT=/home/growth/app": `readonly APP_ROOT="${posix}/app"`,

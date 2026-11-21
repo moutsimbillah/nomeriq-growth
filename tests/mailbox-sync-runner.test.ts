@@ -2,10 +2,10 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveScratchDir } from "./helpers/scratch";
 
 const wrapper = join(process.cwd(), "scripts", "growth-cron-sync.sh");
-const scratch = process.env.TMPDIR;
-if (!scratch) throw new Error("TMPDIR must be the active growth-profile scratch directory");
+const scratch = resolveScratchDir();
 
 function bash(body: string, env: Record<string, string> = {}) {
   try {
@@ -30,7 +30,7 @@ ${body}`;
 }
 
 function mappedWrapper() {
-  const dir = mkdtempSync(join(scratch!, "growth-wrapper-map-"));
+  const dir = mkdtempSync(join(scratch, "growth-wrapper-map-"));
   const run = join(dir, "run").replaceAll("\\", "/");
   const source = readFileSync(wrapper, "utf8")
     .replaceAll('readonly RUNTIME_LOCK_DIR=/run/growth-mailbox-sync', `readonly RUNTIME_LOCK_DIR="${run}/growth-mailbox-sync"`)
@@ -360,7 +360,7 @@ main unexpected; status=$?; printf 'ARGS_STATUS=%s\\n' "$status"`));
   });
 
   it("documents mocked serialization because Windows bash cannot prove cross-process flock", () => {
-    const dir = mkdtempSync(join(scratch!, "growth-lock-"));
+    const dir = mkdtempSync(join(scratch, "growth-lock-"));
     const runner = join(dir, "runner.sh");
     writeFileSync(runner, `source "$WRAPPER"
 require_wrapper_integrity(){ return 0; }; require_deploy_integrity(){ return 0; }; require_cli(){ return 0; }
@@ -386,7 +386,7 @@ const dumpName = (clock: string) =>
   `deploy-${execFileSync("bash", ["-c", "date -u +%Y%m%d"], { encoding: "utf8" }).trim()}T${clock}Z.dump`;
 
 function dayFixture() {
-  const dir = mkdtempSync(join(scratch!, "growth-day-backup-"));
+  const dir = mkdtempSync(join(scratch, "growth-day-backup-"));
   const backups = join(dir, "backups");
   mkdirSync(backups);
   const backupDir = execFileSync("bash", ["-c", 'cd "$F" && pwd -P'], { encoding: "utf8", env: { ...process.env, F: backups } }).trim();
