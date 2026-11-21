@@ -289,7 +289,7 @@ case "$CASE" in
   *) command mkdir "$RUNTIME_LOCK_DIR" ;;
 esac
 case "$CASE" in lock-*) printf sentinel > "$LOCKFILE" ;; esac
-CREATE_LOG="$TEST_RUN/../creates.log"
+CREATE_LOG="$(command dirname "$TEST_RUN")/creates.log"
 : > "$CREATE_LOG"
 mkdir(){ printf 'mkdir\\n' >> "$CREATE_LOG"; command mkdir "$@"; }
 chmod(){ echo UNEXPECTED_REPAIR; return 99; }

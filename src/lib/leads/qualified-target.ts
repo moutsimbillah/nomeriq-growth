@@ -29,7 +29,7 @@ const latestOverride = (alias: string, field: "eligibility" | "tier") => `(
       SELECT CASE WHEN o.decision = 'set' THEN o.value #>> '{}' END
       FROM prospect_assessment_overrides o
       WHERE o.prospect_id = ${alias}.id AND o.field_name = '${field}'
-      ORDER BY o.decided_at DESC, o.id DESC LIMIT 1)`;
+      ORDER BY o.decided_at DESC, o.write_seq DESC LIMIT 1)`;
 
 /**
  * The single SQL predicate every qualified-target reader uses, over one `prospects` row aliased

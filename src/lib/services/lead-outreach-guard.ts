@@ -18,12 +18,12 @@ export async function getLeadOutreachBlock(prospectId: string, client?: DbClient
   const db = client ?? await getDb();
   const row = (await db.query<{ tier: string | null; assessment_id: string | null; eligibility: string }>(
     `SELECT (SELECT id FROM prospect_assessments WHERE prospect_id=$1 ORDER BY assessed_at DESC,created_at DESC,id DESC LIMIT 1) AS assessment_id,
-      COALESCE((SELECT CASE WHEN decision='set' THEN value #>> '{}' ELSE NULL END FROM prospect_assessment_overrides WHERE prospect_id=$1 AND field_name='eligibility' ORDER BY decided_at DESC,id DESC LIMIT 1),
+      COALESCE((SELECT CASE WHEN decision='set' THEN value #>> '{}' ELSE NULL END FROM prospect_assessment_overrides WHERE prospect_id=$1 AND field_name='eligibility' ORDER BY decided_at DESC,write_seq DESC LIMIT 1),
         (SELECT eligibility FROM prospect_assessments WHERE prospect_id=$1 ORDER BY assessed_at DESC,created_at DESC,id DESC LIMIT 1),'unknown') AS eligibility,
       COALESCE(
       (SELECT CASE WHEN o.decision = 'set' THEN o.value #>> '{}' ELSE NULL END
          FROM prospect_assessment_overrides o WHERE o.prospect_id = $1 AND o.field_name = 'tier'
-         ORDER BY o.decided_at DESC, o.id DESC LIMIT 1),
+         ORDER BY o.decided_at DESC, o.write_seq DESC LIMIT 1),
       (SELECT a.tier FROM prospect_assessments a WHERE a.prospect_id = $1
          ORDER BY a.assessed_at DESC, a.created_at DESC, a.id DESC LIMIT 1)) AS tier`,
     [prospectId],
@@ -58,7 +58,7 @@ export async function getLeadOutreachBlocksBatch(prospectIds: string[], client?:
         FROM prospect_assessments a WHERE a.prospect_id IN (SELECT prospect_id FROM ids)),
       assessment_latest AS (SELECT * FROM assessment_ranked WHERE rn = 1),
       override_ranked AS (
-        SELECT o.*, row_number() OVER (PARTITION BY o.prospect_id, o.field_name ORDER BY o.decided_at DESC, o.id DESC) AS rn
+        SELECT o.*, row_number() OVER (PARTITION BY o.prospect_id, o.field_name ORDER BY o.decided_at DESC, o.write_seq DESC) AS rn
         FROM prospect_assessment_overrides o
         WHERE o.prospect_id IN (SELECT prospect_id FROM ids) AND o.field_name IN ('eligibility','tier')),
       override_latest AS (SELECT * FROM override_ranked WHERE rn = 1)

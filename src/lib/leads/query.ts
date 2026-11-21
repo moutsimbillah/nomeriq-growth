@@ -10,7 +10,7 @@ const projection = `WITH assessment AS (
 ), overrides AS (
   SELECT coalesce(jsonb_object_agg(field_name,value) FILTER (WHERE decision='set'),'{}'::jsonb) AS v FROM (
     SELECT DISTINCT ON (field_name) field_name,decision,value FROM prospect_assessment_overrides
-    WHERE prospect_id=p.id ORDER BY field_name,decided_at DESC,id DESC
+    WHERE prospect_id=p.id ORDER BY field_name,decided_at DESC,write_seq DESC
   ) latest
 ), effective AS (
   SELECT a.id, a.assessed_at, coalesce(a.findings,'[]'::jsonb) AS findings,
