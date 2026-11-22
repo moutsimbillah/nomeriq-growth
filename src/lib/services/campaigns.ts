@@ -234,6 +234,12 @@ export interface CampaignBatchInput {
   authorize: boolean;
   /** The founder's own "approve this batch" action. Both flags must be present to create. */
   approveBatch: boolean;
+  /**
+   * The founder's own explicit alternative to the all-or-nothing refusal: approve and queue ONLY the
+   * selected drafts that pass the mechanical check, leaving the failing ones unapproved and named in
+   * the audit row. Absent (or false) keeps the refusal — nothing is ever excluded silently.
+   */
+  approvePassingOnly?: boolean;
   filters: CampaignBatchFilters;
   limit: number;
   scheduledAt?: string | null;
@@ -333,6 +339,12 @@ export async function previewCampaignBatch(input: {
  * only if ALL pass, on the founder's explicit approval — approve exactly those drafts as a single
  * audited batch and queue the campaign. All-or-nothing: one failing draft refuses the whole batch,
  * names every failure, approves nothing and creates nothing. There is no silent skipping.
+ *
+ * The single exception is the founder's OWN explicit alternative (`approvePassingOnly: true`, sent by
+ * the one "Approve the N that pass instead" control): the batch is then re-formed to the drafts that
+ * pass, the campaign's batch_size and filter_spec carry the reduced selection, the audit row records
+ * the selected count and every excluded draft id, and the failing drafts stay unapproved. It still
+ * refuses when nothing would be left.
  */
 export async function createBatchCampaign(
   input: CampaignBatchInput,
@@ -359,8 +371,8 @@ export async function createBatchCampaign(
   }
 
   const limit = normalizeBatchLimit(input.limit);
-  const drafts = await listBatchCandidates(input.filters, limit);
-  if (!drafts.length) {
+  const candidates = await listBatchCandidates(input.filters, limit);
+  if (!candidates.length) {
     throw new AppError(
       "No prepared drafts match these filters. Nothing was approved and no campaign was created.",
       409,
@@ -369,7 +381,7 @@ export async function createBatchCampaign(
   }
 
   const footer = await complianceFooter();
-  const refusals = drafts.flatMap((draft) =>
+  const refusals = candidates.flatMap((draft) =>
     checkDraftMechanics({
       id: draft.id,
       subject: draft.subject,
@@ -378,19 +390,31 @@ export async function createBatchCampaign(
       complianceFooter: footer,
     }),
   );
-  if (refusals.length) {
-    throw new AppError(batchCheckMessage(refusals, drafts.length), 409, "batch_check_failed");
+  const failingDraftIds = [...new Set(refusals.map((refusal) => refusal.draftId))];
+  const failingSet = new Set(failingDraftIds);
+  const passing = candidates.filter((draft) => !failingSet.has(draft.id));
+  if (refusals.length && (!input.approvePassingOnly || !passing.length)) {
+    // Unchanged: one failing draft refuses the whole batch and creates nothing, naming every failure.
+    // The only way past it is the founder's own explicit alternative, and even that refuses when no
+    // selected draft would pass.
+    throw new AppError(batchCheckMessage(refusals, candidates.length), 409, "batch_check_failed");
   }
+  // Only the explicit `approvePassingOnly` ever narrows the batch — never a silent drop.
+  const drafts = refusals.length ? passing : candidates;
 
   const scheduledAt = normalizeScheduledAt(input.scheduledAt);
   const perMinuteCap = normalizePerMinuteCap(input.perMinuteCap, DEFAULT_PER_MINUTE_CAP);
-  const filterSpec = { ...input.filters, limit };
+  // The batch record itself carries the reduced selection, so the exclusion is readable on the row.
+  const filterSpec = refusals.length
+    ? { ...input.filters, limit, excludedFailingDraftIds: failingDraftIds }
+    : { ...input.filters, limit };
   const draftIds = drafts.map((draft) => draft.id);
   const id = crypto.randomUUID();
 
   const db = await getDb();
   await db.transaction(async (tx) => {
-    // Approve exactly the selected drafts — the same status a one-by-one approval sets.
+    // Approve exactly the selected drafts — the same status a one-by-one approval sets. A draft the
+    // check refused is never in this list, so it stays unapproved.
     await tx.query(
       `UPDATE drafts SET status = 'approved', approved_at = now(), approved_by = $1, updated_at = now()
         WHERE id = ANY($2::uuid[]) AND status IN ('draft', 'approved')`,
@@ -408,7 +432,8 @@ export async function createBatchCampaign(
       batchSize: drafts.length,
       filterSpec,
     });
-    // One audit row for the whole batch action: the filters, the count and every draft id.
+    // One audit row for the whole batch action: the filters, the count and every draft id — plus, when
+    // the batch was reduced, how many were selected and every failing draft left out.
     await tx.query(
       `INSERT INTO audit_log
         (id, actor_type, actor_id, action, entity_type, entity_id, metadata)
@@ -417,7 +442,19 @@ export async function createBatchCampaign(
         crypto.randomUUID(),
         input.userId,
         id,
-        JSON.stringify({ filters: input.filters, limit, count: drafts.length, draftIds }),
+        JSON.stringify({
+          filters: input.filters,
+          limit,
+          count: drafts.length,
+          draftIds,
+          ...(refusals.length
+            ? {
+                selectedCount: candidates.length,
+                approvePassingOnly: true,
+                excludedFailing: { count: failingDraftIds.length, draftIds: failingDraftIds },
+              }
+            : {}),
+        }),
       ],
     );
   });

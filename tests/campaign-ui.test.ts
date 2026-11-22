@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { NO_PER_MINUTE_LABEL } from "@/lib/campaigns/pacing";
+import { NO_PER_MINUTE_LABEL, PER_MINUTE_RANGE_HINT } from "@/lib/campaigns/pacing";
+import * as agentTag from "@/lib/agent/agentTag";
+import * as types from "@/lib/types";
 import { compileTsx } from "./helpers/tsx-loader";
 
 /**
@@ -11,6 +13,9 @@ import { compileTsx } from "./helpers/tsx-loader";
  * module is compiled here; only the presentation children (`./ui`) are stubbed, because they import
  * server-side modules this test does not need. This proves the markup the founder actually sees — the
  * empty per-minute label, a named failing draft, an overdue sync, a named skip.
+ *
+ * The builder's form is presentational (`CampaignBuilderPanel`), so the ORDER of the real shipped markup
+ * is asserted here too: every control above the candidate list, and the action bar sticky.
  */
 
 const code = compileTsx("src/components/campaign-ui.tsx");
@@ -23,6 +28,9 @@ function load(id: string) {
         React.createElement("div", { "data-notice": "1" }, title, children),
     };
   }
+  // The app's own modules the component imports at runtime, resolved the way the app resolves them.
+  if (id === "@/lib/types") return types;
+  if (id === "@/lib/agent/agentTag") return agentTag;
   return nativeRequire(id);
 }
 
@@ -172,6 +180,175 @@ describe("the approve button states exactly how many emails it queues", () => {
   });
 });
 
+describe("the builder keeps every control above the candidate list", () => {
+  const preview = {
+    matches: 32,
+    selected: 32,
+    draftIds: Array.from({ length: 32 }, (_, index) => `draft-${index}`),
+    sample: [
+      { id: "a", prospectName: "Delta Signals", subject: "A quick question about Delta Signals" },
+      { id: "b", prospectName: "Meridian FX", subject: "An idea for Meridian FX" },
+    ],
+    failing: [1, 2, 3, 4].map((n) => ({
+      draftId: `bad-${n}`,
+      rule: "empty_subject",
+      message: "It has an empty subject line.",
+    })),
+    failingPreviews: [1, 2, 3, 4].map((n) => ({
+      draftId: `bad-${n}`,
+      prospectName: `Broken Draft ${n}`,
+      subject: "",
+      message: "It has an empty subject line.",
+    })),
+    ready: false,
+  };
+
+  const renderPanel = (overrides: Record<string, unknown> = {}) =>
+    render("CampaignBuilderPanel", {
+      accounts: [
+        { id: "acct-1", emailAddress: "founder@nomeriq.test", provider: "smtp", status: "connected" },
+      ],
+      name: "Tier 1 signals — November",
+      accountId: "acct-1",
+      filters: { agent: "", market: "", stage: "", tier: "", sender: "", hasEmail: false, notContacted: true },
+      batchSize: "",
+      timing: "now",
+      whenLocal: "",
+      perMinute: "",
+      perMinuteSummary: NO_PER_MINUTE_LABEL,
+      perMinuteHint: PER_MINUTE_RANGE_HINT,
+      timezone: "Asia/Karachi",
+      preview,
+      previewLoading: false,
+      previewError: null,
+      error: null,
+      matches: 32,
+      overMatched: false,
+      queueCount: 32,
+      failingCount: 4,
+      passingCount: 28,
+      pending: false,
+      onNameChange: () => {},
+      onAccountChange: () => {},
+      onFilterChange: () => {},
+      onBatchSizeChange: () => {},
+      onTimingChange: () => {},
+      onWhenChange: () => {},
+      onPerMinuteChange: () => {},
+      onApprove: () => {},
+      onApprovePassingOnly: () => {},
+      onClose: () => {},
+      ...overrides,
+    });
+
+  it("renders the count, the batch size, the start choice and the per-minute field before the list", () => {
+    const html = renderPanel();
+    const list = html.indexOf("A few of the emails that will go");
+    expect(list).toBeGreaterThan(-1);
+    // the live count is the anchor, and every control sits BETWEEN it and the list
+    expect(html.indexOf("data-campaign-count")).toBeGreaterThan(-1);
+    expect(html.indexOf("data-campaign-count")).toBeLessThan(html.indexOf("Batch size"));
+    expect(html.indexOf("Batch size")).toBeLessThan(list);
+    expect(html.indexOf("At a date and time")).toBeLessThan(list);
+    expect(html.indexOf("Per-minute limit")).toBeLessThan(list);
+    expect(html.indexOf("Approve and queue 32 emails")).toBeLessThan(list);
+    // and the batch-size field is inside the action bar, with the one approve button
+    const actions = html.slice(
+      html.indexOf("data-campaign-actions"),
+      html.indexOf("data-campaign-candidates"),
+    );
+    expect(actions).toContain("Batch size");
+    expect(actions).toContain("Approve and queue 32 emails");
+  });
+
+  it("puts the candidate list in its own bounded, scrollable region, last in the panel", () => {
+    const html = renderPanel();
+    const at = html.indexOf("data-campaign-candidates");
+    const region = html.slice(at, html.indexOf(">", at));
+    expect(region).toContain("overflow-y-auto");
+    expect(region).toContain("max-h-");
+    expect(at).toBeGreaterThan(html.indexOf("data-campaign-actions"));
+    // the failing drafts are still listed, inside that region
+    expect(html.slice(at)).toContain("Broken Draft 1");
+  });
+
+  it("stays sticky at the bottom so a long list cannot bury the approve control", () => {
+    const html = renderPanel();
+    const at = html.indexOf("data-campaign-actions");
+    const bar = html.slice(at, html.indexOf(">", at));
+    expect(bar).toContain("sticky");
+    expect(bar).toContain("bottom-0");
+    expect(bar).toContain("z-20");
+  });
+
+  it("keeps the all-or-nothing refusal: the failing drafts are named and the one button is disabled", () => {
+    const html = renderPanel();
+    expect(html).toContain(
+      "Fix any failing draft first — the batch is all-or-nothing, so one bad draft blocks the whole batch.",
+    );
+    expect(html).toMatch(/data-campaign-approve[^>]*disabled/);
+    expect(html).toContain("Broken Draft 1");
+    expect(html).toContain("It has an empty subject line.");
+    // the honest labels are untouched by the reordering
+    expect(html).toContain("No per-minute limit — sends go back to back");
+    expect(html).toContain("Times are Asia/Karachi.");
+    expect(html).toContain("Up to 32 match. Leave empty to take them all.");
+  });
+
+  it("offers ONE explicit alternative that states the reduced count and how many are excluded", () => {
+    const html = renderPanel();
+    expect(html).toContain("28 of 32 selected drafts passed");
+    expect(html).toContain("4 failing drafts stay unapproved");
+    expect(html).toContain("Approve the 28 that pass instead");
+    // the alternative is a real enabled control, beside the disabled refusal
+    const at = html.indexOf("data-campaign-approve-passing");
+    expect(at).toBeGreaterThan(-1);
+    const tag = html.slice(html.lastIndexOf("<button", at), html.indexOf(">", at));
+    expect(tag).not.toContain("disabled");
+  });
+
+  it("offers no alternative when every draft passes, or when nothing would pass", () => {
+    const allPass = renderPanel({
+      queueCount: 32,
+      failingCount: 0,
+      passingCount: 32,
+      preview: { ...preview, failing: [], failingPreviews: [], ready: true },
+    });
+    expect(allPass).not.toContain("that pass instead");
+    expect(allPass).toContain("One click approves these 32 drafts and queues them.");
+
+    const allFail = renderPanel({
+      queueCount: 4,
+      failingCount: 4,
+      passingCount: 0,
+      preview: { ...preview, selected: 4 },
+    });
+    expect(allFail).not.toContain("that pass instead");
+    expect(allFail).toContain("Broken Draft 4");
+  });
+});
+
+describe("the outcome notice after 'only the ones that pass'", () => {
+  it("states the reduced count and names every failing draft that was left out", () => {
+    const html = render("CampaignBatchApprovedNotice", {
+      approved: 28,
+      excluded: [
+        { draftId: "bad-1", prospectName: "Broken Draft 1", message: "It has an empty subject line." },
+        { draftId: "bad-4", prospectName: "Broken Draft 4", message: "It has an empty subject line." },
+      ],
+    });
+    expect(html).toContain('data-campaign-passing-notice');
+    expect(html).toContain("Approved and queued 28 emails — only the drafts that passed");
+    expect(html).toContain("2 failing drafts were left out and NOT approved");
+    expect(html).toContain("Broken Draft 1");
+    expect(html).toContain("Broken Draft 4");
+  });
+
+  it("renders nothing when nothing was excluded", () => {
+    expect(render("CampaignBatchApprovedNotice", { approved: 5, excluded: [] })).toBe("");
+  });
+});
+
 describe("the builder and list share one pacing sentence and one schedule conversion", () => {
   const builder = readFileSync("src/components/campaign-builder.tsx", "utf8");
   const status = readFileSync("src/components/campaign-status.tsx", "utf8");
@@ -188,6 +365,13 @@ describe("the builder and list share one pacing sentence and one schedule conver
     expect(builder).toMatch(/\/api\/campaigns"/);
     expect(builder).toMatch(/approveBatch: true/);
     expect(builder).toMatch(/authorize: true/);
+  });
+
+  it("sends the reduced-batch flag for the founder's own alternative click alone", () => {
+    expect(builder).toMatch(/approvePassingOnly/);
+    expect(builder).toMatch(/approvePassingOnly: passingOnly/);
+    expect(builder).toMatch(/onApprovePassingOnly=\{\(\) => void approve\(\{ passingOnly: true \}\)\}/);
+    expect(builder).toMatch(/onApprove=\{\(\) => void approve\(\)\}/);
   });
 
   it("the list can pause, resume, cancel, start a manual campaign and save pacing while running", () => {
