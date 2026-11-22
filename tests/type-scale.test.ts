@@ -90,6 +90,7 @@ describe("serif stays on titles", () => {
       "src/components/ui.tsx",            // PageHeader h1
       "src/components/auth-shell.tsx",    // sign-in titles
       "src/components/unsubscribe-form.tsx",
+      "src/app/unsubscribe/[token]/page.tsx", // invalid/already-unsubscribed page titles
       "src/app/(app)/dashboard/page.tsx", // an h2 page title
       "src/app/globals.css",              // the token definitions themselves
     ]);
