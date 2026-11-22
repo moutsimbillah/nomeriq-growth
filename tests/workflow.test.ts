@@ -39,7 +39,7 @@ import {
 } from "@/lib/services/campaigns";
 import { classifyReply } from "@/lib/email/classify";
 import { SUSPECTED_OPT_OUT_NEXT_ACTION } from "@/lib/email/sync";
-import { unsubscribeByToken } from "@/lib/services/suppressions";
+import { inspectUnsubscribeToken, unsubscribeByToken } from "@/lib/services/suppressions";
 import { runAgentAction, TOOL_DEFINITIONS } from "@/lib/agent/service";
 import { createApiKey, type ApiKeyIdentity } from "@/lib/agent/apiKeys";
 import { assessmentFor } from "./helpers/lead-assessment";
@@ -635,6 +635,20 @@ describe("Nomeriq Growth end-to-end workflow", () => {
         createHash("sha256").update(rawToken).digest("hex"),
       ],
     );
+    // The page asks before it offers anything, and asking must never change anything.
+    expect(await inspectUnsubscribeToken(rawToken)).toEqual({ status: "valid" });
+    expect(await inspectUnsubscribeToken("not-a-real-token-value-xxxxxxxx")).toEqual({
+      status: "invalid",
+    });
+    expect(await inspectUnsubscribeToken("too-short")).toEqual({ status: "invalid" });
+    const beforeUse = await getProspect(saved.prospect.id);
+    expect(beforeUse?.doNotContact).toBe(false);
+    const suppressionBeforeUse = await db.query(
+      `SELECT 1 FROM suppressions WHERE normalized_email = $1 AND active = true`,
+      ["hello@delta-commodities.example.com"],
+    );
+    expect(suppressionBeforeUse.rows.length).toBe(0);
+
     const result = await unsubscribeByToken(rawToken);
     expect(result.email).toBe("hello@delta-commodities.example.com");
     const prospect = await getProspect(saved.prospect.id);
@@ -647,6 +661,10 @@ describe("Nomeriq Growth end-to-end workflow", () => {
     await expect(unsubscribeByToken("not-a-real-token-value-xxxxxxxx")).rejects.toThrow(
       /not valid/i,
     );
+    // Once honoured, the page must say so instead of offering the button again.
+    expect(await inspectUnsubscribeToken(rawToken)).toEqual({
+      status: "already_unsubscribed",
+    });
   });
 
   it("archives a prospect, cancels drafts and suppression-blocks future sending", async () => {

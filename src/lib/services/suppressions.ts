@@ -2,6 +2,38 @@ import { createHash } from "node:crypto";
 import { getDb } from "@/lib/db/client";
 import { AppError, isEmail, normalizeEmail } from "@/lib/utils";
 
+/**
+ * Read-only: does this raw token belong to a real unsubscribe link, and has it already been used?
+ *
+ * The page asks this before it offers anything, so a broken or already-honoured link never shows a
+ * "Confirm unsubscribe" button. This never writes — the only thing that changes a suppression is
+ * the recipient pressing the button, which goes through `unsubscribeByToken`.
+ */
+export type UnsubscribeLinkState =
+  | { status: "invalid" }
+  | { status: "already_unsubscribed" }
+  | { status: "valid" };
+
+export async function inspectUnsubscribeToken(
+  rawToken: string,
+): Promise<UnsubscribeLinkState> {
+  if (!rawToken || rawToken.length < 20) return { status: "invalid" };
+  const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+  const db = await getDb();
+  const tokenResult = await db.query<{ normalized_email: string }>(
+    `SELECT normalized_email FROM unsubscribe_tokens WHERE token_hash = $1 LIMIT 1`,
+    [tokenHash],
+  );
+  const token = tokenResult.rows[0];
+  if (!token) return { status: "invalid" };
+  const existing = await db.query(
+    `SELECT 1 FROM suppressions WHERE normalized_email = $1 AND active = true`,
+    [token.normalized_email],
+  );
+  if (existing.rows.length) return { status: "already_unsubscribed" };
+  return { status: "valid" };
+}
+
 export async function unsubscribeByToken(
   rawToken: string,
 ): Promise<{ email: string; alreadySuppressed: boolean }> {
