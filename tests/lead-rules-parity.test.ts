@@ -27,6 +27,13 @@ describe("lead rules parity", () => {
     expect(LEAD_RULES_TEXT).toBe(normalise(onDisk));
   });
 
+  it("pins the rules revision every assessment and prompt is stamped with", () => {
+    // The version rides on every stored assessment and every agent prompt, so
+    // moving it is a founder decision: changing the date here without the
+    // founder's amendment is the same defect as editing the rules by hand.
+    expect(LEAD_RULES_VERSION).toBe("lead-rules-2026-11-25");
+  });
+
   it("weights product fit as the approved rubric does", () => {
     // The plan is explicit: an unchecked lead (30) must never rank below one
     // with a mature platform (10). This asserts the direction, not just numbers.
