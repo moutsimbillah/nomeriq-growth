@@ -17,7 +17,7 @@ import {
   perMinuteSummary,
 } from "@/lib/campaigns/pacing";
 import { zonedWallClockToUtc } from "@/lib/dates/timezone";
-import type { CampaignBatchPreview } from "@/lib/services/campaigns";
+import type { CampaignBatchPreview, CampaignBatchResult } from "@/lib/services/campaigns";
 
 export interface CampaignAccountOption {
   id: string;
@@ -172,18 +172,9 @@ export function CampaignBuilder({ accounts }: { accounts: CampaignAccountOption[
         return setError(caught instanceof Error ? caught.message : "That start time is not valid.");
       }
     }
-    // The drafts the alternative leaves out, named before the panel closes so the outcome can list them.
-    const excluded =
-      failingDraftCount > 0
-        ? (preview.failingPreviews ?? []).map((row) => ({
-            draftId: row.draftId,
-            prospectName: row.prospectName,
-            message: row.message,
-          }))
-        : [];
     setPending(true);
     try {
-      await apiRequest("/api/campaigns", {
+      const result = await apiRequest("/api/campaigns", {
         body: {
           name: name.trim(),
           accountId,
@@ -196,14 +187,14 @@ export function CampaignBuilder({ accounts }: { accounts: CampaignAccountOption[
           approvePassingOnly: passingOnly,
           authorize: true,
         },
-      });
-      if (passingOnly) {
-        setPassingOutcome({ approved: passingCount, excluded });
+      }) as CampaignBatchResult;
+      if (passingOnly && result.excludedFailing.length > 0) {
+        setPassingOutcome({ approved: result.approvedCount, excluded: result.excludedFailing });
       } else {
         setNotice(
           scheduledAt
-            ? `Approved and queued ${queueCount} email${queueCount === 1 ? "" : "s"}; it starts itself at the scheduled time.`
-            : `Approved and queued ${queueCount} email${queueCount === 1 ? "" : "s"}. It starts when you press Start.`,
+            ? `Approved and queued ${result.approvedCount} email${result.approvedCount === 1 ? "" : "s"}; it starts itself at the scheduled time.`
+            : `Approved and queued ${result.approvedCount} email${result.approvedCount === 1 ? "" : "s"}. It starts when you press Start.`,
         );
       }
       setOpen(false);

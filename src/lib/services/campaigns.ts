@@ -346,9 +346,19 @@ export async function previewCampaignBatch(input: {
  * the selected count and every excluded draft id, and the failing drafts stay unapproved. It still
  * refuses when nothing would be left.
  */
+export interface CampaignBatchResult {
+  id: string;
+  /** Number of drafts selected when the request was processed, not when the UI preview ran. */
+  selectedCount: number;
+  /** Number actually approved and queued by this transaction. */
+  approvedCount: number;
+  /** Current selected drafts explicitly left out by the passing-only option. */
+  excludedFailing: Array<{ draftId: string; prospectName: string; message: string }>;
+}
+
 export async function createBatchCampaign(
   input: CampaignBatchInput,
-): Promise<{ id: string }> {
+): Promise<CampaignBatchResult> {
   if (!input.name.trim()) throw new AppError("Give the campaign a name.");
   if (!input.authorize) {
     throw new AppError(
@@ -392,6 +402,16 @@ export async function createBatchCampaign(
   );
   const failingDraftIds = [...new Set(refusals.map((refusal) => refusal.draftId))];
   const failingSet = new Set(failingDraftIds);
+  const excludedFailing = candidates
+    .filter((draft) => failingSet.has(draft.id))
+    .map((draft) => ({
+      draftId: draft.id,
+      prospectName: draft.prospectName ?? "Unknown prospect",
+      message: refusals
+        .filter((refusal) => refusal.draftId === draft.id)
+        .map((refusal) => `${refusal.rule}: ${refusal.message}`)
+        .join("; "),
+    }));
   const passing = candidates.filter((draft) => !failingSet.has(draft.id));
   if (refusals.length && (!input.approvePassingOnly || !passing.length)) {
     // Unchanged: one failing draft refuses the whole batch and creates nothing, naming every failure.
@@ -458,7 +478,12 @@ export async function createBatchCampaign(
       ],
     );
   });
-  return { id };
+  return {
+    id,
+    selectedCount: candidates.length,
+    approvedCount: drafts.length,
+    excludedFailing,
+  };
 }
 
 /* ------------------------------------------------------------------ pacing edits */

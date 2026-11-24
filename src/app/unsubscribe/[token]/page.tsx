@@ -1,8 +1,23 @@
 import { LogoMark } from "@/components/logo";
 import { UnsubscribeForm } from "@/components/unsubscribe-form";
-import { inspectUnsubscribeToken } from "@/lib/services/suppressions";
+import {
+  inspectUnsubscribeToken,
+  type UnsubscribeLinkState,
+} from "@/lib/services/suppressions";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * A database hiccup must never take the opt-out page down. Falling back to the confirmation form is
+ * safe because pressing it re-validates the token server-side; invalid links still refuse there.
+ */
+async function unsubscribeLinkState(token: string): Promise<UnsubscribeLinkState> {
+  try {
+    return await inspectUnsubscribeToken(token);
+  } catch {
+    return { status: "valid" };
+  }
+}
 
 export default async function UnsubscribePage({
   params,
@@ -10,7 +25,7 @@ export default async function UnsubscribePage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const link = await inspectUnsubscribeToken(token);
+  const link = await unsubscribeLinkState(token);
   return (
     <main className="flex min-h-screen items-center justify-center px-4 py-12">
       <div className="w-full max-w-[500px]">

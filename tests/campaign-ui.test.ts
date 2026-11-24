@@ -372,6 +372,8 @@ describe("the builder and list share one pacing sentence and one schedule conver
     expect(builder).toMatch(/approvePassingOnly: passingOnly/);
     expect(builder).toMatch(/onApprovePassingOnly=\{\(\) => void approve\(\{ passingOnly: true \}\)\}/);
     expect(builder).toMatch(/onApprove=\{\(\) => void approve\(\)\}/);
+    expect(builder).toMatch(/setPassingOutcome\(\{ approved: result\.approvedCount, excluded: result\.excludedFailing \}\)/);
+    expect(builder).toMatch(/Approved and queued \$\{result\.approvedCount\}/);
   });
 
   it("the list can pause, resume, cancel, start a manual campaign and save pacing while running", () => {
