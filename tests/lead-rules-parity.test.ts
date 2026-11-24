@@ -49,12 +49,13 @@ describe("lead rules parity", () => {
   });
 
   it("carries the founder's amendments in the same text the agents receive", () => {
-    // These four decisions changed the original rules; if the canonical text
+    // These five decisions changed the original rules; if the canonical text
     // ever loses them, every agent silently reverts to the superseded version.
     expect(LEAD_RULES_TEXT).toContain("Founder-approved amendments — 7 Nov 2026");
     expect(LEAD_RULES_TEXT).toContain("1,000 on one official Instagram or YouTube account");
     expect(LEAD_RULES_TEXT).toContain("High 70, Medium 45, Unknown 30");
     expect(LEAD_RULES_TEXT).toContain("Growth-Chat-Search");
+    expect(LEAD_RULES_TEXT).toContain("Hermes' native `web_search` for direct lead discovery");
     // The tier model the engine relies on must be described, including the
     // Category B record that is never emailed and never counted.
     expect(LEAD_RULES_TEXT).toContain("Category B — Alternative contact");

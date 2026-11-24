@@ -44,4 +44,8 @@ The original rules above are preserved verbatim. Where a numeric choice or sourc
 3. Old "Tier 2": my original rules say "Category B / Tier 2" was used for alternative-contact prospects. Treat old Tier 2 only as a hint for Category B, confirmed by evidence (no published email = Category B; an email found = re-assess normally).
 4. Search source: use the official DeepSeek provider's built-in search (Growth-Chat-Search) for now; leave Brave optional for later. No card or billing from me needed now.
 
+## Subsequent founder-approved amendment — 25 Nov 2026
+
+1. Connected Hermes sessions may use Hermes' native `web_search` for direct lead discovery when assigned by the founder. This does not change the Growth engine's Growth-Chat-Search source; Hermes must not call the Growth DeepSeek API for that work.
+
 Desktop screenshots at 1280 only, as agreed. The not-interested change is approved.

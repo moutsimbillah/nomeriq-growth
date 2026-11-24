@@ -115,5 +115,7 @@ describe("the rules every agent receives", () => {
     // operational guidance must survive alongside the rules.
     expect(ASSISTANT_SKILL).toContain("## Duplicate checking — mandatory");
     expect(ASSISTANT_SKILL).toContain("## The search ledger — check before you repeat");
+    expect(ASSISTANT_SKILL).toContain("when no target exists, omit it and Growth records a standalone assistant search");
+    expect(ASSISTANT_SKILL).toContain("Hermes uses its native `web_search`");
   });
 });

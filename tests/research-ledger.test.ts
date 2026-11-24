@@ -263,4 +263,39 @@ describe("MCP ledger tools", () => {
     expect(row!.resultCount).toBe(7);
     expect(row!.newLeadCount).toBe(2);
   });
+
+  it("records standalone assistant searches without a job and upserts by normalized query", async () => {
+    const query = "Hermes standalone search ledger";
+    const first = await runAgentAction(writer, "record_search_query", {
+      query,
+      status: "used",
+      resultCount: 5,
+      newLeadCount: 1,
+    });
+
+    expect(first.data.recorded).toBe(true);
+    expect(first.data.ledger).toMatchObject({ used: true, jobId: null });
+
+    const second = await runAgentAction(writer, "record_search_query", {
+      query: "  HERMES   standalone search ledger ",
+      status: "used",
+      resultCount: 8,
+      newLeadCount: 2,
+    });
+    expect(second.data.recorded).toBe(true);
+
+    const db = await getDb();
+    const rows = await db.query<{ count: string; result_count: number; new_lead_count: number }>(
+      `SELECT count(*)::text AS count, max(result_count) AS result_count,
+              max(new_lead_count) AS new_lead_count
+       FROM research_queries WHERE job_id IS NULL AND query_key = $1`,
+      [normalizeQuery(query)],
+    );
+    expect(rows.rows[0]?.count).toBe("1");
+    expect(rows.rows[0]?.result_count).toBe(8);
+    expect(rows.rows[0]?.new_lead_count).toBe(2);
+
+    const recent = await isQueryRecentlyUsed(query);
+    expect(recent).toMatchObject({ used: true, jobId: null });
+  });
 });
