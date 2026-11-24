@@ -18,6 +18,7 @@ import { draftSimulatedReply, simulationSystemPrompt } from "@/lib/ai/simulate";
 import { generateFollowUp } from "@/lib/ai/writer";
 import { getProspect } from "@/lib/services/prospects";
 import { saveLeadAssessment } from "@/lib/services/lead-model";
+import { LEAD_RULES_VERSION } from "@/lib/leads/model";
 import type { ProductTruth } from "@/lib/types";
 
 /** Leave no AI assignment behind: later test files expect an unconfigured registry. */
@@ -146,7 +147,7 @@ describe("the shared lead context", () => {
     for (const needle of [
       "Business: Señales Pro", "Website: https://senales.example.test", "Country: Spain",
       // The stored assessment replaces the old "Tier: not recorded" placeholder.
-      "Assessment: recorded 2026-11-02 09:00 UTC (rules version lead-rules-2026-11-07)",
+      `Assessment: recorded 2026-11-02 09:00 UTC (rules version ${LEAD_RULES_VERSION})`,
       "Tier: Other signal provider",
       "Product fit: Medium — partial infrastructure (some gaps evidenced)",
       "Platform maturity: partial",
