@@ -41,6 +41,11 @@ const schema = z.object({
   perMinuteCap: z.number().int().nullable().optional(),
   /** The founder's explicit "approve this batch" action. Required for the batch path. */
   approveBatch: z.boolean().optional(),
+  /**
+   * The founder's own explicit alternative to the all-or-nothing refusal: queue only the selected
+   * drafts that pass the check. Absent means the refusal stands — nothing is excluded silently.
+   */
+  approvePassingOnly: z.boolean().optional(),
   authorize: z.literal(true),
 });
 
@@ -77,6 +82,7 @@ export async function POST(request: Request) {
         userId: user.id,
         authorize: true,
         approveBatch: input.approveBatch === true,
+        approvePassingOnly: input.approvePassingOnly === true,
         filters: input.filters,
         limit: input.limit ?? 50,
         scheduledAt: input.scheduledAt,

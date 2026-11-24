@@ -375,6 +375,137 @@ describe("batch creation", () => {
     const campaigns = await db.query(`SELECT 1 FROM campaigns WHERE name = 'Batch refuse 1'`);
     expect(campaigns.rows).toHaveLength(0);
   });
+
+  it("approves only the drafts that pass on the founder's explicit alternative, and records the reduced batch", async () => {
+    const db = await getDb();
+    const accountId = await newMailbox();
+    const good = await makeDraft(accountId, "Cb Pass Good", "cb-pass-good.example", "hello@cb-pass-good.example");
+    const bad = await makeDraft(accountId, "Cb Pass Bad", "cb-pass-bad.example", "hello@cb-pass-bad.example", {
+      subject: "",
+    });
+
+    const preview = await previewCampaignBatch({ filters: { sender: accountId }, limit: 10 });
+    expect(preview.selected).toBe(2);
+    expect(preview.failingPreviews.map((row) => row.draftId)).toEqual([bad.draftId]);
+
+    // The founder leaves the preview open while another draft becomes a current candidate. The POST
+    // must report what its fresh selection actually approved/excluded, not the earlier preview's rows.
+    const addedAfterPreview = await makeDraft(
+      accountId,
+      "Cb Pass Added After Preview",
+      "cb-pass-added-after-preview.example",
+      "hello@cb-pass-added-after-preview.example",
+      { subject: "" },
+    );
+
+    // WITHOUT the founder's own click the refusal stands: nothing is excluded silently, nothing created.
+    await expect(
+      createBatchCampaign({
+        name: "Batch passing-only no",
+        accountId,
+        userId: state.userId,
+        authorize: true,
+        approveBatch: true,
+        filters: { sender: accountId },
+        limit: 10,
+      }),
+    ).rejects.toMatchObject({ code: "batch_check_failed" });
+    expect((await db.query(`SELECT 1 FROM campaigns WHERE name = 'Batch passing-only no'`)).rows).toHaveLength(0);
+
+    // With it, the batch is re-formed to the drafts that passed, and the reduced selection is recorded.
+    const result = await createBatchCampaign({
+      name: "Batch passing-only yes",
+      accountId,
+      userId: state.userId,
+      authorize: true,
+      approveBatch: true,
+      approvePassingOnly: true,
+      filters: { sender: accountId },
+      limit: 10,
+      perMinuteCap: null,
+    });
+    const { id } = result;
+    state.campaigns.push(id);
+    expect(result.selectedCount).toBe(3);
+    expect(result.approvedCount).toBe(1);
+    expect(result.excludedFailing).toHaveLength(2);
+    expect(result.excludedFailing.map((row) => row.draftId)).toEqual(
+      expect.arrayContaining([bad.draftId, addedAfterPreview.draftId]),
+    );
+    expect(result.excludedFailing.map((row) => row.prospectName)).toEqual(
+      expect.arrayContaining(["Cb Pass Bad", "Cb Pass Added After Preview"]),
+    );
+
+    const items = await db.query<{ draft_id: string }>(
+      `SELECT draft_id FROM campaign_items WHERE campaign_id = $1 ORDER BY position ASC`,
+      [id],
+    );
+    expect(items.rows.map((row) => row.draft_id)).toEqual([good.draftId]);
+
+    const campaign = await campaignRow(id);
+    expect(Number(campaign.batch_size)).toBe(1);
+    expect(campaign.filter_spec.excludedFailingDraftIds).toEqual(
+      expect.arrayContaining([bad.draftId, addedAfterPreview.draftId]),
+    );
+    expect(campaign.filter_spec.excludedFailingDraftIds).toHaveLength(2);
+
+    // The failing drafts are left UNAPPROVED and remain in a fresh preview.
+    const statuses = await db.query<{ id: string; status: string }>(
+      `SELECT id, status FROM drafts WHERE id = ANY($1::uuid[])`,
+      [[good.draftId, bad.draftId, addedAfterPreview.draftId]],
+    );
+    const byId = new Map(statuses.rows.map((row) => [row.id, row.status]));
+    expect(byId.get(good.draftId)).toBe("approved");
+    expect(byId.get(bad.draftId)).toBe("draft");
+    const after = await previewCampaignBatch({ filters: { sender: accountId }, limit: 10 });
+    expect(after.failingPreviews.map((row) => row.prospectName)).toEqual(
+      expect.arrayContaining(["Cb Pass Bad", "Cb Pass Added After Preview"]),
+    );
+    expect(after.failingPreviews).toHaveLength(2);
+
+    // The audit row reflects the reduced selection and names every excluded draft.
+    const audit = await db.query<any>(
+      `SELECT metadata FROM audit_log WHERE action = 'campaign.batch_approved' AND entity_id = $1`,
+      [id],
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0].metadata.count).toBe(1);
+    expect(audit.rows[0].metadata.draftIds).toEqual([good.draftId]);
+    expect(audit.rows[0].metadata.selectedCount).toBe(3);
+    expect(audit.rows[0].metadata.approvePassingOnly).toBe(true);
+    expect(audit.rows[0].metadata.excludedFailing).toEqual({
+      count: 2,
+      draftIds: expect.arrayContaining([bad.draftId, addedAfterPreview.draftId]),
+    });
+  });
+
+  it("refuses the alternative too when no selected draft would pass", async () => {
+    const db = await getDb();
+    const accountId = await newMailbox();
+    const bad = await makeDraft(accountId, "Cb Pass None", "cb-pass-none.example", "hello@cb-pass-none.example", {
+      subject: "",
+    });
+
+    await expect(
+      createBatchCampaign({
+        name: "Batch passing-only none",
+        accountId,
+        userId: state.userId,
+        authorize: true,
+        approveBatch: true,
+        approvePassingOnly: true,
+        filters: { sender: accountId },
+        limit: 10,
+      }),
+    ).rejects.toMatchObject({ code: "batch_check_failed" });
+
+    const statuses = await db.query<{ status: string }>(
+      `SELECT status FROM drafts WHERE id = $1`,
+      [bad.draftId],
+    );
+    expect(statuses.rows[0].status).toBe("draft");
+    expect((await db.query(`SELECT 1 FROM campaigns WHERE name = 'Batch passing-only none'`)).rows).toHaveLength(0);
+  });
 });
 
 describe("server-side pacing", () => {

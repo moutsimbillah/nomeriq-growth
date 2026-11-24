@@ -359,6 +359,11 @@ main unexpected; status=$?; printf 'ARGS_STATUS=%s\\n' "$status"`));
     expect(result.output).toContain("ARGS_STATUS=1");
   });
 
+  // Ordering here is controlled by the test, not the scheduler: the first process takes the mocked
+  // mkdir lock and blocks inside its critical section on $RELEASE, and this test only starts the
+  // second process after $HELD proves the first holds the lock, then only releases the first once
+  // the second has been refused. That makes "exactly one backup" deterministic by construction
+  // rather than a race the scheduler has to lose.
   it("documents mocked serialization because Windows bash cannot prove cross-process flock", () => {
     const dir = mkdtempSync(join(scratch, "growth-lock-"));
     const runner = join(dir, "runner.sh");
@@ -366,13 +371,26 @@ main unexpected; status=$?; printf 'ARGS_STATUS=%s\\n' "$status"`));
 require_wrapper_integrity(){ return 0; }; require_deploy_integrity(){ return 0; }; require_cli(){ return 0; }
 acquire_lock(){ mkdir "$LOCK_PATH.d" 2>/dev/null; }
 record_failure(){ printf 'failure:%s\\n' "$1" >>"$LOG_PATH"; }
-take_backup(){ printf 'backup\\n' >>"$LOG_PATH"; sleep 0.2; printf '${validReceipt()}'; }
+take_backup(){ printf 'backup\\n' >>"$LOG_PATH"; : >"$HELD"; local n=0; while [[ ! -e "$RELEASE" && $n -lt 4000 ]]; do sleep 0.01; n=$((n + 1)); done; printf '${validReceipt()}'; }
 verify_backup(){ return 0; }; dispatch_cli(){ return 0; }
 main
 `);
-    const result = bash(`bash "$RUNNER" & bash "$RUNNER" & wait; cat "$LOG_PATH"`, { RUNNER: runner, LOCK_PATH: join(dir, "lock"), LOG_PATH: join(dir, "events") });
+    const result = bash(`set +e
+bash "$RUNNER" & hpid=$!
+i=0; while [[ ! -e "$HELD" && $i -lt 2000 ]]; do sleep 0.01; i=$((i + 1)); done
+bash "$RUNNER" & cpid=$!
+j=0; while ! grep -q '^failure:lock_busy$' "$LOG_PATH" 2>/dev/null && [[ $j -lt 2000 ]]; do sleep 0.01; j=$((j + 1)); done
+: >"$RELEASE"
+wait "$hpid"; hstat=$?
+wait "$cpid"; cstat=$?
+echo "HELD=$([[ -e "$HELD" ]] && echo yes || echo no) HOLDER_STATUS=$hstat CHALLENGER_STATUS=$cstat"
+cat "$LOG_PATH"`, { RUNNER: runner, LOCK_PATH: join(dir, "lock"), LOG_PATH: join(dir, "events"), HELD: join(dir, "held"), RELEASE: join(dir, "release") });
     expect((result.output.match(/^backup$/gm) ?? []).length).toBe(1);
     expect(result.output).toContain("failure:lock_busy");
+    // Exactly one refusal, and the first process did reach its critical section: the loser was
+    // turned away by the lock the winner held, not merely started after the winner finished.
+    expect((result.output.match(/^failure:lock_busy$/gm) ?? []).length).toBe(1);
+    expect(result.output).toContain("HELD=yes");
   });
 });
 
