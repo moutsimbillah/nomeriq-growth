@@ -569,10 +569,12 @@ async function executeAgentAction(
     }
     case "record_search_query": {
       requireScope(key, "research:write");
-      const jobId = String(args.jobId || "").trim();
+      if (args.jobId !== undefined && args.jobId !== null && typeof args.jobId !== "string") {
+        throw new AppError("jobId must be a string when provided.");
+      }
+      const jobId = typeof args.jobId === "string" ? args.jobId.trim() || null : null;
       const query = String(args.query || "").trim();
       const status = String(args.status || "");
-      if (!jobId) throw new AppError("jobId is required.");
       if (!query) throw new AppError("query is required.");
       if (status !== "used" && status !== "failed") {
         throw new AppError('status must be "used" or "failed".');
@@ -663,7 +665,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: "check_search_query",
     description:
-      "Read the research ledger: has this exact search already been used in any job inside the repeat window, and if so when and in which job.",
+      "Read the research ledger: has this exact search already been used in any job or standalone assistant search inside the repeat window. A null jobId means the query came from an assistant run without a research target.",
     inputSchema: {
       type: "object",
       properties: {
@@ -678,18 +680,18 @@ export const TOOL_DEFINITIONS = [
   {
     name: "record_search_query",
     description:
-      "Record the outcome of one search in the research ledger, so no assistant repeats it and its yield can be measured later. Records only: it cannot start, stop, pause or change a research job.",
+      "Record one search outcome in the ledger. Include jobId when working under a real research target; omit it for a standalone assistant run. Records only: it cannot create, start, stop, pause or change a research job.",
     inputSchema: {
       type: "object",
       properties: {
-        jobId: { type: "string" },
+        jobId: { type: "string", description: "Optional; omit for standalone assistant research without a target." },
         query: { type: "string" },
         status: { type: "string", enum: ["used", "failed"] },
         resultCount: { type: "number" },
         newLeadCount: { type: "number" },
         error: { type: "string" },
       },
-      required: ["jobId", "query", "status"],
+      required: ["query", "status"],
       additionalProperties: false,
     },
   },

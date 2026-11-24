@@ -44,7 +44,7 @@ Find a plausible commercial trading-signal provider → check known identities o
 ## Two ways research runs
 
 1. **The DeepSeek engine (autonomous).** The founder creates a research target with the \`deepseek\` engine and starts it. Growth itself runs Search, Fetch, verification, deduplication, saving and drafting on the server. It runs without any open browser tab or chat session, and it resumes after a restart because all progress is in PostgreSQL.
-2. **A connected assistant (you).** You research through the MCP/REST tools in your own session against the same database. This remains fully supported.
+2. **A connected assistant (you).** You research with your own native public-search tool and use Growth MCP/REST for instructions, duplicate checks, the search ledger, saving and progress. Hermes uses its native \`web_search\` when the founder assigns direct discovery; it does not call the Growth DeepSeek API.
 
 Both paths write the same records. Before doing new research in either path, retrieve the existing lead identities so you never investigate a business Growth already holds.
 
@@ -99,9 +99,9 @@ A web page that fails — a timeout, a 403, a bot wall, a dead link — is not a
 
 ## The search ledger — check before you repeat
 
-Every search is recorded, including the ones the autonomous engine runs. Before spending a call on a search, call \`check_search_query\` with the query you intend to run. If it comes back \`used: true\`, that search was already run recently (the window is 30 days) and the response tells you when and in which job. Run a different query instead — a different market, language, commercial-intent phrase or surface. The ledger exists so the budget goes to new ground, not to the same phrasing twice.
+Every search is recorded, including the ones the autonomous engine runs. Before spending a call on a search, call \`check_search_query\` with the query you intend to run. If it comes back \`used: true\`, that search was already run recently (the window is 30 days) and the response tells you when and whether it came from a job or standalone assistant search. Run a different query instead — a different market, language, commercial-intent phrase or surface. The ledger exists so the budget goes to new ground, not to the same phrasing twice.
 
-After a search you actually ran, call \`record_search_query\` with the job id, the query, \`status: "used"\` and how many results came back, so the next assistant or the engine sees it. If the search failed, record \`status: "failed"\` with the error. Recording is all it does: it never sends, deletes or changes a research job.
+After a search you actually ran, call \`record_search_query\` with the query, status and result count. Include \`jobId\` only when you are working under an existing Growth research target; when no target exists, omit it and Growth records a standalone assistant search. Never invent or borrow a job ID. If the search failed, record \`status: "failed"\` with the error. Recording is all it does: it never creates, starts, deletes or changes a research job.
 
 The engine does not skip on the ledger — it re-runs its own plan to push a target toward completion. The 30-day rule is for you: an assistant choosing what to search next.
 
@@ -240,7 +240,7 @@ For an engine job, the same record also carries real DeepSeek spend, discovered 
 
 ## Tool sequence for a research batch
 
-1. \`list_research_jobs\` — find the active job and remaining target. Note whether it is a \`deepseek\` engine job already in progress.
+1. \`list_research_jobs\` — find the active job and remaining target. Note whether it is a \`deepseek\` engine job already in progress. If no job exists, use \`report_progress.overall\` for the database baseline; do not create a portal target merely to use Hermes.
 2. Search the public web broadly, varying language and surface.
 3. For each candidate: verify the signal service, pricing/paid access, official site, and a published email.
 4. \`check_duplicate\` — if found, keep the existing record and move on.

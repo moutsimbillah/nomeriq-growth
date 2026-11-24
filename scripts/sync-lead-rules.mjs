@@ -36,7 +36,7 @@ const header = `/**
 
 const body = `${header}
 /** The date the founder approved the rules currently in \`docs/lead-rules.md\`. */
-export const LEAD_RULES_VERSION = "lead-rules-2026-11-07";
+export const LEAD_RULES_VERSION = "lead-rules-2026-11-25";
 
 /** Where these rules come from, for anyone reading a stored assessment. */
 export const LEAD_RULES_PATH = "docs/lead-rules.md";

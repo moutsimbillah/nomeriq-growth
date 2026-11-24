@@ -7,7 +7,7 @@ interface QueryKeyRow {
 }
 
 interface RecentUseRow {
-  job_id: string;
+  job_id: string | null;
   used_at: string;
 }
 
@@ -88,7 +88,7 @@ export async function markQueryRunning(input: {
 }
 
 export async function recordQueryOutcome(input: {
-  jobId: string;
+  jobId?: string | null;
   query: string;
   status: "used" | "failed";
   resultCount?: number;
@@ -103,19 +103,37 @@ export async function recordQueryOutcome(input: {
   const newLeadCount = input.newLeadCount ?? 0;
   const error = input.error ?? null;
 
+  if (input.jobId) {
+    await db.query(
+      `INSERT INTO research_queries
+         (id, job_id, query, query_key, status, result_count, new_lead_count, error, used_at)
+       VALUES
+         ($1, $2, $3, $4, $5, $6, $7, $8,
+          CASE WHEN $5 = 'used' THEN now() ELSE NULL END)
+       ON CONFLICT (job_id, query) DO UPDATE
+         SET status = EXCLUDED.status,
+             result_count = COALESCE(EXCLUDED.result_count, 0),
+             new_lead_count = COALESCE(EXCLUDED.new_lead_count, 0),
+             error = EXCLUDED.error,
+             used_at = CASE WHEN EXCLUDED.status = 'used' THEN now() ELSE NULL END`,
+      [id, input.jobId, query, queryKey, input.status, resultCount, newLeadCount, error],
+    );
+    return;
+  }
+
   await db.query(
     `INSERT INTO research_queries
        (id, job_id, query, query_key, status, result_count, new_lead_count, error, used_at)
      VALUES
-       ($1, $2, $3, $4, $5, $6, $7, $8,
-        CASE WHEN $5 = 'used' THEN now() ELSE NULL END)
-     ON CONFLICT (job_id, query) DO UPDATE
+       ($1, NULL, $2, $3, $4, $5, $6, $7,
+        CASE WHEN $4 = 'used' THEN now() ELSE NULL END)
+     ON CONFLICT (query_key) WHERE job_id IS NULL DO UPDATE
        SET status = EXCLUDED.status,
            result_count = COALESCE(EXCLUDED.result_count, 0),
            new_lead_count = COALESCE(EXCLUDED.new_lead_count, 0),
            error = EXCLUDED.error,
            used_at = CASE WHEN EXCLUDED.status = 'used' THEN now() ELSE NULL END`,
-    [id, input.jobId, query, queryKey, input.status, resultCount, newLeadCount, error],
+    [id, query, queryKey, input.status, resultCount, newLeadCount, error],
   );
 }
 
