@@ -83,11 +83,14 @@ it("invalid model evidence rolls back the prospect, addresses, sources and obser
  expect((await db.query("SELECT id FROM prospects WHERE business_name=$1",[input.businessName])).rows).toHaveLength(0);
  expect((await db.query("SELECT id FROM prospect_emails WHERE normalized_email=$1",[input.email])).rows).toHaveLength(0);
 });
-it("duplicate retries cannot replace original assessments or a founder override",async()=>{
+it("a duplicate retry cannot replace a founder override, so the assessment is refused",async()=>{
+ // The same business with fresh evidence may be re-assessed, but a founder decision on any assessed
+ // field is never displaced by an assistant: the retry is refused and the lead is left exactly as it was.
  const input=payload(),saved=await saveProspect(input);ids.push(saved.prospect.id);
  await setAssessmentOverride(saved.prospect.id,{field:"product_fit",decision:"set",value:"high",reason:"Founder reviewed the opportunity",provenanceKey:crypto.randomUUID(),actorUserId:auth.id});
  const before=await getLeadModel(saved.prospect.id);input.leadAssessment!.productFit="low";
- const retry=await saveProspect(input);expect(retry).toMatchObject({created:false,duplicate:true});expect(await getLeadModel(saved.prospect.id)).toEqual(before);
+ await expect(saveProspect(input)).rejects.toMatchObject({code:"founder_override"});
+ expect(await getLeadModel(saved.prospect.id)).toEqual(before);
 });
 it.each(["rest","mcp"] as const)("%s derives verification from a modern assessment, not the caller's candidate label",async kind=>{
  const input=publicPayload(payload());

@@ -73,16 +73,17 @@ describe("a successful call records what it did", () => {
     expect(JSON.stringify(rows[0].metadata)).not.toContain("contact@outcome.example");
   });
 
-  it("records duplicate:true when the same lead is saved twice", async () => {
+  it("re-assesses instead of duplicating when the same lead is saved twice with evidence", async () => {
     await runAgentAction(KEY as never, "save_prospect", payload("Outcome Duplicate Co", "outcome-dup.example"));
     const again = await runAgentAction(KEY as never, "save_prospect", payload("Outcome Duplicate Co", "outcome-dup.example"));
-    expect((again.data as { duplicate: boolean }).duplicate).toBe(true);
+    // One business stays one record; the second evidence-backed save completes the qualification on it.
+    expect((again.data as { duplicate: boolean }).duplicate).toBe(false);
+    expect((again.data as { resolution?: string }).resolution).toBe("reassessed");
 
     const rows = await entriesFor(KEY.id, "save_prospect");
     const last = rows[rows.length - 1];
     expect(last.metadata.outcome).toBe("ok");
     expect(last.metadata.created).toBe(false);
-    expect(last.metadata.duplicate).toBe(true);
   });
 
   it("records created and preserved for a draft", async () => {

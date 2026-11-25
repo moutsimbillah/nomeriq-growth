@@ -200,19 +200,23 @@ describe("qualified target counts", () => {
     const job = await newJob(50);
     const lead = await save("other", job.id);
     const retry = await saveProspect(lead.input);
-    expect(retry).toMatchObject({ created: false, duplicate: true });
+    // The same business with fresh evidence re-assesses the existing lead; it is not a duplicate block.
+    expect(retry).toMatchObject({ created: false, duplicate: false, resolution: "reassessed" });
     await recordFounderEnteredEmail(lead.id, `second@${new URL(lead.input.websiteUrl!).hostname}`);
     const db = await getDb();
     expect(Number((await db.query<{ n: string }>("SELECT count(*) AS n FROM prospect_emails WHERE prospect_id=$1", [lead.id])).rows[0].n)).toBe(2);
     for (let i = 0; i < 2; i++) {
       await saveLeadAssessment(lead.id, { ...lead.input.leadAssessment!, assessedAt: now(), sourceKind: "research", provenanceKey: crypto.randomUUID() });
     }
-    expect(Number((await db.query<{ n: string }>("SELECT count(*) AS n FROM prospect_assessments WHERE prospect_id=$1", [lead.id])).rows[0].n)).toBe(3);
+    // Three manual assessments plus the one the repeat save recorded above: history grows, the lead is
+    // still one record and still counts once.
+    expect(Number((await db.query<{ n: string }>("SELECT count(*) AS n FROM prospect_assessments WHERE prospect_id=$1", [lead.id])).rows[0].n)).toBe(4);
     await setAssessmentOverride(lead.id, { field: "product_fit", decision: "set", value: "high", reason: "Founder reviewed fit", provenanceKey: crypto.randomUUID(), actorUserId: founderId });
     const job2 = (await getResearchJob(job.id))!;
     expect(job2.verifiedCount).toBe(1);
     expect(job2.emailCount).toBe(1);
-    expect(job2.duplicatesRejected).toBe(1);
+    // A re-assessment is not a rejected duplicate, so the counter stays at zero here.
+    expect(job2.duplicatesRejected).toBe(0);
   });
 
   it("a later downgrade stops counting and the latest deterministic assessment wins", async () => {
