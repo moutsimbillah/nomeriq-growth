@@ -60,6 +60,8 @@ afterAll(async () => {
     await db.query(`DELETE FROM prospect_assessment_overrides WHERE prospect_id = ANY($1::uuid[])`, [list]);
     await db.query(`DELETE FROM prospect_assessments WHERE prospect_id = ANY($1::uuid[])`, [list]);
     await db.query(`DELETE FROM prospect_emails WHERE prospect_id = ANY($1::uuid[])`, [list]);
+    await db.query(`DELETE FROM prospect_audience_observations WHERE prospect_id = ANY($1::uuid[])`, [list]);
+    await db.query(`DELETE FROM prospect_contact_route_observations WHERE prospect_id = ANY($1::uuid[])`, [list]);
     await db.query(`DELETE FROM audit_log WHERE entity_id = ANY($1::text[])`, [list]);
     await db.query(`DELETE FROM prospects WHERE id = ANY($1::uuid[])`, [list]);
   }
