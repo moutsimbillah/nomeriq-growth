@@ -73,6 +73,11 @@ it.each(["rest","mcp"] as const)("%s accepts an email from an external profile l
  expect(response.data.leadModel).toMatchObject({tier:"other",eligibility:"eligible",eligibilityChecks:{publishedEmail:true}});
  expect(response.data.prospect.qualificationStatus).toBe("verified");
 });
+it.each(["external profile","official link page"] as const)("rejects external evidence when its %s is absent from checked sources",async missingSource=>{
+ const input=payload("linked_profile_email"),omitted=missingSource==="external profile"?input.emailSourceUrl:input.websiteUrl;
+ input.leadAssessment!.sourcesChecked=input.leadAssessment!.sourcesChecked!.filter(source=>source.url!==omitted);
+ await expect(saveProspect(input)).rejects.toMatchObject({code:"unlinked_assessment_source"});
+});
 it("does not qualify an external email when its assessment finding points to another source",async()=>{
  const input=payload("linked_profile_email");
  input.leadAssessment!.findings=input.leadAssessment!.findings!.map(f=>f.area==="email"?{...f,sourceUrl:"https://different-profile.example.test/contact"}:f);
