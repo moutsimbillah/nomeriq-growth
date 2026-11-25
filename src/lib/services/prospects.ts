@@ -221,7 +221,9 @@ export async function reassessProspect(input: {
     if (row.archived_at) throw new AppError("This lead is archived. Restore it before re-assessing.", 409, "archived_lead");
     const override = (await tx.query<{ field_name: string }>(
       `SELECT field_name FROM prospect_assessment_overrides
-        WHERE prospect_id = $1 AND field_name IN ('eligibility', 'tier') AND decision = 'set'
+        WHERE prospect_id = $1
+          AND field_name IN ('eligibility','tier','product_fit','platform_maturity','mobile_app_status','priority_score')
+          AND decision = 'set'
         LIMIT 1`,
       [input.prospectId],
     )).rows[0];
