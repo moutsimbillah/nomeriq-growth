@@ -6,6 +6,7 @@
  * the service (against every stored target, archived included, with a message that names the target
  * already holding the name) and backed by a partial unique index for the statuses that can run.
  */
+import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { closeDb, getDb } from "@/lib/db/client";
 import { ensureBootstrapUser } from "@/lib/auth/session";
@@ -69,6 +70,27 @@ describe("research target names", () => {
     );
   });
 
+  it("collapses repeated spaces on the stored side too, not only on the submitted name", async () => {
+    // Regression: the SQL pattern must treat whitespace as whitespace. A pattern that escaped the
+    // backslash wrongly compared a literal "\s" and let a padded twin through.
+    const suffix = unique();
+    const job = await makeJob(`Batch 97 — ${suffix}`);
+    const db = await getDb();
+    await db.query(`UPDATE research_jobs SET name = $2 WHERE id = $1`, [
+      job.id,
+      `Batch   97 —   ${suffix}`,
+    ]);
+    await expect(makeJob(`batch 97 — ${suffix}`)).rejects.toThrow(/already exists/);
+    // The index must agree with the service about what counts as the same name.
+    await expect(
+      db.query(
+        `INSERT INTO research_jobs (id, name, target_count, categories, engine, status, created_by)
+         VALUES ($1, $2, 1, '["forex"]'::jsonb, 'manual', 'paused', $3)`,
+        [crypto.randomUUID(), `Batch 97 — ${suffix}`, founder],
+      ),
+    ).rejects.toThrow();
+  });
+
   it("allows a genuinely different name", async () => {
     const suffix = unique();
     const a = await makeJob(`Batch 92 — ${suffix}`);
@@ -106,6 +128,20 @@ describe("the database backs the rule for targets that can run", () => {
     await db.query(`UPDATE research_jobs SET status = 'completed' WHERE id = $1`, [job.id]);
     // A closed target frees the name for the index, but the service still refuses it by design.
     await expect(makeJob(name)).rejects.toThrow(/already exists/);
+  });
+});
+
+describe("the name comparison never depends on backslash escaping", () => {
+  it("uses a POSIX space class, which behaves the same on the test database and on the server", async () => {
+    // Measured on live PostgreSQL (standard_conforming_strings=on): a pattern carrying two backslashes
+    // does not collapse spaces, while the same pattern with one backslash does. PGlite collapses either,
+    // so a behaviour test cannot see the difference and this shape assertion is the honest guard.
+    const source = readFileSync("src/lib/services/research.ts", "utf8");
+    const occurrences = source.match(/regexp_replace\(btrim\(name\), '[^']+', ' ', 'g'\)/g) ?? [];
+    expect(occurrences.length).toBeGreaterThan(0);
+    for (const expression of occurrences) expect(expression).toContain("[[:space:]]+");
+    const pattern = source.match(/btrim\(name\), '([^']+)'/g) ?? [];
+    for (const entry of pattern) expect(entry).not.toContain("\\\\");
   });
 });
 

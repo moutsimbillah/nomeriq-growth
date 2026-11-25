@@ -122,7 +122,7 @@ export async function findResearchJobByName(name: string): Promise<{ id: string;
   const db = await getDb();
   const result = await db.query<{ id: string; name: string; status: string }>(
     `SELECT id, name, status FROM research_jobs
-      WHERE lower(regexp_replace(btrim(name), '\\s+', ' ', 'g')) = $1
+      WHERE lower(regexp_replace(btrim(name), '[[:space:]]+', ' ', 'g')) = $1
       ORDER BY created_at LIMIT 1`,
     [normalizeResearchJobName(name)],
   );
@@ -178,7 +178,7 @@ export async function createResearchJob(input: {
     await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`research_job_name:${normalizedName}`]);
     const taken = await tx.query<{ name: string; status: string }>(
       `SELECT name, status FROM research_jobs
-        WHERE lower(regexp_replace(btrim(name), '\\s+', ' ', 'g')) = $1
+        WHERE lower(regexp_replace(btrim(name), '[[:space:]]+', ' ', 'g')) = $1
         ORDER BY created_at LIMIT 1`,
       [normalizedName],
     );
