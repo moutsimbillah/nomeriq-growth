@@ -53,6 +53,49 @@ it("a valid new founder recipient is recorded with the draft edit, without sendi
   expect((await db.query("SELECT id FROM outbound_sends WHERE prospect_id=$1",[f.id])).rows).toHaveLength(0);
 });
 
+it("refuses an unseen subject edit that advances updated_at by one microsecond before the locked reread",async()=>{
+  const f=await fixture();
+  await db.query("UPDATE drafts SET updated_at='2026-11-25T00:00:00.123456Z'::timestamptz WHERE id=$1",[f.draftId]);
+  const before=(await db.query<{body:string;updated_at_exact:string}>("SELECT body,updated_at::text AS updated_at_exact FROM drafts WHERE id=$1",[f.draftId])).rows[0]!;
+  const original=db.transaction.bind(db);
+  vi.spyOn(db,"transaction").mockImplementationOnce(async fn=>{
+    await db.query("UPDATE drafts SET subject='Concurrent unseen subject',updated_at=updated_at+interval '1 microsecond' WHERE id=$1",[f.draftId]);
+    return original(fn);
+  });
+
+  await expect(approveDraft(f.draftId,userId)).rejects.toMatchObject({status:409});
+  const after=(await db.query<{body:string;subject:string;status:string;approved_at:string|null;approved_by:string|null;updated_at_exact:string}>("SELECT body,subject,status,approved_at::text AS approved_at,approved_by::text AS approved_by,updated_at::text AS updated_at_exact FROM drafts WHERE id=$1",[f.draftId])).rows[0]!;
+  expect(after.subject).toBe("Concurrent unseen subject");
+  expect(after.body).toBe(before.body);
+  expect(after.status).toBe("draft");
+  expect(after.approved_at).toBeNull();
+  expect(after.approved_by).toBeNull();
+  expect(after.updated_at_exact).not.toBe(before.updated_at_exact);
+  expect(new Date(after.updated_at_exact).getTime()).toBe(new Date(before.updated_at_exact).getTime());
+  expect((await db.query("SELECT id FROM outbound_sends WHERE prospect_id=$1",[f.id])).rows).toHaveLength(0);
+});
+
+it("refuses an unseen subject edit that leaves updated_at untouched",async()=>{
+  const f=await fixture();
+  await db.query("UPDATE drafts SET updated_at='2026-11-25T00:00:00.654321Z'::timestamptz WHERE id=$1",[f.draftId]);
+  const before=(await db.query<{body:string;subject:string;updated_at_exact:string}>("SELECT body,subject,updated_at::text AS updated_at_exact FROM drafts WHERE id=$1",[f.draftId])).rows[0]!;
+  const original=db.transaction.bind(db);
+  vi.spyOn(db,"transaction").mockImplementationOnce(async fn=>{
+    await db.query("UPDATE drafts SET subject='Concurrent subject without a timestamp change' WHERE id=$1",[f.draftId]);
+    return original(fn);
+  });
+
+  await expect(approveDraft(f.draftId,userId)).rejects.toMatchObject({status:409});
+  const after=(await db.query<{body:string;subject:string;status:string;approved_at:string|null;approved_by:string|null;updated_at_exact:string}>("SELECT body,subject,status,approved_at::text AS approved_at,approved_by::text AS approved_by,updated_at::text AS updated_at_exact FROM drafts WHERE id=$1",[f.draftId])).rows[0]!;
+  expect(after.subject).toBe("Concurrent subject without a timestamp change");
+  expect(after.body).toBe(before.body);
+  expect(after.status).toBe("draft");
+  expect(after.approved_at).toBeNull();
+  expect(after.approved_by).toBeNull();
+  expect(after.updated_at_exact).toBe(before.updated_at_exact);
+  expect((await db.query("SELECT id FROM outbound_sends WHERE prospect_id=$1",[f.id])).rows).toHaveLength(0);
+});
+
 it("an edit failure rolls back a new address and its draft revision together",async()=>{
   const f=await fixture(),email=`owner@${f.domain}`,original=db.transaction.bind(db);
   vi.spyOn(db,"transaction").mockImplementationOnce(fn=>original(async tx=>{
