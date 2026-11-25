@@ -371,14 +371,22 @@ verify_backup(){ return 0; }; dispatch_cli(){ return 0; }
 main
 `);
     // mkdir is the atomic gate, so exactly one runner can be granted the lock; the granted runner
-    // records that grant and then holds until the other runner has already been refused, which is the
-    // concurrency this test describes. Ordering the grant and refusal records this way is what makes
-    // the assertion deterministic on a fast Linux runner as well as on Windows: the earlier mock wrote
-    // its attempt marker before mkdir, so the winner could see two attempts, finish and release while
-    // the second process had not yet tried the lock, and both then wrote a backup.
+    // records that grant and then holds inside take_backup until the other runner has been refused,
+    // which is the concurrency this test describes.
+    //
+    // The two runners are ordered by the test rather than started blind. A blind `& ... &` pair is
+    // load dependent: on a fast runner the winner can be granted, time out its bounded wait, finish
+    // its backup, exit and release the directory before the loser has even called mkdir, and then the
+    // loser is granted too. That produced two grants on CI while passing locally. Here the winner is
+    // started first and the loser only once the grant record exists, so the loser provably meets a
+    // held lock and the assertion tests exclusivity instead of process startup timing.
     const granted = join(dir, "granted");
     const refused = join(dir, "refused");
-    const result = bash(`bash "$RUNNER" & bash "$RUNNER" & wait; cat "$LOG_PATH"`, {
+    const result = bash(`bash "$RUNNER" & RUNNER_PID=$!
+for attempt in $(seq 1 400); do [[ -s "$GRANTED" ]] && break; sleep 0.05; done
+bash "$RUNNER"
+wait "$RUNNER_PID"
+cat "$LOG_PATH"`, {
       RUNNER: runner,
       LOCK_PATH: join(dir, "lock"),
       LOG_PATH: join(dir, "events"),
