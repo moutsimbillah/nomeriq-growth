@@ -94,8 +94,9 @@ describe("report_progress totals outside any research job", () => {
     const db = await getDb();
     const job = await db.query<{ id: string }>(
       `INSERT INTO research_jobs (id, name, target_count, categories, status)
-       VALUES (gen_random_uuid(), 'Overall test job', 10, '["forex"]'::jsonb, 'active')
+       VALUES (gen_random_uuid(), $1, 10, '["forex"]'::jsonb, 'active')
        RETURNING id`,
+      [`Overall test job ${crypto.randomUUID()}`],
     );
     await db.query(`UPDATE prospects SET research_job_id = $1 WHERE website_url LIKE '%no-job.example%'`, [
       job.rows[0].id,

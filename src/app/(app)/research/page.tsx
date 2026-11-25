@@ -30,9 +30,117 @@ import {
 import { CopyButton } from "@/components/client-ui";
 import { JobStatusButton, NewResearchButton } from "@/components/research-actions";
 import { ResearchEnginePanel } from "@/components/research-engine";
-import { relativeTime } from "@/lib/utils";
+import { relativeTime, suggestResearchJobName } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
+
+/** Plain names for the clients that saved a target's leads, from the stored `source_agent`. */
+function researcherLabel(agent: string): string {
+  const known: Record<string, string> = {
+    deepseek: "DeepSeek engine",
+    claude: "Claude",
+    chatgpt: "ChatGPT",
+    hermes: "Hermes",
+    api: "API client",
+    unknown: "Client not recorded",
+  };
+  const label = known[agent.toLowerCase()];
+  if (label) return label;
+  return agent.charAt(0).toUpperCase() + agent.slice(1);
+}
+
+/** Who performed a recorded step. */
+function actorLabel(actorType: string | null | undefined): string {
+  if (!actorType) return "unknown";
+  const known: Record<string, string> = {
+    deepseek: "DeepSeek engine",
+    founder: "you",
+    claude: "Claude",
+    chatgpt: "ChatGPT",
+    hermes: "Hermes",
+    api: "a connected assistant",
+    system: "the system",
+  };
+  return known[actorType.toLowerCase()] ?? actorType;
+}
+
+/**
+ * One recorded research event in plain words.
+ *
+ * The raw event type used to be printed with underscores swapped for spaces ("candidate failed"),
+ * which told the founder nothing about which target or which assistant. Every type gets a sentence,
+ * and the surrounding line names the target and the actor from the stored row.
+ */
+function describeResearchEvent(event: {
+  type: string;
+  businessName: string | null;
+  detail: Record<string, unknown> | null;
+}): { title: string; detail: string | null } {
+  const detail = event.detail ?? {};
+  const text = (key: string): string =>
+    typeof detail[key] === "string" ? String(detail[key]) : "";
+  const count = (key: string): number => Number(detail[key] ?? 0);
+  const names = Array.isArray(detail.names)
+    ? (detail.names as unknown[]).filter((name): name is string => typeof name === "string")
+    : [];
+  switch (event.type) {
+    case "search_completed":
+      return {
+        title: `Searched ${text("query") ? `“${text("query")}”` : "the web"} — ${count("results")} result(s)`,
+        detail: null,
+      };
+    case "candidate_found":
+      return {
+        title: `${count("count") || names.length} candidate(s) queued for verification`,
+        detail: names.length ? names.join(", ") : null,
+      };
+    case "fetch_completed":
+      return {
+        title: `Read ${count("pages")} official page(s)${event.businessName ? ` for ${event.businessName}` : ""}`,
+        detail: null,
+      };
+    case "candidate_rejected":
+      return {
+        title: `Rejected ${event.businessName ?? text("businessName") ?? "a candidate"}`,
+        detail: text("reason") || null,
+      };
+    case "candidate_failed":
+      return {
+        title: `Could not verify ${event.businessName ?? text("businessName") ?? "a candidate"}`,
+        detail: text("error") || null,
+      };
+    case "duplicate_rejected":
+      return {
+        title: `Duplicate blocked — ${text("existingName") || event.businessName || "an existing lead"}`,
+        detail: text("attemptedName") ? `Tried to add ${text("attemptedName")}` : null,
+      };
+    case "candidate_saved":
+      return { title: `Candidate saved${event.businessName ? ` — ${event.businessName}` : ""}`, detail: null };
+    case "verified_saved":
+      return { title: `Verified and saved ${event.businessName || "a lead"}`, detail: null };
+    case "draft_saved":
+      return { title: `Draft saved${event.businessName ? ` for ${event.businessName}` : ""}`, detail: null };
+    case "note":
+      return { title: text("error") || "Engine note", detail: text("step") || null };
+    case "job_resumed":
+      return { title: "Target started", detail: null };
+    case "job_paused":
+      return { title: "Target paused", detail: null };
+    case "job_cancelled":
+      return { title: "Target cancelled", detail: null };
+    case "job_completed":
+      return { title: "Target completed", detail: null };
+    case "job_failed":
+      return { title: "Target failed", detail: text("error") || null };
+    case "job_budget_paused":
+      return {
+        title: "Paused at the spending limit",
+        detail: `$${Number(detail.spentUsd ?? 0).toFixed(4)} of $${Number(detail.budgetUsd ?? 0).toFixed(2)} used`,
+      };
+    default:
+      return { title: event.type.replace(/_/g, " "), detail: null };
+  }
+}
 
 export default async function ResearchPage({
   searchParams,
@@ -58,6 +166,9 @@ export default async function ResearchPage({
     .filter((job) => job.engine === "deepseek")
     .reduce((sum, job) => sum + job.spentUsd, 0);
   const recentRuns = engineJob ? await listResearchRuns(engineJob.id, 5) : [];
+  // Every stored name, so the create form can offer a free one and flag a clash before submitting.
+  const existingNames = jobs.map((job) => job.name);
+  const suggestedName = suggestResearchJobName(existingNames);
 
   const brief = primaryJob
     ? `Research job: ${primaryJob.name}\nJob ID: ${primaryJob.id}\nTarget: ${primaryJob.targetCount} qualified commercial trading-signal providers (eligible Tier 1 / Other Signal Provider with a published email and no duplicate)\nAlready counted: ${primaryJob.verifiedCount}\nDrafts saved: ${primaryJob.draftCount}\nRemaining: ${primaryJob.remaining}\nMarkets: ${primaryJob.categories.join(", ")}\nRegions: ${primaryJob.regions}\n\nBefore doing anything, call get_instructions and read_product_truth through Nomeriq Growth. Then continue this exact target from the remaining count. For every candidate, verify paid signals in forex, metals, crypto, indices, or commodities; find an official website and a publicly published business email with its source URL; call check_duplicate against the entire Growth database; then save_prospect and save_draft. Never guess an email, never duplicate an existing business, and never send email.`
@@ -78,7 +189,7 @@ export default async function ResearchPage({
                 className="h-10 px-4 text-13"
               />
             )}
-            <NewResearchButton defaultOpen={params.new === "1"} />
+            <NewResearchButton defaultOpen={params.new === "1"} suggestedName={suggestedName} existingNames={existingNames} />
           </>
         }
       />
@@ -133,7 +244,7 @@ export default async function ResearchPage({
           <Notice
             tone="info"
             title="Autonomous discovery is not running yet."
-            action={<NewResearchButton className="btn-secondary btn-sm shrink-0" />}
+            action={<NewResearchButton className="btn-secondary btn-sm shrink-0" suggestedName={suggestedName} existingNames={existingNames} />}
           >
             Create a DeepSeek research target to let Growth find, verify and save
             qualified trading-signal providers on its own. Nothing is sent to those
@@ -150,7 +261,7 @@ export default async function ResearchPage({
             icon="sparkles"
             title="No research target yet"
             description="Start with 25 leads to prove the qualification and email evidence, then scale the same process to 100 and beyond."
-            action={<NewResearchButton />}
+            action={<NewResearchButton suggestedName={suggestedName} existingNames={existingNames} />}
           />
         </Card>
       ) : (
@@ -204,12 +315,19 @@ export default async function ResearchPage({
                           <span className="text-12 text-faint">
                             {job.regions}
                           </span>
-                          {job.engine === "deepseek" && (
+                          {job.researchers.length > 0 ? (
+                            job.researchers.map((entry) => (
+                              <span key={entry.agent} className="flex items-center gap-2">
+                                <span className="text-12 text-faint">·</span>
+                                <span className="text-12 font-bold uppercase tracking-[0.12em] text-forest">
+                                  {researcherLabel(entry.agent)} · {entry.leads}
+                                </span>
+                              </span>
+                            ))
+                          ) : (
                             <>
                               <span className="text-12 text-faint">·</span>
-                              <span className="text-12 font-bold uppercase tracking-[0.12em] text-forest">
-                                DeepSeek
-                              </span>
+                              <span className="text-12 text-faint">No leads saved yet</span>
                             </>
                           )}
                         </div>
@@ -378,13 +496,19 @@ export default async function ResearchPage({
               <Card className="p-5">
                 <SectionHeading
                   title="Research log"
-                  description="The last database events from both assistants."
+                  description="Each line names its target and who did it. Only recorded steps appear."
                 />
                 <div className="mt-4 space-y-0">
                   {events.length === 0 ? (
                     <p className="text-12 text-muted">No research events yet.</p>
                   ) : (
-                    events.map((event, index) => (
+                    events.map((event, index) => {
+                      const described = describeResearchEvent({
+                        type: event.type,
+                        businessName: event.businessName,
+                        detail: (event.detail ?? null) as Record<string, unknown> | null,
+                      });
+                      return (
                       <div
                         key={event.id}
                         className="relative flex gap-3 pb-4 last:pb-0"
@@ -409,26 +533,25 @@ export default async function ResearchPage({
                         </span>
                         <div className="min-w-0">
                           <div className="text-12 font-medium leading-4 text-ink">
-                            {event.type === "verified_saved" && (
-                              <>Verified {event.businessName || "prospect"}</>
-                            )}
-                            {event.type === "draft_saved" && (
-                              <>Draft saved{event.businessName ? ` for ${event.businessName}` : ""}</>
-                            )}
-                            {event.type === "duplicate_rejected" && (
-                              <>Duplicate blocked — {event.businessName || "existing lead"}</>
-                            )}
-                            {!["verified_saved", "draft_saved", "duplicate_rejected"].includes(
-                              event.type,
-                            ) && event.type.replace(/_/g, " ")}
+                            {described.title}
                           </div>
-                          <div className="mt-0.5 flex items-center gap-1.5 text-12 text-faint">
+                          {described.detail && (
+                            <p className="mt-0.5 line-clamp-2 text-12 leading-4 text-muted">
+                              {described.detail}
+                            </p>
+                          )}
+                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-12 text-faint">
                             <History size={9} />
-                            {relativeTime(event.createdAt)} · {event.actorType}
+                            <span className="max-w-[16rem] truncate">{event.jobName}</span>
+                            <span>·</span>
+                            <span>{actorLabel(event.actorType)}</span>
+                            <span>·</span>
+                            <span>{relativeTime(event.createdAt)}</span>
                           </div>
                         </div>
                       </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </Card>

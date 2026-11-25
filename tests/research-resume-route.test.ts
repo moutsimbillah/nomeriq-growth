@@ -67,7 +67,7 @@ async function clearProviderList(): Promise<void> {
 
 async function newJob(input: { budgetUsd?: number; spentUsd?: number } = {}): Promise<string> {
   const job = await createResearchJob({
-    name: "Resume gate fixture",
+    name: `Resume gate fixture ${crypto.randomUUID()}`,
     targetCount: 5,
     categories: ["forex"],
     engine: "deepseek",

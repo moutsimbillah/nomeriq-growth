@@ -24,7 +24,7 @@ export async function seedFilterVerificationFixture(suffix: string) {
        (gen_random_uuid(), $1, 1, 'paused'),
        (gen_random_uuid(), $2, 1, 'paused')
      RETURNING id`,
-    [`Fixture job ${suffix}`, `Fixture job ${suffix}`],
+    [`Fixture job A ${suffix}`, `Fixture job B ${suffix}`],
   );
   const jobs = jobRows.rows.map((row) => row.id);
 
