@@ -364,25 +364,29 @@ main unexpected; status=$?; printf 'ARGS_STATUS=%s\\n' "$status"`));
     const runner = join(dir, "runner.sh");
     writeFileSync(runner, `source "$WRAPPER"
 require_wrapper_integrity(){ return 0; }; require_deploy_integrity(){ return 0; }; require_cli(){ return 0; }
-acquire_lock(){ printf 'attempt\\n' >>"$ATTEMPTS"; mkdir "$LOCK_PATH.d" 2>/dev/null; }
+acquire_lock(){ if mkdir "$LOCK_PATH.d" 2>/dev/null; then printf 'granted\\n' >>"$GRANTED"; return 0; fi; printf 'refused\\n' >>"$REFUSED"; return 1; }
 record_failure(){ printf 'failure:%s\\n' "$1" >>"$LOG_PATH"; }
-take_backup(){ for ((hold=0;hold<200;hold++)); do [[ "$(cat "$ATTEMPTS" 2>/dev/null | wc -l)" -ge 2 ]] && break; sleep 0.05; done; printf 'backup\\n' >>"$LOG_PATH"; printf '${validReceipt()}'; }
+take_backup(){ for ((hold=0;hold<200;hold++)); do [[ -s "$REFUSED" ]] && break; sleep 0.05; done; printf 'backup\\n' >>"$LOG_PATH"; printf '${validReceipt()}'; }
 verify_backup(){ return 0; }; dispatch_cli(){ return 0; }
 main
 `);
-    // Both runners are launched together, but under load one can be scheduled well after the other.
-    // The 0.2 s sleep this test used to rely on could therefore expire before the second process even
-    // tried the lock, so both legitimately took an already-released lock and wrote two backups. Each
-    // runner now records its attempt, and the winner holds the lock until the second attempt is
-    // visible, so the concurrency the assertion describes is the concurrency that actually happens.
-    const attempts = join(dir, "attempts");
+    // mkdir is the atomic gate, so exactly one runner can be granted the lock; the granted runner
+    // records that grant and then holds until the other runner has already been refused, which is the
+    // concurrency this test describes. Ordering the grant and refusal records this way is what makes
+    // the assertion deterministic on a fast Linux runner as well as on Windows: the earlier mock wrote
+    // its attempt marker before mkdir, so the winner could see two attempts, finish and release while
+    // the second process had not yet tried the lock, and both then wrote a backup.
+    const granted = join(dir, "granted");
+    const refused = join(dir, "refused");
     const result = bash(`bash "$RUNNER" & bash "$RUNNER" & wait; cat "$LOG_PATH"`, {
       RUNNER: runner,
       LOCK_PATH: join(dir, "lock"),
       LOG_PATH: join(dir, "events"),
-      ATTEMPTS: attempts,
+      GRANTED: granted,
+      REFUSED: refused,
     });
-    expect((readFileSync(attempts, "utf8").match(/^attempt$/gm) ?? []).length).toBe(2);
+    expect((readFileSync(granted, "utf8").match(/^granted$/gm) ?? []).length).toBe(1);
+    expect((readFileSync(refused, "utf8").match(/^refused$/gm) ?? []).length).toBe(1);
     expect((result.output.match(/^backup$/gm) ?? []).length).toBe(1);
     expect(result.output).toContain("failure:lock_busy");
   });
