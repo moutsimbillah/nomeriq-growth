@@ -129,13 +129,17 @@ function opensWithGreeting(body: string): boolean {
   return isAddress(address);
 }
 /**
- * A first line that was clearly an attempt at a greeting — a greeting word, an address and a comma, nothing
- * else — is replaced rather than kept above the new one, so the draft cannot open with two greetings when
- * the model addressed the wrong name.
+ * A first line that was clearly an attempt at a greeting — a greeting word, then only address-shaped words and
+ * a comma — is replaced rather than kept above the new one, so the draft cannot open with two greetings when
+ * the model addressed the wrong name. A line whose remaining words are ordinary prose ("Hi, pricing looks
+ * strong,") is NOT treated as a greeting: its words are kept and the greeting goes above them.
  */
 function replacesGreetingLine(firstLine: string): boolean {
   const line = firstLine.trim();
-  return GREETING_WORD.test(line) && line.endsWith(",") && line.length <= GREETING_MAX && line.split(/\s+/).length <= 4;
+  if (!GREETING_WORD.test(line) || !line.endsWith(",") || line.length > GREETING_MAX) return false;
+  const words = line.slice(0, -1).replace(GREETING_WORD, "").trim().split(/\s+/).filter(Boolean);
+  if (words.length > 3) return false;
+  return words.every((word) => ADDRESS_WORD.test(word) || CAPITALISED_NAME.test(word));
 }
 function ensureGreeting(body: string, prospect: ProspectDetail): string {
   const trimmed = body.trim();

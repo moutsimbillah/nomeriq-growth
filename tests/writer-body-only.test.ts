@@ -159,15 +159,22 @@ describe("first contact opens with a greeting", () => {
     expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
   });
 
-  it("rejects a fragment with no pronoun in it, and does not open with two greetings", async () => {
+  it("rejects a fragment with no pronoun in it", async () => {
     // The round-5 example: a stoplist of pronouns cannot rule this out, only proving the words are an
-    // address can. "excellent services" is neither a name nor a collective noun, and because the line is
-    // nothing but an attempted greeting it is replaced rather than prefixed.
+    // address can. "excellent services" is neither a name nor a collective noun, and because the words are
+    // prose rather than an address, they are kept and the greeting goes above them.
     const body = "Hi your excellent services,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
     const generated = await generateWithModelBody(body);
     expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
-    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
-    expect(generated.body).not.toContain("excellent services");
+    expect(generated.body).toContain("your excellent services,");
+  });
+
+  it("keeps a comma line that carries meaning instead of replacing it", async () => {
+    // The round-7 example: "Hi, pricing looks strong," is prose, so nothing it says may be dropped.
+    const body = "Hi, pricing looks strong,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+    expect(generated.body).toContain("pricing looks strong");
   });
 
   it("rejects two ordinary capitalised words as an address", async () => {
