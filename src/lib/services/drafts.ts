@@ -31,12 +31,54 @@ import { priorContactExists } from "./prior-contact";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 const DRAFT_SELECT = `
-  SELECT d.*, p.business_name AS prospect_name, p.sending_profile_id AS sending_profile_id,
+  SELECT d.*, d.updated_at::text AS updated_at_exact,
+    d.approved_at::text AS approved_at_exact, d.approved_by::text AS approved_by_exact,
+    p.business_name AS prospect_name, p.sending_profile_id AS sending_profile_id,
     (SELECT email FROM prospect_emails pe WHERE pe.prospect_id = p.id
       ORDER BY is_primary DESC LIMIT 1) AS prospect_email
   FROM drafts d
   JOIN prospects p ON p.id = d.prospect_id
 `;
+
+type DraftApprovalSnapshot = {
+  subject: string;
+  body: string;
+  status: string;
+  approvedAtExact: string | null;
+  approvedByExact: string | null;
+  updatedAtExact: string;
+};
+export function matchesDraftApprovalSnapshot(
+  current: DraftApprovalSnapshot | null,
+  reviewed: DraftApprovalSnapshot,
+): boolean {
+  return !!current
+    && current.status === "draft"
+    && current.subject === reviewed.subject
+    && current.body === reviewed.body
+    && current.approvedAtExact === reviewed.approvedAtExact
+    && current.approvedByExact === reviewed.approvedByExact
+    && current.updatedAtExact === reviewed.updatedAtExact;
+}
+
+async function getDraftForApproval(id: string): Promise<{ draft: Draft; snapshot: DraftApprovalSnapshot } | null> {
+  const db = await getDb();
+  const result = await db.query<any>(`${DRAFT_SELECT} WHERE d.id = $1`, [id]);
+  const row = result.rows[0];
+  return row
+    ? {
+        draft: mapDraft(row),
+        snapshot: {
+          subject: row.subject as string,
+          body: row.body as string,
+          status: row.status as string,
+          approvedAtExact: (row.approved_at_exact ?? null) as string | null,
+          approvedByExact: (row.approved_by_exact ?? null) as string | null,
+          updatedAtExact: row.updated_at_exact as string,
+        },
+      }
+    : null;
+}
 
 export async function getDraft(id: string): Promise<Draft | null> {
   const db = await getDb();
@@ -745,7 +787,8 @@ export async function approveDraft(
   id: string,
   userId: string,
 ): Promise<Draft> {
-  const draft = await getDraft(id);
+  const reviewed = await getDraftForApproval(id);
+  const draft = reviewed?.draft ?? null;
   if (!draft) throw new AppError("Draft not found.", 404);
   if (draft.status === "sent") {
     throw new AppError("This draft has already been sent.", 409);
@@ -753,17 +796,57 @@ export async function approveDraft(
   const storeFounderAddress = !(await recipientIsVerified(draft.prospectId, draft.recipientEmail));
   const db = await getDb();
   await db.transaction(async tx => {
+    // The draft was loaded above to run the duplicate-contact checks. Re-lock and re-read it
+    // inside the transaction so a request started before a concurrent edit cannot approve that
+    // newer, unseen content. The comparison covers the reviewed subject, body, status and
+    // approval metadata plus the exact microsecond timestamp; the timestamp alone would miss a
+    // change that leaves updated_at untouched. FOR UPDATE also serializes the transition.
+    const current = await tx.query<{
+      subject: string;
+      body: string;
+      status: string;
+      approved_at_exact: string | null;
+      approved_by_exact: string | null;
+      updated_at_exact: string;
+    }>(
+      `SELECT subject, body, status, approved_at::text AS approved_at_exact,
+         approved_by::text AS approved_by_exact, updated_at::text AS updated_at_exact
+        FROM drafts WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    const locked = current.rows[0];
+    if (
+      !matchesDraftApprovalSnapshot(
+        locked
+          ? {
+              subject: locked.subject,
+              body: locked.body,
+              status: locked.status,
+              approvedAtExact: locked.approved_at_exact,
+              approvedByExact: locked.approved_by_exact,
+              updatedAtExact: locked.updated_at_exact,
+            }
+          : null,
+        reviewed!.snapshot,
+      )
+    ) {
+      throw new AppError("This draft changed while approval was being prepared. Refresh and review it again.", 409);
+    }
     if (storeFounderAddress) {
       await lockSendReservations(tx,draft.prospectId);
       await assertNoDuplicateContact({prospectId:draft.prospectId,recipient:draft.recipientEmail,draftId:draft.id},tx);
       await recordFounderEnteredEmail(draft.prospectId,draft.recipientEmail,tx);
     }
-    await tx.query(
+    const approved = await tx.query(
     `UPDATE drafts SET status = 'approved', approved_at = now(), approved_by = $1,
       updated_at = now()
-     WHERE id = $2 AND status IN ('draft')`,
-    [userId, id],
+     WHERE id = $2 AND status = 'draft' AND subject = $5 AND body = $3
+       AND approved_at IS NULL AND approved_by IS NULL AND updated_at = $4::timestamptz`,
+    [userId, id, locked.body, locked.updated_at_exact, locked.subject],
     );
+    if (approved.rowCount !== 1) {
+      throw new AppError("This draft changed while approval was being prepared. Refresh and review it again.", 409);
+    }
   });
   return (await getDraft(id))!;
 }
