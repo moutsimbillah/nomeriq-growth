@@ -101,8 +101,22 @@ const BARE_SALUTATION = /^(?:hi|hello|hey)(?:\s+\S+)?$|^dear(?:\s+\S+){0,3}$|^go
 const ADDRESS_WORD = /^(?:and|team|there|sir|madam|sir\/madam|all|everyone|&)$/i;
 const CAPITALISED_NAME = /^\p{Lu}[\p{L}'’.-]*$/u;
 const GREETING_MAX = 60;
-function isAddressWord(word: string): boolean {
-  return ADDRESS_WORD.test(word) || CAPITALISED_NAME.test(word);
+/**
+ * What precedes the comma is an address only when it is one name, or collective nouns and connectors — never
+ * two ordinary capitalised words. "Hi Ana," and "Hi Ana and team," are addresses; "Hi Excellent Services,"
+ * is a capitalised phrase that could be a title, so it is not accepted as one.
+ */
+function isAddress(address: string): boolean {
+  const words = address.split(/\s+/);
+  if (words.length > 3) return false;
+  let names = 0;
+  for (const word of words) {
+    if (ADDRESS_WORD.test(word)) continue;
+    if (!CAPITALISED_NAME.test(word)) return false;
+    names += 1;
+    if (names > 1) return false;
+  }
+  return true;
 }
 function opensWithGreeting(body: string): boolean {
   const firstLine = body.split("\n")[0]?.trim() ?? "";
@@ -110,19 +124,27 @@ function opensWithGreeting(body: string): boolean {
   if (firstLine.length > GREETING_MAX) return false;
   if (BARE_SALUTATION.test(firstLine)) return true;
   if (!firstLine.endsWith(",")) return false;
-  // A line that stops at a comma is a greeting only when what precedes the comma is an address: an empty
-  // salutation ("Hello,"), a name, or a name plus a collective noun, at most three words, every one of
-  // them address-shaped. Otherwise a fragment such as "Hi your excellent services," would pass merely by
-  // ending with a comma.
   const address = firstLine.slice(0, -1).replace(GREETING_WORD, "").trim();
   if (!address) return true; // "Hello," / "Good morning,"
-  const words = address.split(/\s+/);
-  if (words.length > 3) return false;
-  return words.every(isAddressWord);
+  return isAddress(address);
+}
+/**
+ * A first line that was clearly an attempt at a greeting — a greeting word, an address and a comma, nothing
+ * else — is replaced rather than kept above the new one, so the draft cannot open with two greetings when
+ * the model addressed the wrong name.
+ */
+function replacesGreetingLine(firstLine: string): boolean {
+  const line = firstLine.trim();
+  return GREETING_WORD.test(line) && line.endsWith(",") && line.length <= GREETING_MAX && line.split(/\s+/).length <= 4;
 }
 function ensureGreeting(body: string, prospect: ProspectDetail): string {
   const trimmed = body.trim();
   if (!trimmed || opensWithGreeting(trimmed)) return trimmed;
+  const [firstLine = "", ...rest] = trimmed.split("\n");
+  if (replacesGreetingLine(firstLine)) {
+    const remainder = rest.join("\n").trim();
+    return remainder ? `${greeting(prospect)}\n\n${remainder}` : greeting(prospect);
+  }
   return `${greeting(prospect)}\n\n${trimmed}`;
 }
 
