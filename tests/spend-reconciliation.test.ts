@@ -55,7 +55,7 @@ describe("spend reconciliation", () => {
 
   it("keeps spent_usd exactly equal to the sum of usage rows across many charges", async () => {
     const job = await createResearchJob({
-      name: "Reconciliation",
+      name: `Reconciliation ${crypto.randomUUID()}`,
       targetCount: 5,
       categories: ["forex"],
       engine: "deepseek",
@@ -91,7 +91,7 @@ describe("spend reconciliation", () => {
 
   it("keeps spend reconciled through a real engine run", async () => {
     const job = await createResearchJob({
-      name: "Reconciliation run",
+      name: `Reconciliation run ${crypto.randomUUID()}`,
       targetCount: 3,
       categories: ["forex"],
       engine: "deepseek",
@@ -130,7 +130,7 @@ describe("spend reconciliation", () => {
     // 005 must both widen the column and repair the recorded total.
     const db = await getDb();
     const job = await createResearchJob({
-      name: "Legacy drift",
+      name: `Legacy drift ${crypto.randomUUID()}`,
       targetCount: 2,
       categories: ["forex"],
       engine: "deepseek",
@@ -202,7 +202,7 @@ describe("spend reconciliation", () => {
     );
 
     const job = await createResearchJob({
-      name: "Idempotency",
+      name: `Idempotency ${crypto.randomUUID()}`,
       targetCount: 1,
       categories: ["forex"],
       engine: "deepseek",

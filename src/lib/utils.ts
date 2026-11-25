@@ -291,3 +291,36 @@ export function splitList(value: string | null | undefined): string[] {
 export function slugify(value: string): string {
   return normalizeName(value).replace(/\s+/g, "-").slice(0, 60);
 }
+
+/**
+ * How two research-target names are compared: case-insensitively, with repeated whitespace
+ * collapsed, so "Batch 07" and "batch  07" are the same name.
+ */
+export function normalizeResearchJobName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * The next free name for a new research target.
+ *
+ * The create form used to pre-fill one fixed batch name, which is how several targets ended up
+ * sharing it. This offers the next unused number instead — derived from the names already stored,
+ * never from a counter that could drift — and is used only to pre-fill the field the founder can
+ * still edit. Uniqueness itself is enforced by the service and a partial unique index.
+ */
+export function suggestResearchJobName(
+  existingNames: string[],
+  suffix = "new commercial signal providers",
+): string {
+  const used = new Set(existingNames.map(normalizeResearchJobName));
+  let highest = 0;
+  for (const name of existingNames) {
+    const match = /batch\s*0*(\d+)/i.exec(name);
+    if (match) highest = Math.max(highest, Number(match[1]));
+  }
+  for (let next = highest + 1; next < highest + 1000; next++) {
+    const candidate = `Batch ${String(next).padStart(2, "0")} — ${suffix}`;
+    if (!used.has(normalizeResearchJobName(candidate))) return candidate;
+  }
+  return `Batch ${new Date().toISOString().slice(0, 10)} — ${suffix}`;
+}

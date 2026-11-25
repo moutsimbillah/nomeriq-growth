@@ -32,7 +32,7 @@ beforeAll(async () => {
     await db.query(
       `INSERT INTO research_jobs (id, name, target_count, categories, status)
        VALUES ($1, $2, 10, '[]'::jsonb, 'active')`,
-      [id, name],
+      [id, `${name} ${crypto.randomUUID()}`],
     );
   }
 });

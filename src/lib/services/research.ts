@@ -1,5 +1,5 @@
 import { getDb } from "@/lib/db/client";
-import { AppError, asStringArray, iso, number } from "@/lib/utils";
+import { AppError, asStringArray, iso, normalizeResearchJobName, number } from "@/lib/utils";
 import type { Category, ResearchJob, ResearchJobStatus } from "@/lib/types";
 import { qualifiedTargetCountSql, qualifiedTargetPredicateSql } from "@/lib/leads/qualified-target";
 import { getWorkspaceSettings } from "./settings";
@@ -34,16 +34,32 @@ const JOB_SELECT = `
     ) AS candidates_pending,
     (SELECT count(*) FROM research_candidates rc
       WHERE rc.job_id = j.id AND rc.status = 'qualified'
-    ) AS candidates_qualified
+    ) AS candidates_qualified,
+    (SELECT jsonb_agg(jsonb_build_object('agent', x.agent, 'leads', x.leads) ORDER BY x.leads DESC, x.agent)
+       FROM (SELECT coalesce(p.source_agent, 'unknown') AS agent, count(*)::int AS leads
+               FROM prospects p WHERE p.research_job_id = j.id
+              GROUP BY 1) x
+    ) AS researcher_counts
   FROM research_jobs j
 `;
 
 function mapJob(row: any): ResearchJob {
   const target = number(row.target_count);
   const verified = number(row.verified_count);
+  const rawResearchers: Array<{ agent?: unknown; leads?: unknown }> = Array.isArray(row.researcher_counts)
+    ? row.researcher_counts
+    : [];
   return {
     id: row.id,
     name: row.name,
+    /**
+     * Who actually saved this target's leads, from the stored rows themselves — never from the
+     * configured engine. A target created for the DeepSeek engine but researched by a connected
+     * Claude or ChatGPT session says Claude or ChatGPT here.
+     */
+    researchers: rawResearchers
+      .map((entry) => ({ agent: String(entry.agent ?? "unknown"), leads: number(entry.leads) }))
+      .filter((entry) => entry.leads > 0),
     targetCount: target,
     categories: asStringArray(row.categories) as Category[],
     regions: row.regions,
@@ -94,6 +110,32 @@ export async function getResearchJob(id: string): Promise<ResearchJob | null> {
   return result.rows[0] ? mapJob(result.rows[0]) : null;
 }
 
+/**
+ * One name per research target.
+ *
+ * Names are compared with `normalizeResearchJobName` (case-insensitive, repeated whitespace
+ * collapsed). Duplicates are refused against every stored target, archived ones included, and the
+ * message names the target that already holds the name. A partial unique index backs this up for
+ * the statuses that can run (`040_research_job_unique_name.sql`).
+ */
+export async function findResearchJobByName(name: string): Promise<{ id: string; name: string; status: string } | null> {
+  const db = await getDb();
+  const result = await db.query<{ id: string; name: string; status: string }>(
+    `SELECT id, name, status FROM research_jobs
+      WHERE lower(regexp_replace(btrim(name), '\\s+', ' ', 'g')) = $1
+      ORDER BY created_at LIMIT 1`,
+    [normalizeResearchJobName(name)],
+  );
+  return result.rows[0] ?? null;
+}
+
+/** The one message a taken name produces, wherever it is raised. */
+export function researchJobNameTaken(existing: { name: string; status: string }): AppError {
+  return new AppError(
+    `A research target called “${existing.name}” already exists (${existing.status}). Give this one a different name.`,
+  );
+}
+
 export async function createResearchJob(input: {
   name: string;
   targetCount: number;
@@ -113,6 +155,8 @@ export async function createResearchJob(input: {
   if (!input.categories.length) {
     throw new AppError("Select at least one category for the research job.");
   }
+  const slipped = await findResearchJobByName(input.name);
+  if (slipped) throw researchJobNameTaken(slipped);
   const engine = input.engine ?? "manual";
   // Defaults come from workspace settings so the founder configures budget and
   // concurrency once instead of per job.
@@ -127,27 +171,40 @@ export async function createResearchJob(input: {
   }
   const db = await getDb();
   const id = crypto.randomUUID();
-  await db.query(
-    `INSERT INTO research_jobs
-      (id, name, target_count, categories, regions, requirements, notes, engine,
-       budget_usd, concurrency, status, created_by)
-     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12)`,
-    [
-      id,
-      input.name.trim(),
-      input.targetCount,
-      JSON.stringify(input.categories),
-      input.regions?.trim() || "Worldwide",
-      input.requirements?.trim() ||
-        "Commercial trading-signal providers only, with a publicly published business email and source URL.",
-      input.notes?.trim() || "",
-      engine,
-      budgetUsd,
-      concurrency,
-      engine === "deepseek" ? "paused" : "active",
-      input.userId,
-    ],
-  );
+  const normalizedName = normalizeResearchJobName(input.name);
+  await db.transaction(async (tx) => {
+    // Serialise on the normalised name: a second submission at the same moment waits here, then
+    // sees the first target and is refused instead of creating a second batch with one name.
+    await tx.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`research_job_name:${normalizedName}`]);
+    const taken = await tx.query<{ name: string; status: string }>(
+      `SELECT name, status FROM research_jobs
+        WHERE lower(regexp_replace(btrim(name), '\\s+', ' ', 'g')) = $1
+        ORDER BY created_at LIMIT 1`,
+      [normalizedName],
+    );
+    if (taken.rows[0]) throw researchJobNameTaken(taken.rows[0]);
+    await tx.query(
+      `INSERT INTO research_jobs
+        (id, name, target_count, categories, regions, requirements, notes, engine,
+         budget_usd, concurrency, status, created_by)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [
+        id,
+        input.name.trim(),
+        input.targetCount,
+        JSON.stringify(input.categories),
+        input.regions?.trim() || "Worldwide",
+        input.requirements?.trim() ||
+          "Commercial trading-signal providers only, with a publicly published business email and source URL.",
+        input.notes?.trim() || "",
+        engine,
+        budgetUsd,
+        concurrency,
+        engine === "deepseek" ? "paused" : "active",
+        input.userId,
+      ],
+    );
+  });
   return (await getResearchJob(id))!;
 }
 

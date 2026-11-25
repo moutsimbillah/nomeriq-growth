@@ -41,7 +41,7 @@ afterAll(async () => {
   await db.query("DELETE FROM users WHERE id=$1", [founder.id]);
 });
 async function job() {
-  const result = await createResearchJob({ name: "Accounting review fixture", targetCount: 2, categories: ["forex"], userId: founder.id, engine: "deepseek", budgetUsd: 1 });
+  const result = await createResearchJob({ name: `Accounting review fixture ${crypto.randomUUID()}`, targetCount: 2, categories: ["forex"], userId: founder.id, engine: "deepseek", budgetUsd: 1 });
   jobs.push(result.id);
   return result.id;
 }
