@@ -390,6 +390,8 @@ async function executeAgentAction(
         leadModel: saved.leadModel ?? null,
         message: saved.resolution === "review_required"
           ? "Save blocked: recorded identities overlap. No record was created or merged. Show the matches and reasons for founder review; do not work around this with different fields or draft against an arbitrary match."
+          : saved.resolution === "reassessed"
+          ? "This business was already saved, so a new evidence-backed assessment was recorded on the existing lead and its qualification was updated. No second record was created. Founder decisions on tier or eligibility are never displaced."
           : saved.duplicate
           ? "A matching prospect already existed. Return this existing record; do not create another."
           : saved.leadModel?.tier === "category_b" ? "Alternative-contact research record saved. Never prepare or send email for Category B."
@@ -749,7 +751,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: "save_prospect",
     description:
-      "Save an evidence-backed signal seller, an alternative-contact research record or an excluded business with its reason. A modern leadAssessment is required for verification; without it the record remains a candidate even if qualificationStatus says verified. Tier and fit are derived from sourced leadAssessment, audiences and contactRoutes; only the resulting eligible Tier 1 / Other Signal Provider tiers count toward a target, while email-no-website, Category B, excluded and unassessed records are kept but do not count. No email is required for Category B/excluded records. Existing duplicates are returned unchanged; this tool cannot send, override founder decisions or run jobs.",
+      "Save an evidence-backed signal seller, an alternative-contact research record or an excluded business with its reason. A modern leadAssessment is required for verification; without it the record remains a candidate even if qualificationStatus says verified. Tier and fit are derived from sourced leadAssessment, audiences and contactRoutes; only the resulting eligible Tier 1 / Other Signal Provider tiers count toward a target, while email-no-website, Category B, excluded and unassessed records are kept but do not count. No email is required for Category B/excluded records. When the same business is already saved and you supply a fresh evidence-backed leadAssessment, the new assessment is recorded on that existing lead and its qualification is updated instead of creating a second record; a founder override on tier or eligibility is never displaced. This tool cannot send, override founder decisions or run jobs.",
     inputSchema: {
       type: "object",
       properties: {
