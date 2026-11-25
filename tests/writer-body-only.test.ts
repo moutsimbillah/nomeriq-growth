@@ -116,7 +116,7 @@ describe("writer outputs stay body-only", () => {
 
 describe("first contact opens with a greeting", () => {
 
-  /** A first-contact draft must open with a greeting even when the model omits one. */
+    /** A first-contact draft must open with a greeting even when the model omits one. */
   it("adds the greeting line when the model starts straight with the observation", async () => {
     const body = "I noticed your public gold signal service and how your team delivers updates after a signal is posted. How does access work when a plan renews?";
     const generated = await generateWithModelBody(body);
@@ -125,61 +125,84 @@ describe("first contact opens with a greeting", () => {
     expectBodyOnly(generated.body);
   });
 
-    it("keeps a greeting the model wrote as its own line, without doubling it", async () => {
-      const body = "Hi Ana,\n\nI noticed your public gold signal service and how your team delivers updates after a signal is posted. How does access work when a plan renews?";
-      const generated = await generateWithModelBody(body);
-      expect(generated.body.startsWith("Hi Ana,")).toBe(true);
-      expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
-    });
+  it("keeps a greeting the model wrote as its own line, without doubling it", async () => {
+    const body = "Hi Ana,\n\nI noticed your public gold signal service and how your team delivers updates after a signal is posted. How does access work when a plan renews?";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.startsWith("Hi Ana,")).toBe(true);
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
+  });
 
-    it("adds a greeting line when the model fused the greeting into the first sentence", async () => {
-      // "Hi Ana, I noticed ..." on one line reads as a wall of text, not as a greeting, so the guaranteed
-      // line goes above it and the model's own words are preserved underneath.
-      const body = "Hi Ana, I noticed your public gold signal service and how your team delivers updates after a signal is posted. How does access work when a plan renews?";
-      const generated = await generateWithModelBody(body);
-      expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
-      expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
-      expect(generated.body).toContain("I noticed your public gold signal service");
-    });
+  it("adds a greeting line when the model fused the greeting into the first sentence", async () => {
+    // "Hi Ana, I noticed ..." on one line reads as a wall of text, not as a greeting, so the guaranteed
+    // line goes above it and the model's own words are preserved underneath.
+    const body = "Hi Ana, I noticed your public gold signal service and how your team delivers updates after a signal is posted. How does access work when a plan renews?";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
+    expect(generated.body).toContain("I noticed your public gold signal service");
+  });
 
-    it("does not mistake a short sentence for a greeting", async () => {
-      // The reviewer's example: "Hi I noticed" is a sentence, not a salutation.
-      const body = "Hi I noticed your VIP plans and wanted to reach out about how your team delivers signals to subscribers after a plan renews or expires.";
-      const generated = await generateWithModelBody(body);
-      expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
-      expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
-    });
+  it("does not mistake a short sentence for a greeting", async () => {
+    // The reviewer's example: "Hi I noticed" is a sentence, not a salutation.
+    const body = "Hi I noticed your VIP plans and wanted to reach out about how your team delivers signals to subscribers after a plan renews or expires.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
+  });
 
-    it("does not accept a sentence that merely ends with a comma", async () => {
-      // The later example: "Hi I noticed your services," ends with a comma but is not an address. The line is
-      // 27 characters, so only the address rule can reject it.
-      const body = "Hi I noticed your services,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
-      const generated = await generateWithModelBody(body);
-      expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
-      expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
-    });
+  it("does not accept a sentence that merely ends with a comma", async () => {
+    // "Hi I noticed your services," ends with a comma but is not an address. The line is 27 characters,
+    // so only the address rule can reject it.
+    const body = "Hi I noticed your services,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
+  });
 
-    it("keeps a real addressed greeting as its own line, unchanged", async () => {
-      const body = "Hi Ana,\n\nI noticed your VIP plans and wanted to reach out about how your team delivers signals to subscribers after a plan renews or expires.";
-      const generated = await generateWithModelBody(body);
-      expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
-      expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
-    });
+  it("does not accept a fragment with no pronoun in it", async () => {
+    // The round-5 example: a stoplist of pronouns cannot rule this out, only proving the words are an
+    // address can. "excellent services" is neither a name nor a collective noun.
+    const body = "Hi your excellent services,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
+  });
 
-    it("keeps a greeting addressed to a small team", async () => {
-      // "Ana and team" is an address, not a sentence, so no second greeting is added.
-      const body = "Hi Ana and team,\n\nI noticed your VIP plans and wanted to reach out about how your team delivers signals to subscribers after a plan renews or expires.";
-      const generated = await generateWithModelBody(body);
-      expect(generated.body.split("\n")[0]).toBe("Hi Ana and team,");
-      expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
-    });
+  it("does not accept a name followed by ordinary lowercase words", async () => {
+    const body = "Hi Ana great offers,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
+  });
 
-    it("accepts a bare salutation on its own line", async () => {
-      const body = "Hi there\n\nI noticed your VIP plans and wanted to reach out about how your team delivers signals to subscribers after a plan renews or expires.";
-      const generated = await generateWithModelBody(body);
-      expect(generated.body.split("\n")[0]).toBe("Hi there");
-      expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
-    });
+  it("keeps a formal salutation such as Dear Sir/Madam", async () => {
+    const body = "Dear Sir/Madam,\n\nI wanted to ask how your team delivers paid signals to subscribers after a plan renews or expires, and what takes the most time in that routine each week.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Dear Sir/Madam,");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(0);
+  });
+
+  it("keeps a real addressed greeting as its own line, unchanged", async () => {
+    const body = "Hi Ana,\n\nI noticed your VIP plans and wanted to reach out about how your team delivers signals to subscribers after a plan renews or expires.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
+  });
+
+  it("keeps a greeting addressed to a small team", async () => {
+    // "Ana and team" is an address, not a sentence, so no second greeting is added.
+    const body = "Hi Ana and team,\n\nI noticed your VIP plans and wanted to reach out about how your team delivers signals to subscribers after a plan renews or expires.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi Ana and team,");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
+  });
+
+  it("accepts a bare salutation on its own line", async () => {
+    const body = "Hi there\n\nI noticed your VIP plans and wanted to reach out about how your team delivers signals to subscribers after a plan renews or expires.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi there");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
+  });
 
   it("the deterministic first-contact body also opens with the greeting", () => {
     expect(deterministicFirstContact(prospect, settings).body.startsWith("Hi Ana,")).toBe(true);
