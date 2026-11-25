@@ -92,14 +92,22 @@ function greeting(prospect: ProspectDetail): string {
 const GREETING_WORD = /^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\b/i;
 /** A salutation with nothing else on the line: "Hello", "Hi there", "Dear Sir/Madam". */
 const BARE_SALUTATION = /^(?:hi|hello|hey)(?:\s+\S+)?$|^dear(?:\s+\S+){0,3}$|^good (?:morning|afternoon|evening)$/i;
+/** Words that make the rest of the line a sentence rather than an address: "Hi I noticed your services,". */
+const NOT_AN_ADDRESS = /\b(?:i|i'm|we|we're|my|our|you|you're|your|thanks|thank|hope|wanted|noticed|saw|came|reaching|am|is|was|are)\b/i;
 const GREETING_MAX = 60;
 function opensWithGreeting(body: string): boolean {
   const firstLine = body.split("\n")[0]?.trim() ?? "";
   if (!firstLine || !GREETING_WORD.test(firstLine)) return false;
   if (firstLine.length > GREETING_MAX) return false;
-  // An addressed greeting closes with a comma ("Hi Ana,", "Hello there,"). A line without a comma counts
-  // only when the WHOLE line is a salutation, so a sentence such as "Hi I noticed" cannot pass as one.
-  return firstLine.endsWith(",") || BARE_SALUTATION.test(firstLine);
+  if (BARE_SALUTATION.test(firstLine)) return true;
+  if (!firstLine.endsWith(",")) return false;
+  // A line that stops at a comma is a greeting only when what precedes the comma is an address — a person,
+  // a team or "there", at most three words, and none of them turning the line into a sentence. Otherwise
+  // "Hi I noticed your services," would pass merely by ending with a comma.
+  const address = firstLine.slice(0, -1).replace(GREETING_WORD, "").trim();
+  if (!address) return true; // "Hello," / "Good morning,"
+  if (NOT_AN_ADDRESS.test(address)) return false;
+  return address.split(/\s+/).length <= 3;
 }
 function ensureGreeting(body: string, prospect: ProspectDetail): string {
   const trimmed = body.trim();
