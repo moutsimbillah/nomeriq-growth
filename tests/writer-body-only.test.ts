@@ -114,6 +114,45 @@ describe("writer outputs stay body-only", () => {
   });
 });
 
+  /** A first-contact draft must open with a greeting even when the model omits one. */
+  it("adds the greeting line when the model starts straight with the observation", async () => {
+    const body = "I noticed your public gold signal service and how your team delivers updates after a signal is posted. How does access work when a plan renews?";
+    const generated = await generateWithModelBody(body);
+    expect(generated.usedAi).toBe(true);
+    expect(generated.body.startsWith("Hi Ana,")).toBe(true);
+    expectBodyOnly(generated.body);
+  });
+
+  it("keeps a greeting the model wrote, without doubling it", async () => {
+    const body = "Hi Ana, I noticed your public gold signal service and how your team delivers updates after a signal is posted. How does access work when a plan renews?";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.startsWith("Hi Ana,")).toBe(true);
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
+  });
+
+  it("the deterministic first-contact body also opens with the greeting", () => {
+    expect(deterministicFirstContact(prospect, settings).body.startsWith("Hi Ana,")).toBe(true);
+  });
+
+  /** Runs the AI path with a stubbed provider that returns exactly `body`. */
+  async function generateWithModelBody(body: string) {
+    const db = await getDb();
+    const providerId = await createResearchProvider({
+      name: `Greeting gateway ${randomUUID()}`, provider: "custom", kinds: "chat", model: "greeting-model",
+      apiKey: "fixture-key", baseUrl: "https://greeting.example.test/v1",
+    });
+    await db.query(`UPDATE research_providers SET last_test_ok = true WHERE id = $1`, [providerId]);
+    await saveTaskSetting("first_email", { providerId });
+    try {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ subject: "Quick question", body }) } }],
+      }))));
+      return await generateFirstContact(prospect, truth, settings);
+    } finally {
+      await clearAiSettings();
+      await db.query(`DELETE FROM research_providers WHERE id = $1`, [providerId]);
+    }
+  }
 async function clearAiSettings() {
   const db = await getDb();
   await db.query(`DELETE FROM ai_task_settings`);
