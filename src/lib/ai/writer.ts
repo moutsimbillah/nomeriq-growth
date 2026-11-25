@@ -92,22 +92,33 @@ function greeting(prospect: ProspectDetail): string {
 const GREETING_WORD = /^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\b/i;
 /** A salutation with nothing else on the line: "Hello", "Hi there", "Dear Sir/Madam". */
 const BARE_SALUTATION = /^(?:hi|hello|hey)(?:\s+\S+)?$|^dear(?:\s+\S+){0,3}$|^good (?:morning|afternoon|evening)$/i;
-/** Words that make the rest of the line a sentence rather than an address: "Hi I noticed your services,". */
-const NOT_AN_ADDRESS = /\b(?:i|i'm|we|we're|my|our|you|you're|your|thanks|thank|hope|wanted|noticed|saw|came|reaching|am|is|was|are)\b/i;
+/**
+ * An address word is a name ("Ana", "Smith-Jones"), a collective noun a founder may greet ("team",
+ * "there", "sir", "madam", "all", "everyone") or a connector ("and", "&"). Anything else — a lowercase
+ * ordinary word such as "services" or "offers", or a pronoun — makes the line a sentence, not a greeting.
+ * Proving the words are an address this way is stricter than listing words that are not.
+ */
+const ADDRESS_WORD = /^(?:and|team|there|sir|madam|sir\/madam|all|everyone|&)$/i;
+const CAPITALISED_NAME = /^\p{Lu}[\p{L}'’.-]*$/u;
 const GREETING_MAX = 60;
+function isAddressWord(word: string): boolean {
+  return ADDRESS_WORD.test(word) || CAPITALISED_NAME.test(word);
+}
 function opensWithGreeting(body: string): boolean {
   const firstLine = body.split("\n")[0]?.trim() ?? "";
   if (!firstLine || !GREETING_WORD.test(firstLine)) return false;
   if (firstLine.length > GREETING_MAX) return false;
   if (BARE_SALUTATION.test(firstLine)) return true;
   if (!firstLine.endsWith(",")) return false;
-  // A line that stops at a comma is a greeting only when what precedes the comma is an address — a person,
-  // a team or "there", at most three words, and none of them turning the line into a sentence. Otherwise
-  // "Hi I noticed your services," would pass merely by ending with a comma.
+  // A line that stops at a comma is a greeting only when what precedes the comma is an address: an empty
+  // salutation ("Hello,"), a name, or a name plus a collective noun, at most three words, every one of
+  // them address-shaped. Otherwise a fragment such as "Hi your excellent services," would pass merely by
+  // ending with a comma.
   const address = firstLine.slice(0, -1).replace(GREETING_WORD, "").trim();
   if (!address) return true; // "Hello," / "Good morning,"
-  if (NOT_AN_ADDRESS.test(address)) return false;
-  return address.split(/\s+/).length <= 3;
+  const words = address.split(/\s+/);
+  if (words.length > 3) return false;
+  return words.every(isAddressWord);
 }
 function ensureGreeting(body: string, prospect: ProspectDetail): string {
   const trimmed = body.trim();
