@@ -115,7 +115,7 @@ describe("a saved lead can be re-assessed with new evidence", () => {
     )).rows[0];
     expect(audit?.metadata?.reassessment).toBe(true);
     // The audit row alone must be enough to reverse the write: which assessment was superseded, which one
-    // this call added, and how many audience / contact-route observations it introduced.
+    // this call added, and which audience / contact-route observation rows it introduced.
     expect(typeof audit?.metadata?.newAssessmentId).toBe("string");
     expect(audit?.metadata?.newAssessmentId).toBe(again.leadModel?.assessmentId);
     expect(typeof audit?.metadata?.previousAssessmentId).toBe("string");
@@ -125,8 +125,49 @@ describe("a saved lead can be re-assessed with new evidence", () => {
     expect(Array.isArray(audit?.metadata?.contactRouteObservationIds)).toBe(true);
   });
 
-  it("never displaces a founder decision on tier or eligibility", async () => {
+  it("names the exact observation rows it added, so they can be removed by id", async () => {
     const name = key();
+    const id = await saveCandidate(name);
+    const checked = new Date().toISOString();
+
+    const again = await saveProspect({
+      ...payload(name, true),
+      audiences: [{
+        platform: "telegram", accountKey: `${name}-channel`, handle: "@reassessfixture",
+        accountUrl: "https://t.me/reassessfixture", countValue: 1200, countState: "verified",
+        checkedAt: checked, sourceUrl: `https://${name}.example.test/signals`,
+        officialLinkSourceUrl: `https://${name}.example.test/signals`, isApproximate: false, displayedText: "1.2k members",
+      }],
+      contactRoutes: [{
+        platform: "telegram", routeKind: "channel", handle: "@reassessfixture",
+        routeUrl: "https://t.me/reassessfixture", officialStatus: "verified",
+        checkedAt: checked, sourceUrl: `https://${name}.example.test/signals`,
+        officialLinkSourceUrl: `https://${name}.example.test/signals`, notes: "Fixture contact route",
+      }],
+    });
+    expect(again.resolution).toBe("reassessed");
+
+    const db = await getDb();
+    const audienceIds = (await db.query<{ id: string }>(
+      `SELECT id FROM prospect_audience_observations WHERE prospect_id = $1`, [id],
+    )).rows.map((row) => row.id);
+    const routeIds = (await db.query<{ id: string }>(
+      `SELECT id FROM prospect_contact_route_observations WHERE prospect_id = $1`, [id],
+    )).rows.map((row) => row.id);
+    expect(audienceIds).toHaveLength(1);
+    expect(routeIds).toHaveLength(1);
+
+    const audit = (await db.query<{ metadata: Record<string, unknown> }>(
+      `SELECT metadata FROM audit_log WHERE entity_id = $1 AND action = 'lead.assessment_applied' ORDER BY created_at DESC LIMIT 1`, [id],
+    )).rows[0];
+    // The recorded ids must be exactly the rows this call created — an id that names nothing, or a row it
+    // did not add, would make the undo remove the wrong observation or none at all.
+    expect(audit?.metadata?.audienceObservationIds).toEqual(audienceIds);
+    expect(audit?.metadata?.contactRouteObservationIds).toEqual(routeIds);
+  });
+
+  it("never displaces a founder decision on tier or eligibility", async () => {
+const name = key();
     const id = await saveCandidate(name);
     const db = await getDb();
     await db.query(
