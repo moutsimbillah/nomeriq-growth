@@ -22,6 +22,7 @@ export const observedDate = z.string().datetime({ offset: true }).refine(value =
 export const findingSchema = z.object({
   area: z.enum(["paid_signals", "markets", "email", "identity", "activity", "delivery", "membership", "dashboard", "publishing", "performance", "payments", "app", "gap"]),
   summary: z.string().trim().min(3).max(4000), sourceUrl: publicUrl, observedAt: observedDate,
+  officialLinkSourceUrl: publicUrl.optional(),
   verdict: z.enum(["present", "absent", "unknown"]).default("present"),
   activityAt: observedDate.optional(),
 }).strict();
