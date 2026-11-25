@@ -140,6 +140,21 @@ describe("writer outputs stay body-only", () => {
       expect(generated.body).toContain("I noticed your public gold signal service");
     });
 
+  it("does not mistake a short sentence for a greeting", async () => {
+    // The reviewer's example: "Hi I noticed" is a sentence, not a salutation.
+    const body = "Hi I noticed your VIP plans and wanted to reach out about how your team delivers signals to subscribers after a plan renews or expires.";
+        const generated = await generateWithModelBody(body);
+        expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+        expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
+      });
+
+      it("accepts a bare salutation on its own line", async () => {
+        const body = "Hi there\n\nI noticed your VIP plans and wanted to reach out about how your team delivers signals to subscribers after a plan renews or expires.";
+        const generated = await generateWithModelBody(body);
+        expect(generated.body.split("\n")[0]).toBe("Hi there");
+        expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
+      });
+
   it("the deterministic first-contact body also opens with the greeting", () => {
     expect(deterministicFirstContact(prospect, settings).body.startsWith("Hi Ana,")).toBe(true);
   });

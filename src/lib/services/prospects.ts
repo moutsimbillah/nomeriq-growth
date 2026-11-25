@@ -241,12 +241,14 @@ export async function reassessProspect(input: {
         ORDER BY assessed_at DESC, created_at DESC, id DESC LIMIT 1`,
       [input.prospectId],
     )).rows[0]?.id ?? null;
-    const audiencesBefore = (await tx.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM prospect_audience_observations WHERE prospect_id = $1`, [input.prospectId],
-    )).rows[0]?.n ?? 0;
-    const routesBefore = (await tx.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM prospect_contact_route_observations WHERE prospect_id = $1`, [input.prospectId],
-    )).rows[0]?.n ?? 0;
+    // The exact rows this call adds, so the write can be reversed from the audit log alone: a count cannot
+    // identify which observations to remove.
+    const audiencesBefore = (await tx.query<{ id: string }>(
+      `SELECT id FROM prospect_audience_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows.map((entry) => entry.id);
+    const routesBefore = (await tx.query<{ id: string }>(
+      `SELECT id FROM prospect_contact_route_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows.map((entry) => entry.id);
     for (const audience of input.intake.audiences ?? []) {
       await saveAudienceObservation(input.prospectId, { ...audience, provenanceKey: crypto.randomUUID() }, tx);
     }
@@ -277,12 +279,14 @@ export async function reassessProspect(input: {
         RETURNING status, verified_at::text AS verified_at`,
       [input.prospectId, qualification, leadModel.exclusionReason],
     )).rows[0];
-    const audiencesAdded = ((await tx.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM prospect_audience_observations WHERE prospect_id = $1`, [input.prospectId],
-    )).rows[0]?.n ?? 0) - audiencesBefore;
-    const routesAdded = ((await tx.query<{ n: number }>(
-      `SELECT count(*)::int AS n FROM prospect_contact_route_observations WHERE prospect_id = $1`, [input.prospectId],
-    )).rows[0]?.n ?? 0) - routesBefore;
+    const audienceIdsAfter = (await tx.query<{ id: string }>(
+      `SELECT id FROM prospect_audience_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows.map((entry) => entry.id);
+    const routeIdsAfter = (await tx.query<{ id: string }>(
+      `SELECT id FROM prospect_contact_route_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows.map((entry) => entry.id);
+    const audiencesAdded = audienceIdsAfter.filter((id) => !audiencesBefore.includes(id));
+    const routesAdded = routeIdsAfter.filter((id) => !routesBefore.includes(id));
     await tx.query(
       `INSERT INTO audit_log (id,actor_type,actor_id,action,entity_type,entity_id,metadata)
        VALUES ($1,$2,$3,'lead.assessment_applied','prospect',$4,$5::jsonb)`,
@@ -294,8 +298,8 @@ export async function reassessProspect(input: {
         newEligibility: leadModel.eligibility,
         newTier: leadModel.tier ?? null,
         newProductFit: leadModel.productFit,
-        audiencesAdded,
-        routesAdded,
+        audienceObservationIds: audiencesAdded,
+        contactRouteObservationIds: routesAdded,
         previousQualificationStatus: row.qualification_status,
         previousStatus: row.status,
         previousRejectionReason: row.rejection_reason,

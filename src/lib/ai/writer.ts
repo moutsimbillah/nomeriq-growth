@@ -90,13 +90,16 @@ function greeting(prospect: ProspectDetail): string {
  * left byte-identical.
  */
 const GREETING_WORD = /^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\b/i;
+/** A salutation with nothing else on the line: "Hello", "Hi there", "Dear Sir/Madam". */
+const BARE_SALUTATION = /^(?:hi|hello|hey)(?:\s+\S+)?$|^dear(?:\s+\S+){0,3}$|^good (?:morning|afternoon|evening)$/i;
 const GREETING_MAX = 60;
 function opensWithGreeting(body: string): boolean {
   const firstLine = body.split("\n")[0]?.trim() ?? "";
   if (!firstLine || !GREETING_WORD.test(firstLine)) return false;
   if (firstLine.length > GREETING_MAX) return false;
-  // Either the line closes with a comma, or it is short enough to be nothing but an address.
-  return firstLine.endsWith(",") || firstLine.length <= 25;
+  // An addressed greeting closes with a comma ("Hi Ana,", "Hello there,"). A line without a comma counts
+  // only when the WHOLE line is a salutation, so a sentence such as "Hi I noticed" cannot pass as one.
+  return firstLine.endsWith(",") || BARE_SALUTATION.test(firstLine);
 }
 function ensureGreeting(body: string, prospect: ProspectDetail): string {
   const trimmed = body.trim();
