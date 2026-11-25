@@ -159,20 +159,38 @@ describe("first contact opens with a greeting", () => {
     expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
   });
 
-  it("does not accept a fragment with no pronoun in it", async () => {
+  it("rejects a fragment with no pronoun in it, and does not open with two greetings", async () => {
     // The round-5 example: a stoplist of pronouns cannot rule this out, only proving the words are an
-    // address can. "excellent services" is neither a name nor a collective noun.
+    // address can. "excellent services" is neither a name nor a collective noun, and because the line is
+    // nothing but an attempted greeting it is replaced rather than prefixed.
     const body = "Hi your excellent services,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
     const generated = await generateWithModelBody(body);
     expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
-    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
+    expect(generated.body).not.toContain("excellent services");
   });
 
-  it("does not accept a name followed by ordinary lowercase words", async () => {
-    const body = "Hi Ana great offers,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
+  it("rejects two ordinary capitalised words as an address", async () => {
+    // The round-6 example: "Hi Excellent Services," is a capitalised phrase, not one name.
+    const body = "Hi Excellent Services,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
     const generated = await generateWithModelBody(body);
     expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
-    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
+    expect(generated.body).not.toContain("Excellent Services");
+  });
+
+  it("replaces a greeting addressed to the wrong name instead of stacking two", async () => {
+    const body = "Hi John Smith,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
+  });
+
+  it("keeps a greeting that names the contact", async () => {
+    const body = "Hi Ana,\n\nI wanted to ask how your team delivers signals to subscribers after a plan renews or expires.";
+    const generated = await generateWithModelBody(body);
+    expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
   });
 
   it("keeps a formal salutation such as Dear Sir/Madam", async () => {
