@@ -119,8 +119,10 @@ describe("a saved lead can be re-assessed with new evidence", () => {
     expect(typeof audit?.metadata?.newAssessmentId).toBe("string");
     expect(audit?.metadata?.newAssessmentId).toBe(again.leadModel?.assessmentId);
     expect(typeof audit?.metadata?.previousAssessmentId).toBe("string");
-    expect(audit?.metadata?.audiencesAdded).toBe(0);
-    expect(audit?.metadata?.routesAdded).toBe(0);
+    // Exact row ids, not counts: a count could not tell an operator which observations to remove.
+    expect(Array.isArray(audit?.metadata?.audienceObservationIds)).toBe(true);
+    expect((audit?.metadata?.audienceObservationIds as string[]).length).toBe(0);
+    expect(Array.isArray(audit?.metadata?.contactRouteObservationIds)).toBe(true);
   });
 
   it("never displaces a founder decision on tier or eligibility", async () => {
