@@ -76,18 +76,31 @@ function greeting(prospect: ProspectDetail): string {
 }
 
 /**
- * A generated body must open with a greeting.
+ * A generated body must open with a greeting *line*.
  *
  * The greeting is supplied here rather than trusted to the model: the founder asked why first-contact
  * drafts began straight with the observation, and the cause was the prompt asking for an observation
- * first. The model is now asked for the greeting too, but a body that still starts without one gets
- * the same line the deterministic writer uses, so every draft sent or reviewed opens the same way.
- * A greeting the model did write is left exactly as it is.
+ * first. The model is now asked for the greeting too, but a body that lacks one gets the same line the
+ * deterministic writer uses.
+ *
+ * "Has one" is judged on the first line only, and strictly: a greeting word, then nothing that continues
+ * into a sentence. `Hi Ana,` or `Dear Sir` pass; `Hi Ana, I noticed your VIP plans and wanted to ask…` on
+ * one line does not, because the greeting has been fused with the observation and the reader sees a wall
+ * of text — that body gets a proper greeting line above it. A greeting the model did write is otherwise
+ * left byte-identical.
  */
-const GREETING_LINE = /^\s*(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\b/i;
+const GREETING_WORD = /^(?:hi|hello|hey|dear|good (?:morning|afternoon|evening))\b/i;
+const GREETING_MAX = 60;
+function opensWithGreeting(body: string): boolean {
+  const firstLine = body.split("\n")[0]?.trim() ?? "";
+  if (!firstLine || !GREETING_WORD.test(firstLine)) return false;
+  if (firstLine.length > GREETING_MAX) return false;
+  // Either the line closes with a comma, or it is short enough to be nothing but an address.
+  return firstLine.endsWith(",") || firstLine.length <= 25;
+}
 function ensureGreeting(body: string, prospect: ProspectDetail): string {
   const trimmed = body.trim();
-  if (!trimmed || GREETING_LINE.test(trimmed)) return trimmed;
+  if (!trimmed || opensWithGreeting(trimmed)) return trimmed;
   return `${greeting(prospect)}\n\n${trimmed}`;
 }
 

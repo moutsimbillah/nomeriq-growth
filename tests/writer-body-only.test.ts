@@ -123,12 +123,22 @@ describe("writer outputs stay body-only", () => {
     expectBodyOnly(generated.body);
   });
 
-  it("keeps a greeting the model wrote, without doubling it", async () => {
-    const body = "Hi Ana, I noticed your public gold signal service and how your team delivers updates after a signal is posted. How does access work when a plan renews?";
-    const generated = await generateWithModelBody(body);
-    expect(generated.body.startsWith("Hi Ana,")).toBe(true);
-    expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
-  });
+  it("keeps a greeting the model wrote as its own line, without doubling it", async () => {
+      const body = "Hi Ana,\n\nI noticed your public gold signal service and how your team delivers updates after a signal is posted. How does access work when a plan renews?";
+      const generated = await generateWithModelBody(body);
+      expect(generated.body.startsWith("Hi Ana,")).toBe(true);
+      expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(1);
+    });
+
+    it("adds a greeting line when the model fused the greeting into the first sentence", async () => {
+      // "Hi Ana, I noticed ..." on one line reads as a wall of text, not as a greeting, so the guaranteed
+      // line goes above it and the model's own words are preserved underneath.
+      const body = "Hi Ana, I noticed your public gold signal service and how your team delivers updates after a signal is posted. How does access work when a plan renews?";
+      const generated = await generateWithModelBody(body);
+      expect(generated.body.split("\n")[0]).toBe("Hi Ana,");
+      expect((generated.body.match(/^Hi /gm) ?? []).length).toBe(2);
+      expect(generated.body).toContain("I noticed your public gold signal service");
+    });
 
   it("the deterministic first-contact body also opens with the greeting", () => {
     expect(deterministicFirstContact(prospect, settings).body.startsWith("Hi Ana,")).toBe(true);

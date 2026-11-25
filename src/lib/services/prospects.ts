@@ -234,6 +234,19 @@ export async function reassessProspect(input: {
         "founder_override",
       );
     }
+    // Record the exact assessment and the rows this call adds, so the write can be reversed from the
+    // audit log alone and not just from a restored backup.
+    const previousAssessment = (await tx.query<{ id: string }>(
+      `SELECT id FROM prospect_assessments WHERE prospect_id = $1
+        ORDER BY assessed_at DESC, created_at DESC, id DESC LIMIT 1`,
+      [input.prospectId],
+    )).rows[0]?.id ?? null;
+    const audiencesBefore = (await tx.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM prospect_audience_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows[0]?.n ?? 0;
+    const routesBefore = (await tx.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM prospect_contact_route_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows[0]?.n ?? 0;
     for (const audience of input.intake.audiences ?? []) {
       await saveAudienceObservation(input.prospectId, { ...audience, provenanceKey: crypto.randomUUID() }, tx);
     }
@@ -264,11 +277,25 @@ export async function reassessProspect(input: {
         RETURNING status, verified_at::text AS verified_at`,
       [input.prospectId, qualification, leadModel.exclusionReason],
     )).rows[0];
+    const audiencesAdded = ((await tx.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM prospect_audience_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows[0]?.n ?? 0) - audiencesBefore;
+    const routesAdded = ((await tx.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM prospect_contact_route_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows[0]?.n ?? 0) - routesBefore;
     await tx.query(
       `INSERT INTO audit_log (id,actor_type,actor_id,action,entity_type,entity_id,metadata)
        VALUES ($1,$2,$3,'lead.assessment_applied','prospect',$4,$5::jsonb)`,
       [crypto.randomUUID(), input.actorType ?? "founder", input.actorUserId ?? null, input.prospectId, JSON.stringify({
         reassessment: true,
+        previousAssessmentId: previousAssessment,
+        newAssessmentId: leadModel.assessmentId ?? null,
+        previousTier: row.qualification_status,
+        newEligibility: leadModel.eligibility,
+        newTier: leadModel.tier ?? null,
+        newProductFit: leadModel.productFit,
+        audiencesAdded,
+        routesAdded,
         previousQualificationStatus: row.qualification_status,
         previousStatus: row.status,
         previousRejectionReason: row.rejection_reason,

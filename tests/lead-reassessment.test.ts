@@ -110,10 +110,17 @@ describe("a saved lead can be re-assessed with new evidence", () => {
       `SELECT count(*)::int AS n FROM prospects WHERE domain_key = $1`, [`${name}.example.test`],
     )).rows[0].n;
     expect(total).toBe(1);
-    const audit = (await db.query<{ metadata: { reassessment?: boolean } }>(
+    const audit = (await db.query<{ metadata: Record<string, unknown> }>(
       `SELECT metadata FROM audit_log WHERE entity_id = $1 AND action = 'lead.assessment_applied' ORDER BY created_at DESC LIMIT 1`, [id],
     )).rows[0];
     expect(audit?.metadata?.reassessment).toBe(true);
+    // The audit row alone must be enough to reverse the write: which assessment was superseded, which one
+    // this call added, and how many audience / contact-route observations it introduced.
+    expect(typeof audit?.metadata?.newAssessmentId).toBe("string");
+    expect(audit?.metadata?.newAssessmentId).toBe(again.leadModel?.assessmentId);
+    expect(typeof audit?.metadata?.previousAssessmentId).toBe("string");
+    expect(audit?.metadata?.audiencesAdded).toBe(0);
+    expect(audit?.metadata?.routesAdded).toBe(0);
   });
 
   it("never displaces a founder decision on tier or eligibility", async () => {
