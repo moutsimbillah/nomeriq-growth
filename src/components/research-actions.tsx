@@ -13,6 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { CATEGORIES, type Category, type ResearchJob } from "@/lib/types";
+import { normalizeResearchJobName } from "@/lib/utils";
 import { apiRequest, InlineError, Modal, SubmitBar } from "./client-ui";
 import { Notice } from "./ui";
 
@@ -21,14 +22,20 @@ const TARGET_PRESETS = [25, 50, 100, 250];
 export function NewResearchButton({
   defaultOpen = false,
   className,
+  suggestedName = "",
+  existingNames = [],
 }: {
   defaultOpen?: boolean;
   className?: string;
+  /** The next free batch name, offered as the starting value so no two targets share one. */
+  suggestedName?: string;
+  /** Names already stored, so a clash is shown before the founder submits. */
+  existingNames?: string[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(defaultOpen);
   const [engine, setEngine] = useState<"deepseek" | "manual">("deepseek");
-  const [name, setName] = useState("Batch 02 — new commercial signal providers");
+  const [name, setName] = useState(suggestedName);
   const [target, setTarget] = useState(100);
   const [budget, setBudget] = useState(5);
   const [categories, setCategories] = useState<Category[]>([
@@ -44,6 +51,15 @@ export function NewResearchButton({
   );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // A name that is already taken is shown before submitting; the server refuses it anyway.
+  const takenName = existingNames.find(
+    (existing) => normalizeResearchJobName(existing) === normalizeResearchJobName(name),
+  );
+  const nameRejected = Boolean(name.trim()) && Boolean(takenName);
+  const suggestedIsFree = !existingNames.some(
+    (existing) => normalizeResearchJobName(existing) === normalizeResearchJobName(suggestedName),
+  );
 
   async function create() {
     setPending(true);
@@ -133,15 +149,30 @@ export function NewResearchButton({
           <div className="grid gap-4 sm:grid-cols-[1fr_140px]">
             <div>
               <label className="label" htmlFor="job-name">
-                Target name
+                Target name — one name per target
               </label>
               <input
                 id="job-name"
                 className="input"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Batch 02 — 100 global providers"
+                placeholder="Batch 07 — 100 global providers"
+                aria-invalid={nameRejected}
               />
+              {nameRejected ? (
+                <p className="mt-1.5 text-12 leading-4 text-rust">
+                  “{takenName}” is already used by a saved target. Pick a different name.
+                </p>
+              ) : (
+                <div className="mt-1.5 flex items-center gap-2 text-12 leading-4 text-faint">
+                  <span>Two targets can never share a name.</span>
+                  {suggestedName && !suggestedIsFree ? (
+                    <button type="button" className="btn-ghost btn-xs" onClick={() => setName(suggestedName)}>
+                      Use {suggestedName}
+                    </button>
+                  ) : null}
+                </div>
+              )}
             </div>
             <div>
               <label className="label" htmlFor="job-target">
@@ -285,7 +316,7 @@ export function NewResearchButton({
               type="button"
               className="btn-primary"
               onClick={create}
-              disabled={pending || categories.length === 0 || !name.trim()}
+              disabled={pending || categories.length === 0 || !name.trim() || nameRejected}
             >
               {pending ? <LoaderCircle size={14} className="spin" /> : <Target size={14} />}
               {pending ? "Creating…" : "Create target"}

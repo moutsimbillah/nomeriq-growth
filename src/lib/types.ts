@@ -215,6 +215,12 @@ export type ResearchJobStatus =
 export interface ResearchJob {
   id: string;
   name: string;
+  /**
+   * Who actually saved this target's leads, counted from the stored lead rows. Derived from saved
+   * facts, not from the configured engine: a target set up for the DeepSeek engine but researched
+   * by a connected Claude or ChatGPT session reports that client.
+   */
+  researchers: Array<{ agent: string; leads: number }>;
   targetCount: number;
   categories: Category[];
   regions: string;

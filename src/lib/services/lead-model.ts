@@ -45,8 +45,17 @@ function officialSource(value: string, lead: Row): boolean {
   });
   } catch { return false; }
 }
-function requireOfficialEvidence(findings: LeadFinding[], lead: Row): void {
-  if (findings.some(f => !officialSource(f.sourceUrl, lead))) throw new AppError("Assessment findings must come from this business's official site or linked profile.", 400, "unlinked_assessment_source");
+function samePublicUrl(left: string, right: string): boolean {
+  try { return new URL(left).href === new URL(right).href; }
+  catch { return false; }
+}
+function officialEvidence(finding: LeadFinding, lead: Row, sourcesChecked: { url: string }[]): boolean {
+  if (officialSource(finding.sourceUrl, lead)) return true;
+  const linkSource = finding.officialLinkSourceUrl;
+  return Boolean(linkSource && officialSource(linkSource, lead) && sourcesChecked.some(source => samePublicUrl(source.url, finding.sourceUrl)) && sourcesChecked.some(source => samePublicUrl(source.url, linkSource)));
+}
+function requireOfficialEvidence(findings: LeadFinding[], lead: Row, sourcesChecked: { url: string }[]): void {
+  if (findings.some(f => !officialEvidence(f, lead, sourcesChecked))) throw new AppError("Assessment findings must come from this business's official site or linked profile.", 400, "unlinked_assessment_source");
 }
 async function uniqueBusiness(db: DbClient, lead: Row): Promise<boolean> {
   const emails = (await db.query<{ normalized_email: string }>("SELECT normalized_email FROM prospect_emails WHERE prospect_id=$1", [lead.id])).rows.map(e => e.normalized_email);
@@ -60,12 +69,13 @@ export async function saveLeadAssessment(prospectId: string, input: AssessmentIn
   const db = client ?? await getDb();
   return db.transaction(async tx => {
     const lead = await lockedLead(tx, prospectId);
-    requireOfficialEvidence([...data.findings, ...data.capabilityGaps], lead);
+    requireOfficialEvidence([...data.findings, ...data.capabilityGaps], lead, data.sourcesChecked);
     const emails = (await tx.query<Row>("SELECT * FROM prospect_emails WHERE prospect_id=$1", [prospectId])).rows;
+    const emailFindings = data.findings.filter(f => f.area === "email" && f.verdict === "present");
     const checks = {
       paidSignals: data.findings.some(f => f.area === "paid_signals" && f.verdict === "present"),
       eligibleMarket: json<string[]>(lead.categories, []).some(c => ["forex", "metals", "crypto", "indices", "commodities"].includes(c)) && data.findings.some(f => f.area === "markets" && f.verdict === "present"),
-      publishedEmail: emails.some(e => e.source_type !== "founder_entered" && officialSource(e.source_url, lead)) && data.findings.some(f => f.area === "email" && f.verdict === "present"),
+      publishedEmail: emailFindings.length > 0 && emails.some(e => e.source_type !== "founder_entered" && (officialSource(e.source_url, lead) || emailFindings.some(f => samePublicUrl(f.sourceUrl, e.source_url) && officialEvidence(f, lead, data.sourcesChecked)))),
       officialWebsite: Boolean(businessDomain(lead.website_url)),
       uniqueBusiness: await uniqueBusiness(tx, lead),
       active: data.findings.some(f => f.area === "activity" && f.verdict === "present"),

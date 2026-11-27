@@ -17,11 +17,14 @@ let bearer="",reader="";
 const baseline=new Map<string,number>();
 const sideEffectTables=["outbound_sends","drafts","research_jobs","campaigns","research_providers","provider_credentials","suppressions"];
 const checkedAt=new Date().toISOString();
-function payload(kind:"website"|"email_only"|"category_b"|"excluded"="website"):SaveProspectInput{
- const key=crypto.randomUUID().replaceAll("-",""); const website=`https://${key}.example.test`,profile=`https://instagram.com/${key}`,url=kind==="email_only"?profile:website;
+function payload(kind:"website"|"email_only"|"linked_profile_email"|"category_b"|"excluded"="website"):SaveProspectInput{
+ const key=crypto.randomUUID().replaceAll("-",""),website=`https://${key}.example.test`,profile=`https://instagram.com/${key}`,url=kind==="email_only"?profile:website;
+ const linkedEmailProfile=kind==="linked_profile_email"?`https://play.google.com/store/apps/details?id=${key}`:null;
+ const emailSourceUrl=kind==="email_only"?profile:linkedEmailProfile??`${website}/contact`;
  const businessName=`Intake ${key}`;names.push(businessName);
  const fact=(area:LeadFinding["area"]):LeadFinding=>({area,summary:`Synthetic official ${area} evidence`,sourceUrl:`${url}/${area}`,observedAt:checkedAt,verdict:"present"});
- return{businessName,websiteUrl:kind==="email_only"?null:website,instagramUrl:profile,categories:kind==="excluded"?[]:["forex"],signalDescription:"Synthetic official paid Forex VIP signals service",sources:[{url:`${url}/signals`,label:"Official paid signals"}],email:kind==="category_b"||kind==="excluded"?null:`owner@${key}.example.test`,emailSourceUrl:kind==="email_only"?profile:`${website}/contact`,emailSourceType:kind==="email_only"?"official_social":"official_website",actorType:"api",leadAssessment:{assessedAt:checkedAt,eligibility:kind==="excluded"?"excluded":"eligible",exclusionReason:kind==="excluded"?"Stocks and options only; no eligible signal market":null,findings:[fact("paid_signals"),fact("markets"),fact("identity"),fact("activity"),...(kind==="category_b"||kind==="excluded"?[]:[fact("email")])]},contactRoutes:kind==="category_b"?[{platform:"telegram",routeKind:"bot",routeUrl:`https://t.me/${key}_bot`,officialStatus:"verified",checkedAt,sourceUrl:`${website}/contact`},{platform:"website",routeKind:"form",routeUrl:`${website}/contact`,officialStatus:"verified",checkedAt,sourceUrl:`${website}/contact`}]:[]};
+ const emailFinding:LeadFinding=linkedEmailProfile?{...fact("email"),sourceUrl:linkedEmailProfile,officialLinkSourceUrl:website}:fact("email");
+ return{businessName,websiteUrl:kind==="email_only"?null:website,instagramUrl:profile,categories:kind==="excluded"?[]:["forex"],signalDescription:"Synthetic official paid Forex VIP signals service",sources:[{url:`${url}/signals`,label:"Official paid signals"}],email:kind==="category_b"||kind==="excluded"?null:`owner@${key}.example.test`,emailSourceUrl,emailSourceType:kind==="email_only"?"official_social":linkedEmailProfile?"public_profile":"official_website",actorType:"api",leadAssessment:{assessedAt:checkedAt,eligibility:kind==="excluded"?"excluded":"eligible",exclusionReason:kind==="excluded"?"Stocks and options only; no eligible signal market":null,sourcesChecked:linkedEmailProfile?[{url:website,checkedAt},{url:linkedEmailProfile,checkedAt}]:[],findings:[fact("paid_signals"),fact("markets"),fact("identity"),fact("activity"),...(kind==="category_b"||kind==="excluded"?[]:[emailFinding])]},contactRoutes:kind==="category_b"?[{platform:"telegram",routeKind:"bot",routeUrl:`https://t.me/${key}_bot`,officialStatus:"verified",checkedAt,sourceUrl:`${website}/contact`},{platform:"website",routeKind:"form",routeUrl:`${website}/contact`,officialStatus:"verified",checkedAt,sourceUrl:`${website}/contact`}]:[]};
 }
 async function count(table:string){const db=await getDb();return Number((await db.query<{n:string}>(`SELECT count(*) AS n FROM ${table}`)).rows[0].n);}
 beforeAll(async()=>{
@@ -64,6 +67,25 @@ it("a published official-profile email without a website remains outreach-eligib
  const input=payload("email_only"),saved=await saveProspect(input);ids.push(saved.prospect.id);
  expect(saved.leadModel?.tier).toBe("email_no_website");expect(saved.prospect.qualificationStatus).toBe("verified");await expect(assertLeadOutreachAllowed(saved.prospect.id)).resolves.toBeUndefined();
 });
+it.each(["rest","mcp"] as const)("%s accepts an email from an external profile linked by the official business site",async kind=>{
+ const input=publicPayload(payload("linked_profile_email")),response=await transport(kind,input);ids.push(response.data.prospect.id);
+ expect(response.ok).toBe(true);
+ expect(response.data.leadModel).toMatchObject({tier:"other",eligibility:"eligible",eligibilityChecks:{publishedEmail:true}});
+ expect(response.data.prospect.qualificationStatus).toBe("verified");
+});
+it.each(["external profile","official link page"] as const)("rejects external evidence when its %s is absent from checked sources",async missingSource=>{
+ const input=payload("linked_profile_email"),omitted=missingSource==="external profile"?input.emailSourceUrl:input.websiteUrl;
+ input.leadAssessment!.sourcesChecked=input.leadAssessment!.sourcesChecked!.filter(source=>source.url!==omitted);
+ await expect(saveProspect(input)).rejects.toMatchObject({code:"unlinked_assessment_source"});
+});
+it("does not qualify an external email when its assessment finding points to another source",async()=>{
+ const input=payload("linked_profile_email");
+ input.leadAssessment!.findings=input.leadAssessment!.findings!.map(f=>f.area==="email"?{...f,sourceUrl:"https://different-profile.example.test/contact"}:f);
+ input.leadAssessment!.sourcesChecked=[...(input.leadAssessment!.sourcesChecked??[]),{url:"https://different-profile.example.test/contact",checkedAt}];
+ const saved=await saveProspect(input);ids.push(saved.prospect.id);
+ expect(saved.prospect.qualificationStatus).toBe("candidate");
+ expect(saved.leadModel).toMatchObject({tier:null,eligibility:"unknown",eligibilityChecks:{publishedEmail:false}});
+});
 it.each(["rest","mcp"] as const)("%s saves Category B without a guessed email and never prompts an email draft",async kind=>{
  const data=publicPayload(payload("category_b"));const response=await transport(kind,data);
  expect(response.ok).toBe(true);ids.push(response.data.prospect.id);
@@ -83,11 +105,14 @@ it("invalid model evidence rolls back the prospect, addresses, sources and obser
  expect((await db.query("SELECT id FROM prospects WHERE business_name=$1",[input.businessName])).rows).toHaveLength(0);
  expect((await db.query("SELECT id FROM prospect_emails WHERE normalized_email=$1",[input.email])).rows).toHaveLength(0);
 });
-it("duplicate retries cannot replace original assessments or a founder override",async()=>{
+it("a duplicate retry cannot replace a founder override, so the assessment is refused",async()=>{
+ // The same business with fresh evidence may be re-assessed, but a founder decision on any assessed
+ // field is never displaced by an assistant: the retry is refused and the lead is left exactly as it was.
  const input=payload(),saved=await saveProspect(input);ids.push(saved.prospect.id);
  await setAssessmentOverride(saved.prospect.id,{field:"product_fit",decision:"set",value:"high",reason:"Founder reviewed the opportunity",provenanceKey:crypto.randomUUID(),actorUserId:auth.id});
  const before=await getLeadModel(saved.prospect.id);input.leadAssessment!.productFit="low";
- const retry=await saveProspect(input);expect(retry).toMatchObject({created:false,duplicate:true});expect(await getLeadModel(saved.prospect.id)).toEqual(before);
+ await expect(saveProspect(input)).rejects.toMatchObject({code:"founder_override"});
+ expect(await getLeadModel(saved.prospect.id)).toEqual(before);
 });
 it.each(["rest","mcp"] as const)("%s derives verification from a modern assessment, not the caller's candidate label",async kind=>{
  const input=publicPayload(payload());

@@ -154,7 +154,7 @@ describe("Nomeriq Growth end-to-end workflow", () => {
     );
     state.accountId = account.id;
     const job = await createResearchJob({
-      name: "Test batch — 5 verified providers",
+      name: `Test batch — 5 verified providers ${crypto.randomUUID()}`,
       targetCount: 5,
       categories: ["forex", "metals", "crypto", "indices", "commodities"],
       regions: "Worldwide",

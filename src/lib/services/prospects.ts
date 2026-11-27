@@ -143,7 +143,7 @@ export interface SaveProspectInput extends LeadIntake {
 export interface SaveProspectResult {
   created: boolean;
   duplicate: boolean;
-  resolution?: "created" | "already_exists" | "review_required";
+  resolution?: "created" | "already_exists" | "review_required" | "reassessed";
   matches?: { prospectId: string; businessName: string; matchedOn: string[] }[];
   prospect: ProspectSummary | ProspectDetail;
   matchedOn?: string[];
@@ -175,6 +175,145 @@ function httpUrl(value: string | null | undefined, field: string): string {
   } catch {
     throw new AppError(`${field} must be a valid public URL.`);
   }
+}
+
+/**
+ * Applies a fresh, evidence-backed assessment to a lead Growth already holds.
+ *
+ * The research rules say one business is one record, which used to mean a second save returned the
+ * existing row untouched — so an assistant that later gathered the missing evidence (the published
+ * email, the pricing page) could not complete the qualification and the lead stayed blocked from
+ * outreach with no way forward except a founder override. This is that way forward: the same business
+ * matched on identity takes a NEW assessment row, older assessments stay as history, and the tier /
+ * eligibility the founder reads come from the latest one.
+ *
+ * Refusals are deliberate:
+ * - `review_required` (ambiguous or conflicting identities) never reaches here; the caller keeps the
+ *   existing behaviour and shows the matches.
+ * - A founder override on `tier` or `eligibility` is the founder's decision and is never displaced by
+ *   an assistant assessment.
+ * - An archived lead is not silently resurrected.
+ * Research-notes and other founder-edited fields are not touched here.
+ */
+export async function reassessProspect(input: {
+  prospectId: string;
+  intake: LeadIntake;
+  actorType?: SaveProspectInput["actorType"];
+  actorUserId?: string | null;
+  actorKeyId?: string | null;
+  sourceAgent?: AgentTag | null;
+}): Promise<SaveProspectResult> {
+  const assessment = input.intake.leadAssessment;
+  if (!assessment) throw new AppError("A reassessment needs an evidence-backed leadAssessment.");
+  const db = await getDb();
+  const tags = tagsFromActorType(input.actorType);
+  const outcome = await db.transaction(async (tx) => {
+    const row = (await tx.query<{
+      id: string; business_name: string; archived_at: string | null;
+      qualification_status: string; status: string; rejection_reason: string | null; verified_at: string | null;
+    }>(
+      `SELECT id, business_name, archived_at::text AS archived_at, qualification_status, status,
+              rejection_reason, verified_at::text AS verified_at
+         FROM prospects WHERE id = $1 FOR UPDATE`,
+      [input.prospectId],
+    )).rows[0];
+    if (!row) throw new AppError("Lead not found.", 404);
+    if (row.archived_at) throw new AppError("This lead is archived. Restore it before re-assessing.", 409, "archived_lead");
+    const override = (await tx.query<{ field_name: string }>(
+      `SELECT field_name FROM prospect_assessment_overrides
+        WHERE prospect_id = $1
+          AND field_name IN ('eligibility','tier','product_fit','platform_maturity','mobile_app_status','priority_score')
+          AND decision = 'set'
+        LIMIT 1`,
+      [input.prospectId],
+    )).rows[0];
+    if (override) {
+      throw new AppError(
+        `The founder has already set this lead's ${override.field_name}. A new assessment cannot displace a founder decision; clear that override first.`,
+        409,
+        "founder_override",
+      );
+    }
+    // Record the exact assessment and the rows this call adds, so the write can be reversed from the
+    // audit log alone and not just from a restored backup.
+    const previousAssessment = (await tx.query<{ id: string }>(
+      `SELECT id FROM prospect_assessments WHERE prospect_id = $1
+        ORDER BY assessed_at DESC, created_at DESC, id DESC LIMIT 1`,
+      [input.prospectId],
+    )).rows[0]?.id ?? null;
+    // The exact rows this call adds, so the write can be reversed from the audit log alone: a count cannot
+    // identify which observations to remove.
+    const audiencesBefore = (await tx.query<{ id: string }>(
+      `SELECT id FROM prospect_audience_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows.map((entry) => entry.id);
+    const routesBefore = (await tx.query<{ id: string }>(
+      `SELECT id FROM prospect_contact_route_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows.map((entry) => entry.id);
+    for (const audience of input.intake.audiences ?? []) {
+      await saveAudienceObservation(input.prospectId, { ...audience, provenanceKey: crypto.randomUUID() }, tx);
+    }
+    for (const route of input.intake.contactRoutes ?? []) {
+      await saveContactRoute(input.prospectId, { ...route, provenanceKey: crypto.randomUUID() }, tx);
+    }
+    const leadModel = await saveLeadAssessment(input.prospectId, {
+      ...assessment,
+      sourceKind: "research",
+      sourceAgent: input.sourceAgent ?? tags.agent,
+      sourceReference: input.actorUserId
+        ? `portal-user:${input.actorUserId}`
+        : input.actorKeyId
+          ? `agent-key:${input.actorKeyId}`
+          : null,
+      provenanceKey: crypto.randomUUID(),
+    }, tx);
+    const qualification = leadModel.eligibility === "eligible" ? "verified"
+      : leadModel.eligibility === "excluded" ? "rejected" : "candidate";
+    const after = (await tx.query<{ status: string; verified_at: string | null }>(
+      `UPDATE prospects
+          SET qualification_status = $2,
+              verified_at = CASE WHEN $2 = 'verified' THEN now() ELSE NULL END,
+              status = CASE WHEN $2 = 'verified' THEN 'verified' ELSE 'new' END,
+              rejection_reason = $3,
+              updated_at = now()
+        WHERE id = $1
+        RETURNING status, verified_at::text AS verified_at`,
+      [input.prospectId, qualification, leadModel.exclusionReason],
+    )).rows[0];
+    const audienceIdsAfter = (await tx.query<{ id: string }>(
+      `SELECT id FROM prospect_audience_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows.map((entry) => entry.id);
+    const routeIdsAfter = (await tx.query<{ id: string }>(
+      `SELECT id FROM prospect_contact_route_observations WHERE prospect_id = $1`, [input.prospectId],
+    )).rows.map((entry) => entry.id);
+    const audiencesAdded = audienceIdsAfter.filter((id) => !audiencesBefore.includes(id));
+    const routesAdded = routeIdsAfter.filter((id) => !routesBefore.includes(id));
+    await tx.query(
+      `INSERT INTO audit_log (id,actor_type,actor_id,action,entity_type,entity_id,metadata)
+       VALUES ($1,$2,$3,'lead.assessment_applied','prospect',$4,$5::jsonb)`,
+      [crypto.randomUUID(), input.actorType ?? "founder", input.actorUserId ?? null, input.prospectId, JSON.stringify({
+        reassessment: true,
+        previousAssessmentId: previousAssessment,
+        newAssessmentId: leadModel.assessmentId ?? null,
+        previousTier: row.qualification_status,
+        newEligibility: leadModel.eligibility,
+        newTier: leadModel.tier ?? null,
+        newProductFit: leadModel.productFit,
+        audienceObservationIds: audiencesAdded,
+        contactRouteObservationIds: routesAdded,
+        previousQualificationStatus: row.qualification_status,
+        previousStatus: row.status,
+        previousRejectionReason: row.rejection_reason,
+        previousVerifiedAt: row.verified_at,
+        newQualificationStatus: qualification,
+        newRejectionReason: leadModel.exclusionReason,
+        newStatus: after?.status ?? null,
+        newVerifiedAt: after?.verified_at ?? null,
+      })],
+    );
+    return leadModel;
+  });
+  const prospect = await getProspect(input.prospectId);
+  return { created: false, duplicate: false, resolution: "reassessed", prospect: prospect!, leadModel: outcome };
 }
 
 export async function saveProspect(
@@ -229,6 +368,18 @@ export async function saveProspect(
     socialAccounts,
   });
   if (duplicate.length) {
+    // The same business, matched on identity, with a fresh evidence-backed assessment: complete the
+    // qualification on the record Growth already holds instead of handing back an unchanged row.
+    if (duplicateResolution(duplicate) === "already_exists" && intake.leadAssessment) {
+      return reassessProspect({
+        prospectId: duplicate[0].prospect.id,
+        intake,
+        actorType: input.actorType,
+        actorUserId: input.actorUserId ?? null,
+        actorKeyId: input.actorKeyId ?? null,
+        sourceAgent: input.sourceAgent ?? null,
+      });
+    }
     if (input.researchJobId) {
       await recordDuplicateRejection(input.researchJobId, {
         attemptedName: businessName,

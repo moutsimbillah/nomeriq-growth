@@ -39,7 +39,7 @@ afterAll(async () => {
   await db.query("DELETE FROM users WHERE id=$1", [founder]);
 });
 async function job() {
-  const row = await createResearchJob({ name: "Unknown-cost fixture", targetCount: 2, categories: ["forex"], userId: founder, engine: "deepseek", budgetUsd: 1 });
+  const row = await createResearchJob({ name: `Unknown-cost fixture ${crypto.randomUUID()}`, targetCount: 2, categories: ["forex"], userId: founder, engine: "deepseek", budgetUsd: 1 });
   jobs.push(row.id); return row.id;
 }
 async function provider(provider: string, extra: Record<string, unknown> = {}) {

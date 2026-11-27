@@ -53,7 +53,8 @@ beforeAll(async () => {
   });
   founderId = founder.id;
   jobId = (await createResearchJob({
-    name: "Job fields target",
+    // One name per target: a fixed fixture name collides with any earlier run in the same database.
+    name: `Job fields target ${crypto.randomUUID()}`,
     targetCount: 5,
     categories: ["forex"],
     userId: founder.id,
