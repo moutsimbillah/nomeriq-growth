@@ -7,16 +7,15 @@
  *
  * BE HONEST ABOUT ITS LIMITS. This function cannot prove any claim in a draft is TRUE, useful, kind or
  * on-brand; it cannot tell a good sentence from a bad one. It catches mechanical failure classes only —
- * an unresolved merge placeholder, a stray price or percentage, a missing "Best," sign-off, an empty
- * subject, a draft that never names the recipient's own business, and a message that would carry no
- * unsubscribe footer. Everything about truthfulness, relevance and quality stays with the founder's
- * eye and the AI claim validator (`@/lib/ai/claims`).
+ * an unresolved merge placeholder, a stray price or percentage, an empty subject, a draft that never
+ * names the recipient's own business, and a message that would carry no unsubscribe footer. Draft
+ * bodies intentionally omit sign-off; Growth appends it when rendering and sending. Everything about
+ * truthfulness, relevance and quality stays with the founder's eye and the AI claim validator (`@/lib/ai/claims`).
  */
 
 export type DraftCheckRule =
   | "unresolved_placeholder"
   | "currency_or_percentage"
-  | "missing_signoff"
   | "empty_subject"
   | "no_recipient_mention"
   | "no_unsubscribe_footer";
@@ -59,9 +58,6 @@ const CURRENCY_PATTERN =
   /(?:[$€£₨₹]\s?\d|\b\d[\d,]*(?:\.\d+)?\s?(?:usd|eur|gbp|pkr|inr|dollars?)\b|\b(?:usd|eur|gbp|pkr|inr|dollars?)\s?\d)/i;
 const PERCENT_PATTERN = /\b\d+(?:\.\d+)?\s?(?:%|percent\b)/i;
 
-/** The one sign-off the approved plan asks every first email to end with. */
-const REQUIRED_SIGN_OFF = /^best,$/i;
-
 /** Words too generic to count as "naming" the recipient's own business. */
 const NAME_STOPWORDS = new Set([
   "the",
@@ -79,14 +75,6 @@ const NAME_STOPWORDS = new Set([
   "trading",
   "limited",
 ]);
-
-function lastNonEmptyLine(body: string): string {
-  const lines = body.replace(/\r\n/g, "\n").split("\n");
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (lines[index].trim()) return lines[index].trim();
-  }
-  return "";
-}
 
 /** True when the text names the given business or contact by a distinctive word of it. */
 function mentions(text: string, name: string | null | undefined): boolean {
@@ -145,9 +133,6 @@ export function checkDraftMechanics(input: DraftMechanicsInput): DraftCheckRefus
   }
   if (!subject.trim()) {
     add("empty_subject", "It has an empty subject line.");
-  }
-  if (!REQUIRED_SIGN_OFF.test(lastNonEmptyLine(body))) {
-    add("missing_signoff", 'Its body does not end with "Best,".');
   }
   // Only judgeable when the recipient is known: with no name we cannot prove a failure, so we do not
   // invent one. The batch always passes the prospect's own business name, so it is always judged there.
