@@ -16,7 +16,7 @@ function draft(overrides: Partial<DraftMechanicsInput> = {}): DraftMechanicsInpu
     id: "draft-1",
     subject: "A quick question about Delta Signals",
     body:
-      "Hi Delta Signals,\n\nI noticed your Telegram signal channel and had one idea worth a short call.\n\nBest,",
+      "Hi Delta Signals,\n\nI noticed your Telegram signal channel and had one idea worth a short call.",
     companyName: "Delta Signals",
     complianceFooter: "Nomeriq\n1 Test Street\nUnsubscribe: <generated per recipient at send>",
     ...overrides,
@@ -58,13 +58,13 @@ describe("mechanical draft check", () => {
     );
   });
 
-  it('refuses a body that does not end with "Best,"', () => {
-    const refusals = checkDraftMechanics(
-      draft({ id: "signoff-1", body: "Hi Delta Signals,\n\nRegards,\nA founder" }),
+  it("accepts body-only drafts because Growth adds the sign-off when sending", () => {
+    expect(rules(draft({ body: "Hi Delta Signals,\n\nRegards,\nA founder" }))).not.toContain(
+      "missing_signoff",
     );
-    expect(refusals.map((r) => r.rule)).toContain("missing_signoff");
-    // A trailing blank line after "Best," still counts as ending with it.
-    expect(rules(draft({ body: "Hi Delta Signals,\n\nBest,\n\n" }))).not.toContain("missing_signoff");
+    expect(rules(draft({ body: "Hi Delta Signals,\n\nI noticed your Telegram signal channel." }))).not.toContain(
+      "missing_signoff",
+    );
   });
 
   it("refuses an empty subject", () => {
