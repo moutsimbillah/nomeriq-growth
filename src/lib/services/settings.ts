@@ -22,6 +22,16 @@ export interface WorkspaceSettings {
   researchDefaultConcurrency: number;
   deepseekSearchQps: number;
   deepseekFetchQps: number;
+  emailDeliveryMode: EmailDeliveryMode;
+}
+
+export type EmailDeliveryMode = "sandbox" | "live";
+
+function resolveEmailDeliveryMode(value: unknown): EmailDeliveryMode {
+  if (value === "sandbox" || value === "live") return value;
+  return (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() === "live"
+    ? "live"
+    : "sandbox";
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -89,11 +99,55 @@ export async function getWorkspaceSettings(): Promise<WorkspaceSettings> {
     researchDefaultConcurrency: number(row.research_default_concurrency, 1),
     deepseekSearchQps: number(row.deepseek_search_qps, 2),
     deepseekFetchQps: number(row.deepseek_fetch_qps, 1),
+    emailDeliveryMode: resolveEmailDeliveryMode(row.email_delivery_mode),
   };
 }
 
+/** Read the effective global mode without creating or modifying workspace rows. */
+export async function getEmailDeliveryMode(): Promise<EmailDeliveryMode> {
+  const db = await getDb();
+  const result = await db.query<{ email_delivery_mode: string | null }>(
+    `SELECT email_delivery_mode FROM workspace_settings WHERE id = 'default'`,
+  );
+  return resolveEmailDeliveryMode(result.rows[0]?.email_delivery_mode);
+}
+
+/** Founder-only API callers use this audited, reversible setting writer. */
+export async function setEmailDeliveryMode(
+  mode: EmailDeliveryMode,
+  userId: string,
+): Promise<EmailDeliveryMode> {
+  if (mode !== "sandbox" && mode !== "live") {
+    throw new AppError("Choose sandbox or live email delivery mode.", 400, "invalid_delivery_mode");
+  }
+  const db = await getDb();
+  await db.query(
+    `INSERT INTO workspace_settings (id) VALUES ('default') ON CONFLICT (id) DO NOTHING`,
+  );
+  await db.transaction(async (tx) => {
+    const current = await tx.query<{ email_delivery_mode: string | null }>(
+      `SELECT email_delivery_mode FROM workspace_settings WHERE id = 'default' FOR UPDATE`,
+    );
+    const storedMode = current.rows[0]?.email_delivery_mode ?? null;
+    if (storedMode === mode) return;
+    const previousMode = resolveEmailDeliveryMode(storedMode);
+    await tx.query(
+      `UPDATE workspace_settings SET email_delivery_mode = $1, updated_by = $2, updated_at = now()
+       WHERE id = 'default'`,
+      [mode, userId],
+    );
+    await tx.query(
+      `INSERT INTO audit_log
+        (id, actor_type, actor_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'founder', $2, 'email_delivery_mode.changed', 'workspace_settings', 'default', $3::jsonb)`,
+      [crypto.randomUUID(), userId, JSON.stringify({ from: previousMode, to: mode })],
+    );
+  });
+  return getEmailDeliveryMode();
+}
+
 export async function updateWorkspaceSettings(
-  input: Partial<WorkspaceSettings>,
+  input: Partial<Omit<WorkspaceSettings, "emailDeliveryMode">>,
   userId: string,
 ): Promise<WorkspaceSettings> {
   if (input.timezone !== undefined && !isValidTimezone(input.timezone)) {

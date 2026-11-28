@@ -223,8 +223,7 @@ export async function EmailToolsPage({
   // "Eligible but not yet prepared": due, and no draft is already waiting for review.
   const unpreparedFollowUps = dueFollowUps.filter((candidate) => !candidate.activeDraftId);
   const sandbox =
-    (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() !== "live" ||
-    account?.provider === "sandbox";
+    settings.emailDeliveryMode !== "live" || account?.provider === "sandbox";
   const tabs = [
     { href: "/email", label: "Folder inbox" },
     {

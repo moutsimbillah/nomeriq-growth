@@ -185,8 +185,7 @@ export default async function LeadDetailPage({
   const labelOf = (profile: { id: string; name: string; emailAddress: string }) =>
     profileLabelById.get(profile.id) ?? senderShortName(profile);
   const pinnedLabel = pinnedProfile ? labelOf(pinnedProfile) : NO_SENDER_LABEL;
-  const envSandbox = (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() !== "live";
-  const sandboxMode = envSandbox || sendingProfile?.provider === "sandbox";
+  const sandboxMode = settings.emailDeliveryMode !== "live" || sendingProfile?.provider === "sandbox";
   const followUps = drafts.filter((item) => item.kind === "follow_up");
   const blockedReasons: string[] = [];
   const tierBlock = await getLeadOutreachBlock(prospect.id);

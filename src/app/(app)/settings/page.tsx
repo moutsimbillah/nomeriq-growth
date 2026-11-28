@@ -119,10 +119,7 @@ export default async function SettingsPage() {
         : await getSyncHealth(account.id).catch(() => []);
   }
   const appUrl = (process.env.APP_URL || "http://localhost:3100").replace(/\/$/, "");
-  const sendMode =
-    (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() === "live"
-      ? "live"
-      : "sandbox";
+  const sendMode = settings.emailDeliveryMode;
   // AI mode is what the AI actions actually use: assigned actions and working providers from the list.
   // Classification is rule-based (no AI call), so it is not counted as an AI action here.
   const aiActions = aiTaskSettings.filter((task) => !RULE_BASED_TASKS.has(task.task));
@@ -203,6 +200,7 @@ export default async function SettingsPage() {
               usages={usages}
               health={health}
               sendMode={sendMode}
+              canChangeSendMode={viewer?.role === "founder"}
             />
           </SettingsSection>
 

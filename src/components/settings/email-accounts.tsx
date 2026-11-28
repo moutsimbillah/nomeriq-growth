@@ -108,11 +108,13 @@ export function EmailAccountsManager({
   usages,
   health,
   sendMode,
+  canChangeSendMode,
 }: {
   accounts: PublicEmailAccount[];
   usages: Record<string, Usage>;
   health: Record<string, Health[]>;
   sendMode: "sandbox" | "live";
+  canChangeSendMode: boolean;
 }) {
   const router = useRouter();
   const timezone = useWorkspaceTimezone();
@@ -281,6 +283,37 @@ export function EmailAccountsManager({
     }
   }
 
+  async function changeSendMode() {
+    const nextMode = sendMode === "live" ? "sandbox" : "live";
+    if (
+      nextMode === "live" &&
+      !window.confirm(
+        "Enable Live email delivery? This does not start a campaign or change the separate follow-up setting. Any already-queued, approved sends may be delivered by the server timer. Continue?",
+      )
+    ) {
+      return;
+    }
+    setPending("delivery-mode");
+    setError(null);
+    setMessage(null);
+    try {
+      await apiRequest("/api/settings/email-delivery-mode", {
+        method: "PUT",
+        body: { mode: nextMode },
+      });
+      setMessage(
+        nextMode === "live"
+          ? "Live email delivery is enabled. This change did not send an email."
+          : "Sandbox email delivery is enabled. No new message will leave Growth.",
+      );
+      router.refresh();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not change email delivery mode.");
+    } finally {
+      setPending(null);
+    }
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -291,12 +324,28 @@ export function EmailAccountsManager({
           <p className="mt-1 max-w-xl text-12 leading-5 text-muted">
             Connect the founder mailbox once. Credentials are encrypted with
             AES-256-GCM. SMTP is used only when the founder sends; IMAP is read
-            for replies and external Sent mail.
+            for replies and external Sent mail. Live mode changes delivery only;
+            it does not start a campaign or change the separate follow-up setting.
           </p>
         </div>
-        <button type="button" className="btn-secondary btn-sm" onClick={openCreate}>
-          <Plus size={12} /> Add mailbox
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {canChangeSendMode && (
+            <button
+              type="button"
+              className={sendMode === "live" ? "btn-secondary btn-sm" : "btn-primary btn-sm"}
+              onClick={changeSendMode}
+              disabled={pending === "delivery-mode"}
+            >
+              {pending === "delivery-mode" ? (
+                <LoaderCircle size={12} className="animate-spin" />
+              ) : null}
+              {sendMode === "live" ? "Switch to Sandbox" : "Enable Live"}
+            </button>
+          )}
+          <button type="button" className="btn-secondary btn-sm" onClick={openCreate}>
+            <Plus size={12} /> Add mailbox
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 space-y-3">

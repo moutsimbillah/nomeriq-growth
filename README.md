@@ -116,8 +116,8 @@ npm run build
 3. Use the full mailbox address and mailbox/app password. Growth encrypts it with `APP_ENCRYPTION_KEY`.
 4. Save. Growth tests SMTP and IMAP and shows the precise failure if either is unhealthy.
 5. Set the registered postal address and truthful sender identity under **Settings → Sending identity**.
-6. Keep `EMAIL_DELIVERY_MODE=sandbox` until the sender, footer and legal details are correct.
-7. Test with the sandbox first. When ready, set `EMAIL_DELIVERY_MODE=live`, restart/redeploy, and make the IONOS account the default.
+6. Keep Settings → Email accounts in Sandbox until the sender, footer and legal details are correct.
+7. Test with the sandbox first. When ready, the founder can switch to Live in Settings → Email accounts. This audited setting takes effect without a redeploy and does not send by itself; queued approved sends may be delivered by the server timer.
 
 The app's visible daily cap and minimum interval are **app-configured safety limits**, not claims about IONOS limits. SMTP acceptance is recorded as accepted, never as guaranteed inbox delivery.
 
