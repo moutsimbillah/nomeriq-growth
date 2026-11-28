@@ -58,7 +58,7 @@ Set these environment variables in Production (and Preview if desired):
 | `SESSION_SECRET` | 48+ random bytes, base64 |
 | `APP_ENCRYPTION_KEY` | Exactly 32 random bytes, base64 |
 | `CRON_SECRET` | Random secret used by the cron routes |
-| `EMAIL_DELIVERY_MODE` | `sandbox` for the first deploy |
+| `EMAIL_DELIVERY_MODE` | Legacy fallback when no portal choice is stored; leave unset or set to `sandbox` for a safe first run |
 | `AI_PROVIDER` | `none`, `openai` or `anthropic` |
 | `OPENAI_API_KEY` | Optional |
 | `ANTHROPIC_API_KEY` | Optional |
@@ -95,8 +95,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 2. Use the full mailbox address, mailbox/app password, `smtp.ionos.com:587` (STARTTLS) and `imap.ionos.com:993` (TLS).
 3. Save. Growth verifies SMTP and IMAP once and records the exact failure if either fails.
 4. Keep the app's configured safety cap conservative. These are app limits; they are not claims about IONOS's provider ceilings.
-5. Send a sandbox test first.
-6. When ready, change `EMAIL_DELIVERY_MODE` to `live` in Vercel and redeploy.
+5. Keep Settings → Email accounts in Sandbox while checking the sender, footer and legal details.
+6. When ready, the founder can switch to Live in Settings → Email accounts. The audited workspace setting takes effect without a redeploy and does not itself start a campaign or send a message. Already-queued approved sends may be delivered by the server timer.
 7. Make the IONOS mailbox the default.
 
 The first IMAP run imports up to 40 recent messages per folder over the last 30 days and marks the mailbox history as partial. The UI will show that warning. Later syncs advance by UID and detect UIDVALIDITY changes. Emails sent directly in IONOS are captured from the Sent folder and associated to the prospect by exact email/thread headers.

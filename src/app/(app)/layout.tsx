@@ -17,10 +17,7 @@ export default async function GrowthLayout({
     getMailboxSidebarState().catch(() => ({ kind: "none" as const, label: null })),
     getProductTruth(),
   ]);
-  const sendMode =
-    (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() === "live"
-      ? "live"
-      : "sandbox";
+  const sendMode = settings.emailDeliveryMode;
 
   return (
     <WorkspaceTimezoneProvider timezone={settings.timezone}>

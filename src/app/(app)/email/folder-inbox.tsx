@@ -86,8 +86,7 @@ export async function FolderInbox({ params }: { params: FolderInboxParams }) {
   ]);
   const base: FolderInboxParams = { folder: inbox.folder, q: params.q, sender: params.sender, agent: params.agent };
   const selected = inbox.focused;
-  const sandbox =
-    (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() !== "live" || account?.provider === "sandbox";
+  const sandbox = settings.emailDeliveryMode !== "live" || account?.provider === "sandbox";
 
   const senderLabelById = senderLabels(accounts);
   const defaultProfile = accounts.find((row) => row.isDefault) ?? accounts[0] ?? null;

@@ -47,9 +47,10 @@ function greeting(timezone: string): string {
 
 export default async function DashboardPage() {
   const data = await getDashboardData();
-  const { timezone } = await getWorkspaceSettings();
+  const settings = await getWorkspaceSettings();
+  const { timezone } = settings;
   const { metrics, activeJob, truth, account } = data;
-  const sendMode = (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase();
+  const sendMode = settings.emailDeliveryMode;
 
   return (
     <div className="animate-fade-up">
@@ -99,11 +100,8 @@ export default async function DashboardPage() {
             </Link>
           }
         >
-          Sends are composed and recorded, but no message leaves Growth. Switch{" "}
-          <code className="rounded bg-forest/10 px-1 py-0.5 text-12">
-            EMAIL_DELIVERY_MODE=live
-          </code>{" "}
-          only when the founder is ready to contact real prospects.
+          Sandbox mode is on: sends are composed and recorded, but no message leaves Growth.
+          Use Settings → Email accounts to enable Live only when ready to contact real prospects.
         </Notice>
       )}
 

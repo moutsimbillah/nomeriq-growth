@@ -54,7 +54,7 @@ What this environment cannot do is run that same path against the live web: ther
 | MCP/REST tools + Product Truth + founder edits preserved | **Working** | Tool list extended with `get_research_job` (read-only) and an engine-aware `report_progress`; no tool was removed, no permission widened and no job-control tool exists. Verified: an assistant calling a job-control action gets `404`, and an assistant can read the job's real `engine`, `spentUsd` and counts. |
 | No Docker/K8s/new database | **Working** | Same PGlite/Supabase Postgres, same Vercel model; no infrastructure was added. |
 | 10 genuinely new qualified leads, then scale to 25/50/100+ | **Reached in test, mechanism verified** | A dedicated test drives one target to exactly 10 verified leads through the real engine path, each with a published email, its source URL, a website and one unsent draft, with 5 broker decoys rejected and 10 distinct inboxes. A second test confirms the count is a real setting and that re-running a completed target adds nothing. Producing 10–100 leads against the live web still requires live DeepSeek spend; nothing is fabricated to inflate a count. |
-| No live prospecting email sent during testing | **Working** | The engine has no send path; `EMAIL_DELIVERY_MODE=sandbox`; the cron response states no email was sent. |
+| No live prospecting email sent during testing | **Working** | Tests run with Sandbox mode; the send provider refuses SMTP unless the persisted workspace mode is Live and the selected mailbox is real. The research engine has no send path. |
 
 ## Test evidence
 

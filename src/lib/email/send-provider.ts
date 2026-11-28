@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { decryptSecret } from "@/lib/auth/crypto";
+import { getEmailDeliveryMode } from "@/lib/services/settings";
 import type { EmailAccountRecord } from "./accounts";
 
 export class EmailDeliveryError extends Error {
@@ -43,15 +44,16 @@ export async function deliverEmail(
   account: EmailAccountRecord,
   email: OutboundEmail,
 ): Promise<DeliveryResult> {
-  const mode = (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase();
-  if (account.provider === "sandbox" || mode !== "live") {
+  const sandboxAccount = account.provider === "sandbox";
+  const mode = sandboxAccount ? "sandbox" : await getEmailDeliveryMode();
+  if (mode !== "live") {
     return {
       mode: "sandbox",
       transportMessageId: email.messageId,
       response:
-        account.provider === "sandbox"
+        sandboxAccount
           ? "Recorded in the test mailbox. No message left Growth."
-          : "EMAIL_DELIVERY_MODE=sandbox. The email was recorded but not transmitted.",
+          : "Sandbox mode. The email was recorded but not transmitted.",
     };
   }
 

@@ -57,9 +57,7 @@ export default async function ConversationPage({
   if (!conversation) notFound();
   const settings = await getWorkspaceSettings();
   const account = await getDefaultEmailAccount().catch(() => null);
-  const envSandbox =
-    (process.env.EMAIL_DELIVERY_MODE || "sandbox").toLowerCase() !== "live";
-  const sandbox = envSandbox || account?.provider === "sandbox";
+  const sandbox = settings.emailDeliveryMode !== "live" || account?.provider === "sandbox";
   const hasInbound = conversation.messages.some(
     (message) => message.direction === "inbound" && message.isProspectReply !== false,
   );
